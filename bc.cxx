@@ -9,6 +9,7 @@
 #include <math.h>
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "markerset.hpp"
 #include "barycentric-fn.hpp"
@@ -659,7 +660,7 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
     #pragma omp parallel for default(none) shared(var) \
         reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(max:BOUNDX0_max, BOUNDX1_max) reduction(min:BOUNDX0_min, BOUNDX1_min) async
     for (int i=0; i<var.nnode; ++i) {
         if (! is_on_boundary(*var.bcflag, i)) continue;
         uint flag = (*var.bcflag)[i];
@@ -674,6 +675,14 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
         }
     }
     #pragma acc wait
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double extents[] = {-BOUNDX0_max, BOUNDX0_min, -BOUNDX1_max, BOUNDX1_min};
+        var.mpi->minimum(extents, 4);
+        BOUNDX0_max=-extents[0]; BOUNDX0_min=extents[1];
+        BOUNDX1_max=-extents[2]; BOUNDX1_min=extents[3];
+    }
+#endif
     if (BOUNDX0_max < BOUNDX0_min) { BOUNDX0_max = 0.; BOUNDX0_min = 0.; }
     if (BOUNDX1_max < BOUNDX1_min) { BOUNDX1_max = 0.; BOUNDX1_min = 0.; }
     double BOUNDX0_width = BOUNDX0_max - BOUNDX0_min;
@@ -691,16 +700,25 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
     double thickness = c.thickness;   // not const: named in shared(), gcc 8 rejects a const there
 
     double zmin = 0;
-    #pragma acc enter data copyin(zmin) async
+    #pragma acc enter data copyin(zmin) async if(des_acc_offload_enabled())
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(min:zmin)
 #endif
-    #pragma acc parallel loop gang vector async reduction(min:zmin)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async reduction(min:zmin)
     for (int k=0; k<var.nnode; ++k) {
         ConstArrayAccessor tmpx = (*var.coord)[k];
         if ( tmpx[NDIMS-1] < zmin )
             zmin = tmpx[NDIMS-1];
     }
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        // The device reduction lands in the device copy, and the loop below reads it there.
+        #pragma acc wait
+        #pragma acc update self(zmin) if(des_acc_offload_enabled())
+        var.mpi->minimum(&zmin, 1);
+        #pragma acc update device(zmin) if(des_acc_offload_enabled())
+    }
+#endif
 #endif
 #ifndef ACC
 #ifdef THREED
@@ -716,11 +734,11 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
 #endif
 #endif
 #ifdef THREED
-    #pragma acc parallel loop gang vector async \
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async \
         copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held_axes[0:nbdrytypes], \
                held[0:nbdrytypes], horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #else
-    #pragma acc parallel loop gang vector async present(zmin) \
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async present(zmin) \
         copyin(walls[0:nbdrytypes_hydro], meets[0:nbdrytypes], held_axes[0:nbdrytypes], \
                held[0:nbdrytypes], horizontal[0:nbdrytypes], full[0:nbdrytypes], n_value[0:nbdrytypes])
 #endif
@@ -857,7 +875,7 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
         apply_z_sides(walls, flag, v);
     }
 #ifndef THREED
-    #pragma acc exit data copyout(zmin) async
+    #pragma acc exit data copyout(zmin) async if(des_acc_offload_enabled())
 #endif
     #pragma acc wait
 }
@@ -914,6 +932,10 @@ void apply_changed_vbcs(const Param &param, const Variables &var, const double_v
 
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel, bool homogeneous, bool normalized)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::VelocityBC, var, 0.0)) return;
+#endif
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -940,7 +962,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e=0; e<var.nelem; ++e)
         (*var.etmp_int)[e] = -1;
 
@@ -964,7 +986,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int n=0; n<bound; ++n) {
                 // this facet belongs to element e
                 int e = (*var.bfacets[i])[n].first;
@@ -1052,7 +1074,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int j=0; j<nbdry_nodes; ++j) {
                 const int n = (*var.bnodes[i])[j];
                 const int npatch = var.support.size(n);
@@ -1084,7 +1106,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int n=0; n<bound; ++n) {
                 const int e = (*var.bfacets[i])[n].first;
                 if (n == 0 || (*var.bfacets[i])[n-1].first != e) (*var.etmp_int)[e] = -1;
@@ -1235,6 +1257,13 @@ namespace {
             const auto& top = *(var.bfacets[iboundz1]);
 
             const int ntop = var.surfinfo.ntop;
+            // 3D diffuses over the top facets, 2D over the segments between consecutive top
+            // nodes: as many as the top facets on a whole mesh, not on an MPI rank's part.
+#ifdef THREED
+            const int nsurf = var.surfinfo.etop;
+#else
+            const int nsurf = ntop - 1;
+#endif
 
             double_vec& total_dx = *var.surfinfo.total_dx;
             double_vec& total_slope = *var.surfinfo.total_slope;
@@ -1244,7 +1273,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<var.nnode; i++) {
                 total_dx[i] = 0.;
                 total_slope[i] = 0.;
@@ -1253,8 +1282,8 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
-            for (int i=0; i<var.surfinfo.etop; ++i) {
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
+            for (int i=0; i<nsurf; ++i) {
 #ifdef THREED
                 // this facet belongs to element e
                 int e = top[i].first;
@@ -1344,7 +1373,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 int n = top_nodes[i];
 #ifdef THREED
@@ -1391,7 +1420,7 @@ namespace {
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop gang vector async
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
             for (int i=0; i<ntop; ++i) {
                 // we don't treat edge nodes specially, i.e. reflecting bc is used for erosion.
                 int n = top_nodes[i];
@@ -1966,7 +1995,7 @@ void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, plstrain, lambha)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int ti = 0; ti < var.ntop_elems; ++ti) {
         const int e = (*var.top_elems)[ti];
         plstrain[e] -= plstrain[e] * lambha * var.dt;
@@ -1990,7 +2019,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0; i<var.ntop_elems; i++) {
             const int e = (*var.top_elems)[i];
 
@@ -2013,7 +2042,7 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int n=0;n<var.surfinfo.ntop;n++) {
             int nt = (*var.surfinfo.top_nodes)[n];
             const int npatch = var.support.size(nt);
@@ -2030,19 +2059,12 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #endif
 }
 
-void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
-                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
-                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
+void compute_surface_dh(const Param& param, const Variables& var, array_t& coord)
 {
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i=0;i<var.surfinfo.ntop;i++)
         (*var.surfinfo.dh)[i] = 0.;
 
@@ -2081,16 +2103,19 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
         std::cout << "Error: unknown surface process option: " << param.control.surface_process_option << '\n';
         die(EXIT_CONFIG_VALUE);
     }
+}
 
+void apply_surface_dh(const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
+{
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param, var, coord)
+    #pragma omp parallel default(none) shared(var, coord)
 #endif
     {
         // go through all surface nodes and abject all surface node by dh
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0; i<var.surfinfo.ntop; i++) {
             // get global index of node
             // update coordinate via dh
@@ -2104,7 +2129,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0;i<var.surfinfo.etop;i++) {
             double dh_e = 0.;
 
@@ -2136,7 +2161,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(max:maxdh)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:maxdh) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(max:maxdh) async
     for (int i=0; i<var.surfinfo.ntop; ++i) {
         double tmp = fabs((*var.surfinfo.dh)[i]);
 
@@ -2147,6 +2172,28 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
     #pragma acc wait
 
     surfinfo.max_surf_vel = maxdh / var.dt;
+}
+
+void update_surface_topography(const Param& param, const Variables& var, array_t& coord, SurfaceInfo& surfinfo)
+{
+    compute_surface_dh(param, var, coord);
+    apply_surface_dh(var, coord, surfinfo);
+}
+
+void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
+                       SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
+                       int_vec2D& elemmarkers, int_vec2D& markers_in_elem)
+{
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Surface, var, 0.0)) return;
+#endif
+
+#ifdef NPROF_DETAIL
+    nvtxRangePush(__FUNCTION__);
+#endif
+
+    update_surface_topography(param, var, coord, surfinfo);
 
     correct_surface_element(var, volume, volume_n, stress, strain, strain_rate, plstrain);
 
@@ -2159,7 +2206,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 #ifndef ACC
             #pragma omp parallel for default(none) shared(var)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
             for (int i=0;i<var.surfinfo.ntop;i++)
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
@@ -2209,6 +2256,9 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     array_t& basis = *basis_owner;
     auto& p = constraints.projector;
     auto& offset = constraints.prescribed;
+    // Under MPI only some ranks hold a boundary's nodes: the flags are made common
+    // to all ranks, which then stop together with one report.
+    int bad_normal = 0, bad_horizontal = 0;
     for (int ib=iboundn0; ib<=iboundn3; ++ib) {
         if (all_free(param.bc.side[ib])) continue;
         for (int n=0; n<nn; ++n) {
@@ -2216,12 +2266,16 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             double norm2 = 0;
             for (int d=0; d<NDIMS; ++d) norm2 += (*var.bnormals)[ib][d]*(*var.bnormals)[ib][d];
             if (!std::isfinite(norm2) || std::abs(norm2-1) > 1e-10)
-                die(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+                bad_normal = 1;
             const double nz = (*var.bnormals)[ib][NDIMS-1];
             if (param.bc.side[ib].horizontal_normal && !(1-nz*nz > 1e-14))
-                die(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
+                bad_horizontal = 1;
         }
     }
+    if (mpi_any(var, bad_normal))
+        die_together(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+    if (mpi_any(var, bad_horizontal))
+        die_together(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
     for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) offset[n][d] = 0;
     apply_vbcs(param, var, offset, homogeneous, true);
@@ -2235,6 +2289,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
     }
     // At most NDIMS rows: reorthogonalized elimination supplies both the minimum
     // norm affine solution and an orthogonal free-space projector, including edges.
+    int inconsistent = 0;
     for (int n=0; n<nn; ++n) {
         double q[NDIMS][NDIMS] = {}, rhs[NDIMS] = {};
         int rank = 0;
@@ -2254,7 +2309,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             for (int d=0; d<NDIMS; ++d) norm2 += a[d]*a[d];
             if (norm2 <= 1e-24) {
                 if (std::abs(b) > 1e-12*std::max(scale, std::numeric_limits<double>::min()))
-                    die(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
+                    inconsistent = 1;
                 continue;
             }
             const double norm = std::sqrt(norm2);
@@ -2271,16 +2326,19 @@ void build_velocity_constraints(const Param& param, const Variables& var,
             }
         }
     }
+    if (mpi_any(var, inconsistent))
+        die_together(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
 }
 
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,
                           array_t& vectors, bool include_prescribed)
 {
+    const int nn = mpi_node_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, constraints, vectors) firstprivate(include_prescribed)
+    #pragma omp parallel for default(none) shared(var, constraints, vectors) firstprivate(include_prescribed, nn)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int n=0; n<var.nnode; ++n) {
+    #pragma acc parallel loop gang vector async firstprivate(nn)
+    for (int n=0; n<nn; ++n) {
         double x[NDIMS];
         for (int d=0; d<NDIMS; ++d) x[d] = vectors[n][d];
         for (int d=0; d<NDIMS; ++d) {

@@ -22,9 +22,17 @@ void create_boundary_flags2(uint_vec &bcflag, int nseg,
 void create_boundary_flags(Variables& var);
 void create_boundary_nodes(Variables& var);
 void create_boundary_facets(Variables& var);
+// var.connectivity_surface: the nodes of each top facet in var.bfacets[iboundz1].
+void create_surface_connectivity(Variables& var);
+// Each top facet as element * FACETS_PER_ELEM + facet, in the order of var.bfacets[iboundz1].
+int_vec top_facet_ids(const Variables& var);
 void create_top_elems(Variables& var);
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo);
 void update_surface_info(const Variables& var, SurfaceInfo& surfinfo);
+// From surfinfo.top_nodes, ntop and var.connectivity_surface: the top-node numbering, each
+// top facet's element and top nodes, and each top node's facets. The caller allocates
+// surfinfo.top_facet_elems and elem_and_nodes for the top facets.
+void index_surface(const Variables& var, SurfaceInfo& surfinfo);
 void create_support(Variables& var);
 void create_neighbor(Variables& var);
 void create_elemmarkers(const Param&, Variables&);

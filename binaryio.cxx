@@ -482,7 +482,8 @@ HDF5Output::HDF5Output(const char *filename, const int hdf5_compression_level,
     H5Pclose(fapl_id);
 
     if (file_id < 0) {
-        throw std::runtime_error(std::string("H5Fcreate failed: ") + filename);
+        std::cerr << "Error: H5Fcreate failed: " << filename << '\n';
+        die(EXIT_IO_OPEN);
     }
 
     write_header();
@@ -511,7 +512,10 @@ hid_t HDF5Output::create_group_with_order(const std::string& path) {
     hid_t gid  = H5Gcreate2(file_id, path.c_str(), H5P_DEFAULT, gcpl_id, H5P_DEFAULT);
     H5Pclose(gcpl_id);
 
-    if (gid < 0) throw std::runtime_error(std::string("H5Gcreate2 failed for ") + path);
+    if (gid < 0) {
+        std::cerr << "Error: H5Gcreate2 failed for " << path << '\n';
+        die(EXIT_IO_RW);
+    }
     return gid;
 }
 
@@ -520,7 +524,10 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
                           const std::string& linkName,
                           const std::string& targetAbsPath) {
     hid_t gid = H5Gopen2(file_id, assemblyNodePath.c_str(), H5P_DEFAULT);
-    if (gid < 0) throw std::runtime_error(std::string("H5Gopen2 failed for ") + assemblyNodePath);
+    if (gid < 0) {
+        std::cerr << "Error: H5Gopen2 failed for " << assemblyNodePath << '\n';
+        die(EXIT_IO_RW);
+    }
 
     herr_t status = H5Lcreate_soft(targetAbsPath.c_str(),
                                    gid,
@@ -528,7 +535,10 @@ void HDF5Output::add_soft_link(const std::string& assemblyNodePath,
                                    H5P_DEFAULT,
                                    H5P_DEFAULT);
     H5Gclose(gid);
-    if (status < 0) throw std::runtime_error(std::string("H5Lcreate_soft failed for link '") + linkName + "'");
+    if (status < 0) {
+        std::cerr << "Error: H5Lcreate_soft failed for link '" << linkName << "'\n";
+        die(EXIT_IO_RW);
+    }
 }
 
 void HDF5Output::write_header()

@@ -17,6 +17,7 @@ dynearthsol[23]d.*
 orig-*
 .vscode
 *.local
+*.dSYM/
 *.qdrep
 *.sqlite
 *.csv

@@ -6,6 +6,7 @@
 
 #include "constants.hpp"
 #include "output.hpp"
+#include "utils.hpp"
 
 bool output_allowed(const Param& param, const Variables& var)
 {
@@ -67,8 +68,11 @@ void handle_ats_output(const Param& param,
         state.allow_earthquake_output &&
         output_allowed(param, var)) {
 
-        if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+        if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
+            const int64_t checkpoint_start = get_nanoseconds();
             output.write_checkpoint(param, var);
+            var.func_time.output_time += get_nanoseconds() - checkpoint_start;
+        }
 
         output.write(var);
 
@@ -82,8 +86,11 @@ void handle_ats_output(const Param& param,
             wrote_earthquake_output && state.last_output_step == var.steps;
 
         if (!regular_frame_satisfied_by_earthquake_output) {
-            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+            if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
+                const int64_t checkpoint_start = get_nanoseconds();
                 output.write_checkpoint(param, var);
+                var.func_time.output_time += get_nanoseconds() - checkpoint_start;
+            }
 
             output.write(var);
         }

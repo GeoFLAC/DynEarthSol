@@ -1546,6 +1546,34 @@ static void read_side_bcs(const opt::Registry &vm, Param &p)
 }
 
 
+#ifdef USEMPI
+// The values of the options that choose code inside the distributed kernels, each
+// checked against the MPI backend: its fields are in mpi_local_fields.hpp and
+// tests/functional/mpi compares it with a serial run. An MPI build refuses any other
+// value, which would otherwise run without the fields it needs on the compute ranks.
+// Add a value here only once it passes those checks (doc/mpi.md, "Adding a
+// distributed kernel"). Work on rank zero's full mesh (remeshing, phase changes,
+// surface processes, markers) needs no entry.
+static void check_mpi_support(const Param& p)
+{
+    struct Checked { const char* name; int value; int first, last; };
+    const Checked options[] = {
+        {"control.damping_option", p.control.damping_option, 0, 4},
+        {"control.PT_option", p.control.PT_option, 0, 1},
+        {"control.rsf_slip_rate_projection_option", p.control.rsf_slip_rate_projection_option, 0, 1},
+    };
+    for (const Checked& option : options) {
+        if (option.value < option.first || option.value > option.last) {
+            std::cerr << "Error: " << option.name << " = " << option.value
+                      << " has not been checked with MPI; this build accepts "
+                      << option.first << " to " << option.last << ".\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+}
+#endif
+
+
 static void validate_parameters(const opt::Registry &vm, Param &p)
 {
     std::cout << "Checking consistency of input parameters...\n";
@@ -2480,6 +2508,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
     }
 
+#ifdef USEMPI
+    check_mpi_support(p);
+#endif
 }
 
 

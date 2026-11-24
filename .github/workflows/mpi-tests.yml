@@ -1,0 +1,69 @@
+name: MPI tests
+
+permissions:
+  contents: read
+
+# Serial-versus-MPI suite: MMG remeshing, restart, hybrid MPI+OpenMP, empty
+# partitions and root-failure termination. Every saved field of the MPI runs, and
+# every checkpoint dataset of the fixed and remeshing runs, must match the serial
+# build exactly, and a restart reads a checkpoint that MPI wrote. It also catches
+# a field missing from mpi_local_fields.hpp. C++20 compilation of the MPI build
+# stays in cxx20-compat.yml.
+
+on:
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - '**.cxx'
+      - '**.hpp'
+      - '**.cpp'
+      - '**.c'
+      - '**.h'
+      - 'Makefile'
+      - 'tests/functional/mpi/**'
+      - '.github/workflows/mpi-tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  serial-vs-mpi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check that every per-mesh field reaches the compute ranks or is listed
+        run: python3 tests/functional/mpi/check_mpi_fields.py
+
+      - name: install MPI, METIS and HDF5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev libmetis-dev libhdf5-serial-dev python3-numpy python3-h5py
+
+      - name: build serial and MPI executables with HDF5 and MMG
+        run: |
+          for nd in 2 3; do
+            make -j4 ndims=$nd openmp=1 hdf5=1 usemmg=1
+            make -j4 ndims=$nd usempi=1 openmp=1 hdf5=1 usemmg=1
+          done
+
+      - name: compare MPI with the serial solver
+        run: |
+          /usr/bin/python3 tests/functional/mpi/run_mpi.py \
+            --serial ./dynearthsol2d --mpi ./dynearthsol2d.mpi \
+            --serial3d ./dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
+            --ranks 1 3 \
+            --launcher 'mpiexec --oversubscribe --bind-to none' \
+            --workdir "$RUNNER_TEMP/des-mpi"
+
+      - name: retain logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpi-tests
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/des-mpi/**/results.json
+            ${{ runner.temp }}/des-mpi/**/*.log

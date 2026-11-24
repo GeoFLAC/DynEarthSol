@@ -1,8 +1,13 @@
+#include <algorithm>
 #include <iostream>
 #include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#ifdef USEMPI
+#include <exception>
+#include <new>
+#endif
 
 
 #include "constants.hpp"
@@ -20,6 +25,7 @@
 #include "markerset.hpp"
 #include "mesh.hpp"
 #include "monitor.hpp"
+#include "mpi_simulation.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
 #include "pseudo_transient.hpp"
@@ -40,9 +46,11 @@ void init_var(const Param& param, Variables& var)
     var.nremesh_prior = 0;
     var.noutput = 0;
     var.nphasechange = 0;
+    var.nsurface = 0;
     var.func_time.output_time = 0;
     var.func_time.remesh_time = 0;
     var.func_time.phase_change_time = 0;
+    var.func_time.surface_time = 0;
     var.func_time.start_time = get_nanoseconds();
     var.init_elem_size_n = new double_vec(0);
     var.refined_elem_size_n = new double_vec(0);
@@ -51,6 +59,10 @@ void init_var(const Param& param, Variables& var)
     var.output_start_step = 0;
     var.output_next_regular_frame = 1;
     var.output_schedule_restored = false;
+    // fixed_dt returns before compute_dt fills these diagnostics. Initialize
+    // them explicitly for heap-backed GPU state as well as static CPU state.
+    var.max_global_vel_mag = 0.0;
+    var.global_dt_min = 0.0;
 
     for (int i=0;i<nbdrytypes;++i)
         var.bfacets[i] = new int_pair_vec;
@@ -490,6 +502,34 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         bin_chkpt.read_array(*var.volume_old, "volume_old");
 
         bin_chkpt.read_array(*var.surfinfo.edvacc_surf, "dv surface acc");
+        {   // The entries follow the top-facet order of the run that wrote them; put each on its facet.
+            const int_vec ids = top_facet_ids(var);
+            double_vec& acc = *var.surfinfo.edvacc_surf;
+            if (bin_chkpt.has_array("dv surface acc facets")) {
+                int_vec written(ids.size());
+                bin_chkpt.read_array(written, "dv surface acc facets");
+                std::vector<std::pair<int,int>> slot(ids.size());   // (facet, index here)
+                for (std::size_t i = 0; i < ids.size(); ++i)
+                    slot[i] = std::make_pair(ids[i], int(i));
+                std::sort(slot.begin(), slot.end());
+                const double_vec saved(acc);
+                std::vector<bool> filled(ids.size(), false);
+                for (std::size_t i = 0; i < written.size(); ++i) {
+                    auto s = std::lower_bound(slot.begin(), slot.end(), std::make_pair(written[i], 0));
+                    if (s == slot.end() || s->first != written[i] || filled[s->second])
+                        die(EXIT_IO_RESTART, "The checkpoint's \"dv surface acc facets\" are not each top facet once.");
+                    filled[s->second] = true;
+                    acc[s->second] = saved[i];
+                }
+            } else {
+                // An element's two top facets may hold each other's entries (ids are sorted by
+                // element). Equal entries restart the same either way; different ones cannot.
+                for (std::size_t i = 1; i < ids.size(); ++i)
+                    if (ids[i] / FACETS_PER_ELEM == ids[i-1] / FACETS_PER_ELEM && acc[i] != acc[i-1])
+                        die(EXIT_IO_RESTART, "The checkpoint does not record the top facet of each \"dv surface acc\" "
+                            "entry, and an element with two top facets has different entries.");
+            }
+        }
         // for surface marker correction after surface processes
         bin_chkpt.read_array(*var.surfinfo.dhacc, "dhacc");
 #ifdef USEMMG
@@ -724,11 +764,17 @@ void update_mesh(const Param& param, Variables& var)
 
     update_coordinate(var, *var.coord);
 
+    // Surface processes are timed whole: under MPI, with the boundary gather below
+    // and the op's own gather to rank zero and redistribution.
+    const int64_t surface_start = get_nanoseconds();
     // option 13: each profiled wall's top rise (SideProfile::top_rise)
     double top_before[NSIDEWALL] = {};
     const bool track_tops = param.mesh.remeshing_option == 13 &&
                             param.control.surface_process_option != 0;
     if (track_tops) {
+#ifdef USEMPI
+        if (var.mpi) var.mpi->boundary(var);
+#endif
         for (int t = 0; t < NSIDEWALL; ++t)
             if (!var.side_profile[t].empty())
                 top_before[t] = side_wall_top_z(var, t);
@@ -736,6 +782,8 @@ void update_mesh(const Param& param, Variables& var)
     surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
                   *var.plstrain, *var.volume, *var.volume_n, \
                   var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
+    var.func_time.surface_time += get_nanoseconds() - surface_start;
+    ++var.nsurface;
     if (track_tops) {
         for (int t = 0; t < NSIDEWALL; ++t) {
             SideProfile &prof = var.side_profile[t];
@@ -746,6 +794,10 @@ void update_mesh(const Param& param, Variables& var)
 
 #ifdef NPROF_DETAIL
     nvtxRangePush("swap vectors");
+#endif
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::SwapVolume, var)) {}
+    else
 #endif
     {
         double_vec *tmp = var.volume;
@@ -760,7 +812,11 @@ void update_mesh(const Param& param, Variables& var)
     compute_volume(var, *var.volume);
 
     // surface_processes() above can move elemmarkers via correct_surface_marker().
-    var.mat->refresh_elem_cache();
+    // An attached MPI backend refreshes caches during state redistribution.
+#ifdef USEMPI
+    if (!var.mpi || !var.mpi->distributed())
+#endif
+        var.mat->refresh_elem_cache();
 
     if (param.control.use_global_velocity_scaling) {
         var.dt = compute_dt(param, var);
@@ -882,14 +938,43 @@ int main(int argc, const char* argv[])
         return -1;
     }
 
+#if defined(USEMPI) && defined(ACC)
+    mpi_select_device();
+#endif
     Param param;
+#ifdef USEMPI
+    // Every rank reads the input before MPI_Init; only the first reports
+    // warnings. Errors stop every rank with the same message from rank 0.
+    std::streambuf* cout_buffer = std::cout.rdbuf();
+    std::streambuf* cerr_buffer = std::cerr.rdbuf();
+    if (mpi_launcher_rank() != 0) {
+        std::cout.rdbuf(nullptr);
+        std::cerr.rdbuf(nullptr);
+    }
+#endif
     get_input_parameters(argv[1], param);
+#ifdef USEMPI
+    std::cout.rdbuf(cout_buffer);
+    std::cout.clear();
+    std::cerr.rdbuf(cerr_buffer);
+    std::cerr.clear();
+#endif
+
+#ifdef USEMPI
+    MpiSimulation mpi(param);
+    if (!mpi.is_root()) return mpi.worker_loop();
+    try {
+#endif
 
     const BuildInfo build = probe_build_info();
     const CpuInfo cpu = probe_cpu_info(wait_policy_from_des);
     // Selects the offload device, so it must precede any compute.
     const DeviceInfo dev = init_offload_device();
+#ifdef USEMPI
+    const Manifest manifest = compose_manifest(param, build, cpu, dev, &mpi.runtime_fields());
+#else
     const Manifest manifest = compose_manifest(param, build, cpu, dev);
+#endif
     if (param.sim.has_runtime_info_display)
         report_build_and_runtime_info(manifest);
     // An -acc=gpu binary cannot compute on the host (its managed allocations need a
@@ -905,7 +990,16 @@ int main(int argc, const char* argv[])
     //
     // run simulation
     //
+#if defined(USEMPI) && defined(ACC)
+    // Managed allocation must cover the container as well as its payloads:
+    // OpenACC kernels access nested vectors and Array2D objects through var.
+    static Variables& var = *new Variables{};
+#else
     static Variables var; // declared as static to silence valgrind's memory leak detection
+#endif
+#ifdef USEMPI
+    var.mpi = &mpi;
+#endif
     init_var(param, var);
 
     var.output = new Output(param, build, cpu, dev, manifest, var.func_time.start_time,
@@ -1029,6 +1123,9 @@ int main(int argc, const char* argv[])
     }
 #endif
 
+#ifdef USEMPI
+    mpi.attach(var);
+#endif
     // Publish and monitor the accepted initial state, not the pre-equilibrium
     // candidate. The first checkpoint therefore records initialization as done.
     if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
@@ -1042,6 +1139,9 @@ int main(int argc, const char* argv[])
         var.output->write_checkpoint(param, var);
 
     int64_t init_time = get_nanoseconds() - var.func_time.start_time;
+    // Initiate already holds the surface processes of an isostasy adjustment.
+    var.func_time.surface_time = 0;
+    var.nsurface = 0;
 
     var.output->write_exact(var);
     monitor_initialize(param, var, monitor_checkpoint_state);
@@ -1081,7 +1181,10 @@ int main(int argc, const char* argv[])
         var.steps ++;
         var.time += var.dt;
         // Pick up what the previous step's phase changes and remeshing moved.
-        var.mat->refresh_elem_cache();
+#ifdef USEMPI
+        if (!var.mpi || !var.mpi->distributed())
+#endif
+            var.mat->refresh_elem_cache();
         if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
@@ -1125,7 +1228,10 @@ int main(int argc, const char* argv[])
             // composition, for the next step and for a restart from this step,
             // which rebuilds the masses from it.
             phase_changes(param, var);
-            var.mat->refresh_elem_cache();
+#ifdef USEMPI
+            if (!var.mpi || !var.mpi->distributed())
+#endif
+                var.mat->refresh_elem_cache();
         }
 
         // Objective rotation still belongs to the current physical step, even
@@ -1156,8 +1262,15 @@ int main(int argc, const char* argv[])
         // builds the grid at its end. So the grid always indexes every marker,
         // and it does not go stale in a run that seldom remeshes. A checkpoint
         // holds the grid the run reads.
-        if (var.steps % param.mesh.quality_check_step_interval == 0)
+        if (var.steps % param.mesh.quality_check_step_interval == 0 && uses_serpentinization_grid(param)) {
+            // The grid serves the phase changes; timed with them.
+            const int64_t grid_start = get_nanoseconds();
+#ifdef USEMPI
+            if (var.mpi) var.mpi->collect(var);
+#endif
             build_serpentinization_grid(param, var);
+            var.func_time.phase_change_time += get_nanoseconds() - grid_start;
+        }
 
         // elastic stress/strain are objective (frame-indifferent)
         if (var.mat->rheol_type & MatProps::rh_elastic)
@@ -1169,10 +1282,15 @@ int main(int argc, const char* argv[])
         monitor_write_if_due(param, var);
 
         if (slow_step) {
-            if (param.control.has_hydration_processes)
+            if (param.control.has_hydration_processes) {
+                // Timed with the phase changes that release these markers; under MPI
+                // it includes the gather to rank zero and the redistribution.
+                const int64_t hydrous_start = get_nanoseconds();
                 advect_hydrous_markers(param, var, 10*var.dt,
                                        *var.markersets[var.hydrous_marker_index],
                                        *var.hydrous_elemmarkers);
+                var.func_time.phase_change_time += get_nanoseconds() - hydrous_start;
+            }
             var.dt = compute_dt(param, var);
         }
 
@@ -1192,8 +1310,11 @@ int main(int argc, const char* argv[])
         } else {
             if (regular_output_is_due(param, var, next_regular_frame, false)) {
                 var.output_next_regular_frame = next_regular_frame + 1;
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0)
+                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
+                    const int64_t checkpoint_start = get_nanoseconds();
                     var.output->write_checkpoint(param, var);
+                    var.func_time.output_time += get_nanoseconds() - checkpoint_start;
+                }
 
                 var.output->write(var);
 
@@ -1251,7 +1372,7 @@ int main(int argc, const char* argv[])
     std::cout << "Ending simulation.\n";
     int64_t duration_ns = get_nanoseconds() - var.func_time.start_time;
     int64_t computation_time = duration_ns - var.func_time.remesh_time - var.func_time.output_time
-        - var.func_time.phase_change_time - init_time;
+        - var.func_time.phase_change_time - var.func_time.surface_time - init_time;
     double computation_time_avg = computation_time * 1.e-9 / var.steps;
 
     std::cout << "Time summary...\n  Execute : ";
@@ -1273,13 +1394,26 @@ int main(int argc, const char* argv[])
             << 100.*var.func_time.remesh_time/duration_ns << "%)/ " << var.nremesh
             << " = " << std::setprecision(2) << remesh_time_avg << " s/remesh\n";
     }
-    if (var.nphasechange > 0) {
-        double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+    // Hydrous markers and the serpentinization grid count here even without a phase change.
+    if (var.nphasechange > 0 || var.func_time.phase_change_time > 0) {
         std::cout << "  PhaseChg: ";
         print_time_ns(var.func_time.phase_change_time);
         std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
-            << 100.*var.func_time.phase_change_time/duration_ns << "%)/ " << var.nphasechange
-            << " = " << std::setprecision(6) << phase_change_time_avg << " s/call\n";
+            << 100.*var.func_time.phase_change_time/duration_ns << "%)";
+        if (var.nphasechange > 0) {
+            double phase_change_time_avg = var.func_time.phase_change_time * 1.e-9 / var.nphasechange;
+            std::cout << "/ " << var.nphasechange
+                << " = " << std::setprecision(6) << phase_change_time_avg << " s/call";
+        }
+        std::cout << "\n";
+    }
+    if (var.nsurface > 0) {
+        double surface_time_avg = var.func_time.surface_time * 1.e-9 / var.nsurface;
+        std::cout << "  Surface : ";
+        print_time_ns(var.func_time.surface_time);
+        std::cout << " (" <<  std::setw(5) << std::fixed << std::setprecision(2) << std::setfill(' ')
+            << 100.*var.func_time.surface_time/duration_ns << "%)/ " << var.nsurface
+            << " = " << std::setprecision(6) << surface_time_avg << " s/call\n";
     }
     if (var.noutput > 0) {
         double output_time_avg = var.func_time.output_time * 1.e-9 / var.noutput;
@@ -1300,5 +1434,16 @@ int main(int argc, const char* argv[])
 
     write_manifest_end(param, manifest, var, var.steps - first_step,
                        duration_ns, init_time, computation_time, peak_rss_gib);
+#ifdef USEMPI
+    mpi.report();
+#endif
     return 0;
+#ifdef USEMPI
+    } catch (const std::bad_alloc&) {
+        die(EXIT_RUNTIME_RESOURCE, "allocation failed on MPI rank zero");
+    } catch (const std::exception& error) {
+        std::cerr << "MPI rank zero: " << error.what() << '\n';
+        die(EXIT_INTERNAL_UNREACHABLE, "exception while MPI workers are active");
+    }
+#endif
 }

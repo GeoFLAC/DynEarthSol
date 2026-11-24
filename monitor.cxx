@@ -16,6 +16,7 @@
 
 #include "monitor.hpp"
 #include "barycentric-fn.hpp"
+#include "mpi_simulation.hpp"
 #include "geometry.hpp"
 #include "matprops.hpp"
 #include "utils.hpp"
@@ -705,10 +706,35 @@ void monitor_write_point_row(const Param& param,
 void monitor_write_all_points(const Param& param, const Variables& var, MonitorManager& manager,
                               int kind = monitor_row_regular)
 {
-    for (std::size_t i = 0; i < manager.points.size(); ++i) {
+#ifdef USEMPI
+    // The ranks hold the current mesh. Points are located on current
+    // coordinates; then only the nodes and elements the rows read are gathered.
+    if (var.mpi) var.mpi->geometry(var);
+#endif
+    for (std::size_t i = 0; i < manager.points.size(); ++i)
         bind(param, var, manager.points[i]);
-        monitor_write_point_row(param,var,manager.points[i],manager.points[i].fp,kind);
+#ifdef USEMPI
+    if (var.mpi) {
+        int_vec nodes;
+        int_vec elements;
+        for (const auto& p : manager.points) {
+            if (p.node_id >= 0) nodes.push_back(p.node_id);
+            for (int elem : {p.elem, p.elem_id}) {
+                if (elem < 0) continue;
+                elements.push_back(elem);
+                for (int j = 0; j < NODES_PER_ELEM; ++j)
+                    nodes.push_back((*var.connectivity)[elem][j]);
+            }
+        }
+        std::sort(nodes.begin(), nodes.end());
+        nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+        std::sort(elements.begin(), elements.end());
+        elements.erase(std::unique(elements.begin(), elements.end()), elements.end());
+        var.mpi->sample(var, nodes, elements);
     }
+#endif
+    for (std::size_t i = 0; i < manager.points.size(); ++i)
+        monitor_write_point_row(param, var, manager.points[i], manager.points[i].fp, kind);
 }
 
 } // namespace
@@ -780,6 +806,10 @@ void monitor_write_if_due(const Param& param, Variables& var)
 void monitor_before_remesh(const Param& param, Variables& var)
 {
     if (!param.monitor.enabled || !g_monitor.initialized) return;
+#ifdef USEMPI
+    // The rows and positions read the whole mesh, which only the root holds.
+    if (var.mpi) var.mpi->collect(var);
+#endif
     // A regular row of this step already records the state before the remesh.
     if (g_monitor.last_written_step != var.steps)
         monitor_write_all_points(param, var, g_monitor, monitor_row_before_remesh);
