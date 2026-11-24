@@ -1581,6 +1581,10 @@ int MpiSimulation::owned_elements() const {
     return impl_->part.owned_elements;
 }
 
+int MpiSimulation::global_element(int element) const {
+    return impl_->part.elements[element];
+}
+
 int MpiSimulation::global_nodes() const {
     return impl_->global_n;
 }

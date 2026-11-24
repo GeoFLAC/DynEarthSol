@@ -1936,18 +1936,42 @@ static const char* rejection_text(int reason)
     }
 }
 
+#ifdef USEMPI
+// Each MPI rank counts the rejections of its own elements. Every rank calls this once any
+// rank rejected, and all then hold the whole mesh's count, its lowest global element and
+// all reasons.
+static void combine_rejected_returns(const Variables& var, int& count,
+                                     double& first, int& reasons)
+{
+    if (count != 0) {
+        const long key = long(first);
+        const int element = var.mpi->global_element(int(key / reject_reason_count));
+        first = double(element)*int(reject_reason_count) + key % reject_reason_count;
+    }
+    count = var.mpi->sum(count);
+    var.mpi->minimum(&first, 1);
+    int seen[reject_reason_count];
+    for (int r = 0; r < reject_reason_count; ++r) seen[r] = (reasons >> r) & 1;
+    var.mpi->maximum(seen, reject_reason_count);
+    reasons = 0;
+    for (int r = 0; r < reject_reason_count; ++r) reasons |= seen[r] << r;
+}
+#endif
+
 static void report_rejected_returns(const Variables& var, int count,
                                     double first, int reasons)
 {
     const long element = long(first) / reject_reason_count;
     const int reason = int(long(first) % reject_reason_count);
-    std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
-              << " elements at step " << var.steps << ".\n"
-              << "  First element " << element << ": " << rejection_text(reason) << ".\n";
-    for (int r = 1; r < reject_reason_count; ++r)
-        if (r != reason && (reasons & (1 << r)))
-            std::cerr << "  Also: " << rejection_text(r) << ".\n";
-    die(EXIT_RUNTIME_NONCONVERGENCE,
+    if (mpi_reports(var)) {
+        std::cerr << "Error: no admissible Mohr-Coulomb return in " << count
+                  << " elements at step " << var.steps << ".\n"
+                  << "  First element " << element << ": " << rejection_text(reason) << ".\n";
+        for (int r = 1; r < reject_reason_count; ++r)
+            if (r != reason && (reasons & (1 << r)))
+                std::cerr << "  Also: " << rejection_text(r) << ".\n";
+    }
+    die_together(EXIT_RUNTIME_NONCONVERGENCE,
         reasons & (1 << reject_nonfinite) ? "Non-finite stress: check the time step." :
         reasons & (1 << reject_no_increment) ?
             "Spread the change of the strength law over a range of plastic strain." :
@@ -2399,6 +2423,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // std::cerr << '\n';
     }
     #pragma acc wait
+#ifdef USEMPI
+    if (mpi_any(var, rejected_returns != 0) && var.mpi && var.mpi->in_kernel())
+        combine_rejected_returns(var, rejected_returns, first_rejection, rejection_reasons);
+#endif
     if (rejected_returns != 0)
         report_rejected_returns(var, rejected_returns, first_rejection, rejection_reasons);
 #ifdef NPROF

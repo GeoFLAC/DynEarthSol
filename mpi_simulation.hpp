@@ -43,6 +43,8 @@ public:
     PTResult pt_result() const;
     int owned_nodes() const;
     int owned_elements() const;
+    // The whole mesh's number of one of this rank's elements.
+    int global_element(int element) const;
     int global_nodes() const;
     void exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);
     void begin_exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);

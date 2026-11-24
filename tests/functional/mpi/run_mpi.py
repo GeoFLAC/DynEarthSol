@@ -447,6 +447,27 @@ def main():
     print(f"A failure on all {ranks} ranks is reported once with the serial exit code: passed",
           flush=True)
 
+    # A Mohr-Coulomb return rejected on some ranks stops the run with one report of the whole
+    # mesh's count and lowest element, as in serial. The strength jumps up at a plastic strain
+    # that two elements, in different parts, reach at step 7.
+    cfg = configure(2, False, 1000, steps=20, output_interval=20)
+    cfg["mat"].update(pls0="[1e-5]", pls1="[1e-5]", cohesion0="[4e5]", cohesion1="[4.4e7]")
+    reports = {}
+    for label, command in runs.items():
+        directory = work / f"rejected-return-{label}"
+        directory.mkdir()
+        with (directory / "model.cfg").open("w") as f:
+            cfg.write(f)
+        log, _ = execute(command + ["model.cfg"], directory, env, expected_failure=True)
+        if log.count("[DES exit 54]") != 1 or log.count("no admissible Mohr-Coulomb return") != 1:
+            raise RuntimeError(f"{label}: expected one rejected-return report and DES exit 54")
+        reports[label] = [line for line in log.splitlines()
+                          if "no admissible Mohr-Coulomb return" in line or "First element" in line]
+    if reports["serial"] != reports[f"mpi{ranks}"]:
+        raise RuntimeError(f"The rejected-return reports differ: {reports}")
+    results["checks"].append(dict(case="rejected-return-report", ranks=ranks, passed=True))
+    print(f"A return rejected on {ranks} ranks is reported once, as in serial: passed", flush=True)
+
     (work / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(f"Passed. Results: {work / 'results.json'}")
 
