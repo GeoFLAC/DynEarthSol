@@ -688,7 +688,7 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
         vbc_vertical_divisions_x0[i] = - (BOUNDX0_max - c.division[0][i] * BOUNDX0_width);
         vbc_vertical_divisions_x1[i] = - (BOUNDX1_max - c.division[1][i] * BOUNDX1_width);
     }
-    const double thickness = c.thickness;
+    double thickness = c.thickness;   // not const: named in shared(), gcc 8 rejects a const there
 
     double zmin = 0;
     #pragma acc enter data copyin(zmin) async
