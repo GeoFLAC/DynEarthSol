@@ -188,8 +188,10 @@ ifeq ($(useexo), 1)
 
 	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
 	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
+	## Absolute, here and in the rpaths and install names below: a relative one is
+	## read against the directory DES runs in, not the one the executable is in.
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		EXO_LDFLAGS += -Wl,-rpath=$(EXO_LIB_DIR)
+		EXO_LDFLAGS += -Wl,-rpath=$(abspath $(EXO_LIB_DIR))
 	endif
 endif
 
@@ -1140,7 +1142,7 @@ ifeq ($(usegospl), 1)
 		install_name_tool -change libgospl_extensions.so $(abspath $(GOSPL_LIB_DIR))/libgospl_extensions.so $@
 endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
-		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
+		install_name_tool -change libexodus.dylib $(abspath $(EXO_LIB_DIR))/libexodus.dylib $@
 endif
 ifeq ($(ndims), 3)
 		install_name_tool -change libmmg3d.dylib $(MMG_LIB_DIR)/libmmg3d.dylib $@
