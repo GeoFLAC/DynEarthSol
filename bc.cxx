@@ -84,6 +84,14 @@ bool normal_only(const SideBC &s)
         if (s.type[d] == 'v') return false;
     return true;
 }
+
+// Whether a side carries the support: where its normal is free, on z0 only with the Winkler
+// foundation and on z1 only with water loading.
+bool supported(const BC &bc, int i, bool free_normal)
+{
+    return (i == iboundz0) ? free_normal && bc.has_winkler_foundation
+         : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
+}
 } // anonymous namespace
 
 
@@ -128,8 +136,7 @@ void convert_bc_codes(Param &p)
                 if (text[d] == 'v') s.max_speed = std::max(s.max_speed, std::fabs(s.value[d]));
             }
             const bool free_normal = (text[0] != 'v');
-            s.support = (i == iboundz0) ? free_normal && bc.has_winkler_foundation
-                      : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
+            s.support = supported(bc, i, free_normal);
             if (i < iboundz0) {
                 s.normal_follows_period = !free_normal;
                 s.taper = (NDIMS == 2 && i == iboundx0 && !free_normal);
@@ -174,14 +181,8 @@ void convert_bc_codes(Param &p)
             for (int d=0; d<NDIMS; ++d) global[d] = d;
         }
         else {
-            // input.cxx refuses the codes that set nothing: anything else than 0 to 7, and 5
-            // and 7 in 2D.
-            const bool sets_nothing = (code < 0 || code > 7)
-#ifndef THREED
-                || code == 5 || code == 7
-#endif
-                ;
-            if (!sets_nothing) row = wall_rows[code];
+            // input.cxx refuses the codes that set nothing.
+            if (code >= 0 && code < int(sizeof(wall_rows) / sizeof(wall_rows[0]))) row = wall_rows[code];
 #ifdef THREED
             const int normal = (i < iboundy0) ? 0 : 1;
             global[0] = normal; global[1] = 1 - normal; global[2] = 2;
@@ -204,10 +205,7 @@ void convert_bc_codes(Param &p)
             s.value[d] = sign * held;
             s.max_speed = std::max(s.max_speed, std::fabs(held));
         }
-        // A free normal carries the support, as with letters.
-        const bool free_normal = (s.type[0] == 'f');
-        s.support = (i == iboundz0) ? free_normal && bc.has_winkler_foundation
-                  : (i == iboundz1) ? free_normal && bc.has_water_loading : free_normal;
+        s.support = supported(bc, i, s.type[0] == 'f');
     }
 }
 

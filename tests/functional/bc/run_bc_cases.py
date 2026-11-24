@@ -47,6 +47,7 @@ conditions the codes cannot give and the input the letters reject.
 Build both with hdf5=1. --cases takes glob patterns of case names; --list prints them.
 """
 import argparse
+import ast
 import copy
 import fnmatch
 import json
@@ -503,6 +504,19 @@ def outputs(folder, model='bc'):
     return sorted(names)
 
 
+def common_outputs(old, new, model='bc'):
+    """The saves and checkpoints of two runs, which must be the same files."""
+    names = outputs(old, model)
+    if not names or names != outputs(new, model):
+        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new, model)))
+    return names
+
+
+def field_dtype(saved, key):
+    """The dtype of a field read by fields(), from its layout."""
+    return ast.literal_eval(saved['@' + key + '.layout'].decode())[1]
+
+
 def run(exe, folder, spec):
     result = run_des(exe, folder, 'bc', effective_cfg(spec, quoted=True), timeout=600, check=False)
     result.folder, result.cfg = folder, effective_cfg(spec)
@@ -521,7 +535,7 @@ def saved_field(saved, name):
     """The field name of a save or checkpoint read by fields(), as a flat array."""
     import numpy as np
     key = next(k for k in saved if not k.startswith('@') and k.split('/')[-1] == name)
-    return np.frombuffer(saved[key], eval(saved['@' + key + '.layout'].decode())[1])
+    return np.frombuffer(saved[key], field_dtype(saved, key))
 
 
 def corner_normal_velocity(result, spec):
@@ -581,17 +595,13 @@ def compare(parent, current, spec):
 def largest_difference(old, new):
     """The largest relative difference of a floating field over every save and checkpoint."""
     import numpy as np
-    names = outputs(old)
-    if names != outputs(new):
-        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new)))
     worst, where = 0.0, None
-    for file in names:
+    for file in common_outputs(old, new):
         a, b = fields(old/file), fields(new/file)
         for key in a:
-            layout = a.get('@' + key + '.layout')
-            if key.startswith('@') or layout is None or key.split('/')[-1] == 'walltime_sec':
+            if key.startswith('@') or '@' + key + '.layout' not in a or key.split('/')[-1] == 'walltime_sec':
                 continue
-            dtype = eval(layout.decode())[1]
+            dtype = field_dtype(a, key)
             if not dtype.lstrip('<>|=').startswith('f') or key not in b:
                 continue
             x, y = np.frombuffer(a[key], dtype), np.frombuffer(b[key], dtype)
@@ -626,9 +636,7 @@ def same_fields(a, b, name, ignored=()):
 
 
 def same_outputs(old, new, model='bc', ignored=()):
-    names = outputs(old, model)
-    if not names or names != outputs(new, model):
-        raise RuntimeError('output files differ: {} vs {}'.format(names, outputs(new, model)))
+    names = common_outputs(old, new, model)
     for name in names:
         same_fields(fields(old/name), fields(new/name), name, ignored)
     return len(names)
