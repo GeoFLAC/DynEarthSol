@@ -130,7 +130,6 @@ def as_letters(spec):
     nd = spec['ndims']
     cfg = effective_cfg(spec)
     table = expected_table(nd, cfg)
-    winkler, water = support_options(cfg)
     bc = {}
     for side, e in table.items():
         if e['stress'] != 'none' or e['frame'] == 'horizontal-normal':
