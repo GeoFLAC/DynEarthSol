@@ -22,7 +22,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   the velocity, `t` applies a traction (Pa) and `f` leaves it free, with one
   value per letter in `vbc_val_*`, for example `vbc_x0 = vff` and
   `vbc_val_x0 = [1e-9, 0, 0]`. The integer codes still work, and the log lists
-  each side's resulting conditions at startup ([#115]).
+  each side's resulting conditions at startup ([#146]).
 - Material-following monitor points use `monitor.point_type` (`particle` or
   `grid`), retain their exact checkpoint location, and preserve CSV histories
   through restart. `monitor.remesh_output` selects before/both remesh rows;
@@ -100,11 +100,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   message: side-wall codes that set no velocity component (other than 0 to 7;
   5 and 7 in 2D), negative `vbc_z0` without the Winkler foundation or
   `vbc_z1` without water loading (each support still sets its code to 0), and
-  `stress_bc_*` of an unknown type or on a 2D y wall ([#115]).
+  `stress_bc_*` of an unknown type or on a 2D y wall ([#146]).
 - The velocities of side-wall code 6 now count toward the largest boundary
   speed, which sets mass scaling and the timestep. Results of
   `examples/oblique-rift-3d.cfg` change markedly: its timestep falls from
-  2.64 to 0.398 yr ([#115]).
+  2.64 to 0.398 yr ([#146]).
 - A restart with the run's velocity boundary conditions keeps the velocity of
   its checkpoint instead of applying them again, so it continues the run
   exactly, also at the edges of oblique (`n`) boundaries. One that changes
@@ -112,7 +112,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   first step; a node where the change has no effect, such as a side wall's
   normal value at its edge with an `n` boundary, keeps its velocity.
   Checkpoints record the velocity conditions in force at their time, tractions
-  aside; older ones apply them everywhere, as before ([#115]).
+  aside; older ones apply them everywhere, as before ([#146]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
@@ -211,23 +211,23 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A restart no longer stops with "boundary 6 is curved" when an oblique (`n`)
   boundary has bent since the start, as code 1 can at its corners: checkpoints
   carry the boundary normals of the starting mesh, and the restart keeps them.
-  Older checkpoints restart as before ([#115]).
+  Older checkpoints restart as before ([#146]).
 - An oblique (`n`) boundary that holds its normal velocity now sets it where
   it meets a side that holds components other than its normal, by the
   smallest change that keeps what the sides at the node hold (the other
   sides' normals and the normals of earlier `n` boundaries included), and on
   its edge with the top once `vbc_val_z1_loading_period` has passed; those
   nodes used to lose it. This changes runs where it meets such a side, for
-  example `vbc_z1 = 2` ([#115]).
+  example `vbc_z1 = 2` ([#146]).
 - In 2D, side-wall code 4 holds the normal velocity at 0 and no longer adds
   the lithostatic support to the saved `force`; velocities and stresses are
-  unchanged ([#115]).
+  unchanged ([#146]).
 - `--help` gives the 2D meaning of velocity codes 4 and 6, and how
-  `stress_bc_*` loads a boundary facet ([#115]).
+  `stress_bc_*` loads a boundary facet ([#146]).
 - The lithostatic support, the Winkler foundation and water loading load every
   facet of an element on their boundary; an element with two, as remeshing can
   make where a boundary has bent, carried only one of them. A boundary with more
-  facets than the mesh has elements no longer mixes up their loads ([#115]).
+  facets than the mesh has elements no longer mixes up their loads ([#146]).
 - Explicit/GVS output cadence and pending remesh stages survive restart.
   Changed timestep controls refresh timestep and mass together; fixed-mesh
   GVS also refreshes both from the accepted velocity. Large output intervals
@@ -556,7 +556,6 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
-[#115]: https://github.com/GeoFLAC/DynEarthSol/issues/115
 [#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
@@ -564,3 +563,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#146]: https://github.com/GeoFLAC/DynEarthSol/pull/146
