@@ -832,7 +832,7 @@ static void declare_parameters(opt::Registry &cfg,
 
         ("bc.vbc_n0", opt::value<std::string>(&p.bc.vbc_text[iboundn0])->default_value("1"),
          "Type of boundary condition for slant boundary #0: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
-         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, v on every component with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n0", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #0: with an integer code, "
@@ -840,7 +840,7 @@ static void declare_parameters(opt::Registry &cfg,
          "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n1", opt::value<std::string>(&p.bc.vbc_text[iboundn1])->default_value("1"),
          "Type of boundary condition for slant boundary #1: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
-         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, v on every component with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n1", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #1: with an integer code, "
@@ -848,7 +848,7 @@ static void declare_parameters(opt::Registry &cfg,
          "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n2", opt::value<std::string>(&p.bc.vbc_text[iboundn2])->default_value("1"),
          "Type of boundary condition for slant boundary #2: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
-         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, v on every component with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n2", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #2: with an integer code, "
@@ -856,7 +856,7 @@ static void declare_parameters(opt::Registry &cfg,
          "along the frame axes (m/s for v, Pa for t, outward positive)")
         ("bc.vbc_n3", opt::value<std::string>(&p.bc.vbc_text[iboundn3])->default_value("1"),
          "Type of boundary condition for slant boundary #3: 1, 3, 11 or 13, or letters as for bc.vbc_x0 in the frame of its normal in the starting mesh, "
-         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, vvv with "
+         "which the run and its checkpoints keep: v on the normal with f or t on the tangents, v on every component with "
          "tangential values 0, or f or t on every component.")
         ("bc.vbc_val_n3", opt::list()->scalar_too()->default_value("0"),
          "Value of boundary condition for slant boundary #3: with an integer code, "
