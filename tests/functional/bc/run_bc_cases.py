@@ -11,8 +11,8 @@ When the current executable prints its per-side table ([bc][side] lines), the ta
 must match the conversion tables of #115 in the side frames chosen there.
 
 Input that adds nothing ran on the parent; the current executable refuses it (#115), and
-these cases expect its exit code 11: side-wall codes that set no velocity component, and
-stress_bc_* of an unknown type or on a 2D y wall.
+these cases expect its exit code 11: side-wall codes that set no velocity component, negative
+z codes that no support replaces with 0, and stress_bc_* of an unknown type or on a 2D y wall.
 
 Cases marked restart also restart from checkpoint 1 with the current executable, and
 every later frame must match the run's bit for bit: the n boundaries keep the normals of
@@ -220,6 +220,12 @@ def cases():
             found.append(case(f'{d}-z-c{code}', nd, dict(vbc_z0=str(code), vbc_z1=str(code))))
         rejected = 5 if nd == 2 else 4
         found.append(case(f'{d}-z-c{rejected}', nd, dict(vbc_z1=str(rejected)), exit_code=11))
+        # A negative z code is refused, unless its side's support replaces it with 0 as before;
+        # the other side's support does not.
+        found.append(case(f'{d}-z0-negative', nd, dict(has_water_loading='yes', vbc_z0='-1'), refused=True))
+        found.append(case(f'{d}-z1-negative', nd, dict(has_winkler_foundation='yes', vbc_z1='-1'), refused=True))
+        found.append(case(f'{d}-z-negative-supported', nd, dict(has_winkler_foundation='yes', vbc_z0='-1',
+                                                                has_water_loading='yes', vbc_z1='-1')))
         found.append(case(f'{d}-n-c2', nd, dict(vbc_n0='2'), mesh='cut', exit_code=11))
         period = dict(num_vbc_period_x0='2', vbc_period_x0_time_in_yr='[0, 0.3]',
                       vbc_period_x0_ratio='[1, -0.5]', num_vbc_period_x1='3',
