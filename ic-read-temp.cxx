@@ -22,8 +22,10 @@ void read_external_temperature_from_comsol(const Param &param,
     {
         std::ifstream inputFile(param.ic.Temp_filename.c_str());
         std::string line;
+        int lineno = 0;
 
         while(std::getline(inputFile, line)) {
+            ++lineno;
             if (!line.length() || line[0] == '%')
                 continue;
             std::istringstream iss(line);
@@ -33,6 +35,12 @@ void read_external_temperature_from_comsol(const Param &param,
                 iss>>x>>y>>z>>T;
             else
                 iss>>x>>y>>T;
+            // A row short of a value would keep its default, 0 K at a node that matches.
+            if (iss.fail()) {
+                std::cerr << "Error: line " << lineno << " of '" << param.ic.Temp_filename << "' is not "
+                          << NDIMS + 1 << " numbers (coordinates, then temperature): \"" << line << "\"\n";
+                die(EXIT_CONFIG_DATA);
+            }
 
             xs.push_back(x);
             ys.push_back(y);
@@ -48,8 +56,10 @@ void read_external_temperature_from_comsol(const Param &param,
         std::ifstream ninputFile(param.ic.Nodes_filename.c_str());
         std::string nline;
         int ni = 0;
+        int lineno = 0;
 
         while(std::getline(ninputFile, nline)) {
+            ++lineno;
             if (!nline.length() || nline[0] == '#')
                 continue;
             std::istringstream iss(nline);
@@ -59,6 +69,11 @@ void read_external_temperature_from_comsol(const Param &param,
                 iss>>x>>y>>z;
             else
                 iss>>x>>y;
+            if (iss.fail()) {
+                std::cerr << "Error: line " << lineno << " of '" << param.ic.Nodes_filename << "' is not "
+                          << NDIMS << " coordinates: \"" << nline << "\"\n";
+                die(EXIT_CONFIG_DATA);
+            }
 
             nis.push_back(ni);
             nxs.push_back(x);
