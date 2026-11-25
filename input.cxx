@@ -2129,6 +2129,16 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.control.ref_pressure_option = 0;
             std::cerr << "Warning: mat.num_materials is 1, using simplest control.ref_pressure_option.\n";
         }
+        // The values surface_processes() handles; another one would stop the run at its first
+        // surface update, and a fixed mesh never reaches one.
+        {
+            const int s = p.control.surface_process_option;
+            if (s != 0 && s != 1 && s != 11 && s != 101 && s != 102) {
+                std::ostringstream msg;
+                msg << "control.surface_process_option = " << s << " is not one of 0, 1, 11, 101 and 102.";
+                die(EXIT_CONFIG_VALUE, msg.str().c_str());
+            }
+        }
         if (p.control.ref_pressure_option != 0 && p.mesh.zlength > prem_max_depth) {
             std::ostringstream msg;
             msg << std::setprecision(10) << "control.ref_pressure_option " << p.control.ref_pressure_option

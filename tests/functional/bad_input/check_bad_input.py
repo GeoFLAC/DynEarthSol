@@ -170,6 +170,9 @@ REJECTED = [
      replace("[bc]", "[bc"), EXIT_CONFIG, "invalid line"),
     ("key with no name",
      replace("[bc]\n", "[bc]\n= 1\n"), EXIT_CONFIG_VALUE, "unrecognised option"),
+    ("surface process option that does not exist (2 was never implemented)",
+     replace("surface_process_option = 0", "surface_process_option = 2"),
+     EXIT_CONFIG_VALUE, "surface_process_option = 2 is not one of"),
 ]
 
 # (name, edit, check on the files the run leaves in its directory)
