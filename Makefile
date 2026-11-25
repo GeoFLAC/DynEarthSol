@@ -237,11 +237,12 @@ endif
 ## Each HDF5 stage below runs only while both dirs are blank, and sets both (see
 ## HDF5_INCLUDE_DIR above).
 ##
-## 1. A library that brings its own HDF5, as DES must link that file on Linux (see
-## hdf5_same_file): seacas's prefix, and on Linux the embedded Python's prefix. A
-## system Python's prefix holds no hdf5.h on Debian, so detection goes on. macOS keeps
-## the detected HDF5 with GoSPL: the env's include dir is OpenMP's -idirafter there,
-## which an -I of the same dir cannot move ahead of /usr/local/include.
+## 1. A library's own HDF5, as on Linux DES must link the file it loads: seacas's prefix
+## (see EXO_LIBHDF5), and on Linux the embedded Python's prefix, whose h5py loads that
+## libhdf5 unless it is a pip wheel (see hdf5_same_file). A system Python's prefix holds
+## no hdf5.h on Debian, so detection goes on. macOS keeps the detected HDF5 with GoSPL:
+## the env's include dir is OpenMP's -idirafter there, which an -I of the same dir
+## cannot move ahead of /usr/local/include.
 ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
 	ifeq ($(useexo), 1)
 		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(EXO_INCLUDE))
@@ -932,6 +933,14 @@ define hdf5_same_file
 		exit 1; }
 endef
 
+## The libhdf5 that libexodus loads through seacas's NetCDF: on Linux the first libhdf5
+## loaded answers every H5* call in the process, so it must be the file DES links. ldd
+## follows the chain; awk takes the first libhdf5 that is not the _hl library, which can
+## come first (Debian names the file libhdf5_serial). Empty when libexodus.so or its
+## libhdf5 is missing, or its NetCDF is static.
+EXO_LIBHDF5 = ldd "$(EXO_LIB_DIR)/libexodus.so" 2>/dev/null \
+	| awk '$$1 ~ /^libhdf5/ && $$1 !~ /_hl/ && $$3 ~ /^\// {print $$3; exit}'
+
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
@@ -957,7 +966,21 @@ check-deps:
 		exit 1; }
 ifneq ($(OSNAME), Darwin)
 ifeq ($(useexo), 1)
-	$(call hdf5_same_file,libexodus,$(EXO_INCLUDE),$(EXO_LIB_DIR))
+	@f=$$($(EXO_LIBHDF5)); d=$${f%/*}; \
+	if test -z "$$f"; then \
+		echo "HDF5: ldd finds no libhdf5 for $(EXO_LIB_DIR)/libexodus.so; skipped the same-file check."; \
+	elif ! test "$$f" -ef "$(HDF5_LIB)"; then \
+		echo "HDF5: libexodus loads $$f,"; \
+		echo "      and DES would link $(HDF5_LIB)."; \
+		echo "      On Linux the first libhdf5 loaded answers every HDF5 call in the process,"; \
+		echo "      so the calls of libexodus would fail. Build seacas's NetCDF and exodus"; \
+		echo "      on the HDF5 that DES links (see Exodus in README.md)."; \
+		if test -f "$$d/../include/hdf5.h"; then \
+			echo "      Or link its copy, with this added to the make line:"; \
+			echo "      HDF5_INCLUDE_DIR=$$(cd "$$d/../include" && pwd) HDF5_LIB_DIR=$$d"; \
+		fi; \
+		exit 1; \
+	fi
 endif
 ifeq ($(usegospl), 1)
 	$(call hdf5_same_file,GoSPL's h5py,$(PYTHON_PREFIX_INCLUDE),$(PYTHON_LIB_DIR))

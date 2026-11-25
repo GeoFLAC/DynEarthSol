@@ -69,10 +69,11 @@ The requirements in detail:
   * With `useexo=1` it looks first in seacas's prefix, and on Linux with
     `usegospl=1` in the prefix of the embedded Python. On Linux the first HDF5
     library loaded answers every HDF5 call in the process, so DES must link the
-    one that seacas's NetCDF or GoSPL's h5py loads. `make check-deps` stops the
-    build when seacas's or the Python's lib directory holds a `libhdf5.so` that
-    is not the one DES links. A pip wheel of h5py brings its own HDF5 instead:
-    DES loads such an h5py so that it uses its own libraries first.
+    one that seacas's NetCDF or GoSPL's h5py loads: `make check-deps` asks
+    libexodus which one that is, checks the Python's lib directory for another
+    `libhdf5.so`, and stops the build, with the fix, on a mismatch. A pip wheel
+    of h5py brings its own HDF5 instead: DES loads such an h5py so that it uses
+    its own libraries first.
   * `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` force one specific HDF5, an HPC module,
     a conda env or a hand-built copy:
     `make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib`.
