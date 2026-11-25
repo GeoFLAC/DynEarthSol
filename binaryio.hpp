@@ -28,6 +28,7 @@ private:
     const int compression_level;
     long nnode = 0, nelem = 0, nseg = 0, etop = 0, nnode_cell = 0;
     bool has_metadata = false;
+    int nmarker_blocks = 0;  // marker blocks written so far
     const bool is_checkpoint;
     std::string kind, block_base;
 
