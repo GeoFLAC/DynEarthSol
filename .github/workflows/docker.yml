@@ -158,6 +158,20 @@ jobs:
           grep -q "GoSPL: 2 couplings" run-default.log
         '
 
+    # A pip wheel of h5py loads its own libhdf5 beside the env's that DES links;
+    # GoSPL must still run (gospl-driver.cxx). The network is for pip only.
+    - name: test the GoSPL image with a pip wheel of h5py
+      if: matrix.variant.gospl == 1
+      run: |
+        docker run --rm -v "$PWD/runs":/home/human/DynEarthSol/runs des-test bash -lc '
+          set -e
+          pip install -q --force-reinstall --no-deps --only-binary=h5py h5py==3.16.0
+          test -d "$(python -c "import h5py, os; print(os.path.dirname(h5py.__file__))")/../h5py.libs"
+          cd runs
+          ../dynearthsol-gospl t.cfg > run-wheel.log 2>&1 || { tail -40 run-wheel.log; exit 1; }
+          grep -q "GoSPL: 2 couplings" run-wheel.log
+        '
+
     # After the tests pass. Rebuilds nothing; exports the layers up to env-*,
     # since later layers hold CI's uid and source. image-manifest=true: the
     # format ghcr.io accepts.
