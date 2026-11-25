@@ -149,6 +149,17 @@ For a release, the full auto-generated list of merged pull requests is in its
   `phase_change_option = 1` no longer turns mantle into serpentinite, a rule that
   needed hydrous markers. A run with hydration stopped with a floating point
   exception at its first remesh ([#138]).
+- **Breaking.** `mesh.meshing_option = 2` stops at startup (exit 11) with a message
+  naming the axis when `mesh.resolution` leaves no refined zone along it: the zone
+  keeps one resolution from each boundary, so a zone that spans an axis needs a
+  resolution under half its length. In 2D, Triangle crashed on such a mesh. In 3D,
+  TetGen meshed the zone without refinement and the run finished; that run now
+  stops too, for example `benchmarks-cores/test-3d-tiny.cfg` with
+  `resolution = 5e3` (`ylength = 10e3`). Lower `mesh.resolution`, or widen
+  `mesh.refined_zone<axis>` if it does not span the axis.
+  `benchmarks/core-complex_new_mesh.cfg` now sets `resolution = 2.5e3`, and the
+  four `benchmarks/1d-consolidation-*` cfgs use `meshing_option = 1` with
+  `meshing_elem_shape = 1`, which is the uniform grid they asked for ([#138]).
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -251,19 +262,13 @@ For a release, the full auto-generated list of merged pull requests is in its
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
   ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
-- `mesh.meshing_option = 2` stops with a message naming the axis when `mesh.resolution`
-  leaves no refined zone (the zone keeps one resolution from each boundary), where
-  Triangle crashed in 2D. `benchmarks/core-complex_new_mesh.cfg` now sets
-  `resolution = 2.5e3`, and the four `benchmarks/1d-consolidation-*` cfgs use
-  `meshing_option = 1` with `meshing_elem_shape = 1`, which is the uniform grid
-  they asked for ([#138]).
 - `markers.init_marker_option = 2` places markers `init_marker_spacing * mesh.resolution`
   metres apart, no longer rounded down to whole metres. A model small enough to
   make that spacing under 1 m crashed at startup; a spacing that is not positive,
-  or that would place more markers than fit in memory, now stops with a message
+  or that would place more markers than an `int` counts, now stops with a message
   ([#138]).
 - Reading a 3D `.poly` file no longer overruns a stack buffer: a facet line of up
-  to 4095 characters is accepted (one over 2549 used to corrupt the stack), and a
+  to 4094 characters is accepted (one over 2549 used to corrupt the stack), and a
   longer one stops with a message, as does a facet line with fewer points than it
   announces ([#138]).
 - `control.ref_pressure_option` 1 and 2 stop at startup with a message when
