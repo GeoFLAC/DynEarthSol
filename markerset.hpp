@@ -10,7 +10,6 @@ class MarkerSet
 {
 
 public:
-    MarkerSet( const std::string& name );
     MarkerSet( const Param& param, Variables& var, const std::string& name );
     template <class T>
     MarkerSet( const Param& param, Variables& var, T& bin_save, T& bin_chkpt, const std::string& name );

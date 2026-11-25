@@ -31,14 +31,6 @@ namespace {
 }
 
 
-MarkerSet::MarkerSet(const std::string& name) :
-    _name(name)
-{
-    _last_id = _nmarkers = 0;
-    allocate_markerdata(4 * 1024); // pre-allocate a small amount of markers
-}
-
-
 MarkerSet::MarkerSet(const Param& param, Variables& var, const std::string& name) :
     _name(name)
 {
@@ -99,13 +91,12 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin_save, T& bin_chk
     // init from checkpoint file
     read_chkpt_file(var, bin_save, bin_chkpt);
 
-    if (_name == "markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            int mt = (*_mattype)[i];
-            ++(*var.elemmarkers)[e][mt];
-            (*var.markers_in_elem)[e].push_back(i);
-        }
+    for( int i = 0; i < _nmarkers; i++ ) {
+        int e = (*_elem)[i];
+        int mt = (*_mattype)[i];
+        ++(*var.elemmarkers)[e][mt];
+        (*var.markers_in_elem)[e].push_back(i);
+    }
 }
 
 
@@ -1067,9 +1058,8 @@ void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) co
 
 namespace {
 
-    template <class T>
     void find_markers_in_element(const Param &param, const Variables& var, MarkerSet& ms,
-                                 T& elemmarkers, int_vec2D& markers_in_elem,
+                                 int_vec2D& elemmarkers, int_vec2D& markers_in_elem,
                                  KNN& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
