@@ -172,7 +172,7 @@ defaults are not what you want.
   * GoSPL coupling is not yet available in MPI builds; `make usempi=1 usegospl=1`
     stops with an error.
   * The tutorial
-    [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+    [Coupling with GoSPL](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
     reference for build, runtime and coupling details, and
     `gospl_driver/examples/` holds the example configs. The Docker image below
@@ -429,7 +429,7 @@ small examples and expected results for CPU MPI and multiple GPUs.
   ```
   Run from the directory holding the GoSPL YAML, whose path is resolved from
   the working directory. See the
-  [GoSPL tutorial](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+  [GoSPL tutorial](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl)
   and `gospl_driver/README.md` for the details.
 
 # Visualizing DES outputs
