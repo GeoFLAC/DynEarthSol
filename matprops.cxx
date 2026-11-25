@@ -49,12 +49,11 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
-        // Deeper than prem_max_depth (or for a NaN depth) no row matches, n stays nlayers and the
-        // interpolation reads one past both tables. mesh.zlength is checked against the limit at
-        // input, but a run whose nodes later move deeper than that, such as a diverged one,
-        // overruns here.
+        // Deeper than prem_max_depth no row matches: the last segment is extrapolated. mesh.zlength
+        // is checked against the limit at input, so only nodes that move deeper, as in a diverged
+        // run, get there. A NaN depth gives a NaN pressure, which the run's NaN checks catch.
         int n;
-        for (n=1; n<nlayers; n++) {
+        for (n=1; n<nlayers-1; n++) {
             if (depth <= ref_depth[n]) break;
         }
 
@@ -100,12 +99,11 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
-        // Deeper than prem_max_depth (or for a NaN depth) no row matches, n stays nlayers and the
-        // interpolation reads one past both tables. mesh.zlength is checked against the limit at
-        // input, but a run whose nodes later move deeper than that, such as a diverged one,
-        // overruns here.
+        // Deeper than prem_max_depth no row matches: the last segment is extrapolated. mesh.zlength
+        // is checked against the limit at input, so only nodes that move deeper, as in a diverged
+        // run, get there. A NaN depth gives a NaN pressure, which the run's NaN checks catch.
         int n;
-        for (n=1; n<nlayers; n++) {
+        for (n=1; n<nlayers-1; n++) {
             if (depth <= ref_depth[n]) break;
         }
 

@@ -5,7 +5,7 @@
 
 
 // Depth of the last row of the PREM tables behind control.ref_pressure_option 1 and 2;
-// ref_pressure() reads past them from there down.
+// ref_pressure() extrapolates their last segment below it.
 constexpr double prem_max_depth = 2891e3;
 
 #pragma acc routine seq
