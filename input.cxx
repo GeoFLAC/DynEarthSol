@@ -2129,8 +2129,8 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.control.ref_pressure_option = 0;
             std::cerr << "Warning: mat.num_materials is 1, using simplest control.ref_pressure_option.\n";
         }
-        // The values surface_processes() handles; another one would stop the run at its first
-        // surface update, and a fixed mesh never reaches one.
+        // The values surface_processes() handles in this build; another one would stop the run at
+        // its first surface update, and a fixed mesh never reaches one.
         {
             const int s = p.control.surface_process_option;
             if (s != 0 && s != 1 && s != 11 && s != 101 && s != 102) {
@@ -2138,6 +2138,14 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                 msg << "control.surface_process_option = " << s << " is not one of 0, 1, 11, 101 and 102.";
                 die(EXIT_CONFIG_VALUE, msg.str().c_str());
             }
+#ifndef HAS_GOSPL_CPP_INTERFACE
+            if (s == 11)
+                die(EXIT_UNSUPPORTED_LIB, "control.surface_process_option = 11 (GoSPL) needs a build with usegospl=1.");
+#endif
+#ifdef THREED
+            if (s == 102)
+                die(EXIT_UNSUPPORTED_DIM, "control.surface_process_option = 102 is not available in 3D.");
+#endif
         }
         if (p.control.ref_pressure_option != 0 && p.mesh.zlength > prem_max_depth) {
             std::ostringstream msg;

@@ -122,8 +122,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   routine deleted in 2023, which nothing has read since; delete it from existing
   inputs. `--help` no longer lists `surface_process_option = 2`, which was never
   implemented. It, and any value other than 0, 1, 11, 101 and 102, now stops at
-  input with exit 11; it used to stop at the first surface update, and a
-  fixed-mesh run ended normally ([#138]).
+  input with exit 11, as do 11 in a build without GoSPL (exit 31) and 102 in 3D
+  (exit 30); they used to stop at the first surface update, and a fixed-mesh run
+  ended normally without any surface process ([#138]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
