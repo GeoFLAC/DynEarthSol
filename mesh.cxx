@@ -2426,7 +2426,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
 
             std::istringstream inbuf(buffer);
             int nvertex;
-            inbuf >> nvertex;
+            // A failed read leaves its int unset, and every read after it too.
+            if (!(inbuf >> nvertex)) {
+                std::cerr << "Error: parsing line " << lineno << " of '"
+                          << param.mesh.poly_filename << "'\n";
+                die(EXIT_CONFIG_DATA);
+            }
             if (nvertex < NODES_PER_FACET || nvertex > 9999) {
                 std::cerr << "Error: unsupported number of polygon points in line " << lineno
                           << " of '" << param.mesh.poly_filename << "'\n";
@@ -2436,7 +2441,11 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             f.polygonlist[j].vertexlist = new int[nvertex];
             f.polygonlist[j].numberofvertices = nvertex;
             for (int k=0; k<nvertex; k++) {
-                inbuf >> f.polygonlist[j].vertexlist[k];
+                if (!(inbuf >> f.polygonlist[j].vertexlist[k])) {
+                    std::cerr << "Error: line " << lineno << " of '" << param.mesh.poly_filename
+                              << "' has fewer than the " << nvertex << " polygon points it announces\n";
+                    die(EXIT_CONFIG_DATA);
+                }
                 if (f.polygonlist[j].vertexlist[k] < 0 ||
                     f.polygonlist[j].vertexlist[k] >= npoints) {
                     std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
