@@ -1,0 +1,38 @@
+{
+  "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+  "executable_sha256": "b8028481dd0d74f6e5909c466623ebe130e9fd40f94c12c5735898a9ae727566",
+  "spacing_m": 0.5,
+  "files_sha256": {
+    "README.md": "c1d25c61a675dd7607aebd2f29a9a8a1e73304b141b497e0386d20c320b4d215",
+    "input.cfg": "a8e936a924a2e791521e4f25ee4f9d4038537046f06af263746ac31f2d0975b2",
+    "record.json": "da58cca56a9a38745f63b55bf90a23a6f546fb3fd8fa5f63758c8a2977431a5d",
+    "reservoir.chkpt.000100": "1f7bae23917c69400cb12a4fed23ef465eb4d627fdc37592e53aa5eb3dc28ec7",
+    "reservoir.info": "80e2a79b65c940793d28424b5732f3ecfd84fae67a4b1ddf74dd2d8e721f4e12",
+    "reservoir.save.000100": "f38641e483237b9e99b24ddf9269e011d9a6eea9f742d2ec2228f789aa5fa1d7",
+    "slope.poly": "88dfe8503852c10e2c94b10a0bfcf44f61b8ba880d8d1f089d892d68e738a006"
+  },
+  "source_files_sha256": {
+    "runs/drawdown-20261110/study/h0.5/drawdown.cfg": "a8e936a924a2e791521e4f25ee4f9d4038537046f06af263746ac31f2d0975b2",
+    "runs/drawdown-20261110/study/h0.5/slope.poly": "88dfe8503852c10e2c94b10a0bfcf44f61b8ba880d8d1f089d892d68e738a006",
+    "runs/drawdown-20261110/study/h0.5/reservoir.save.000100": "d947d328ac3962fdd26c112d998daba93e0a5766c2445c2b671cb670ae8c4be1",
+    "runs/drawdown-20261110/study/h0.5/reservoir.chkpt.000100": "338913b9c3290c1ecef2e9832dd1c246ae8434d51eb201bfe7592d037ba540ad",
+    "runs/drawdown-20261110/study/h0.5/reservoir.info": "80e2a79b65c940793d28424b5732f3ecfd84fae67a4b1ddf74dd2d8e721f4e12"
+  },
+  "portability": {
+    "policy": "Runtime identities and absolute workstation paths are omitted. Checkpoint physical payloads are verified unchanged.",
+    "files": {
+      "data/drawdown/record.json": {
+        "original_sha256": "acc18346246c14a58300385fe3c73de2604c360bb1aad8539802fa1813750f71",
+        "portable_sha256": "8c5119a93b2178db402beaea4c2588c5d708a13b066b2ea8afad86dc0d0f9f68"
+      },
+      "data/drawdown/reservoir.chkpt.000100": {
+        "original_sha256": "338913b9c3290c1ecef2e9832dd1c246ae8434d51eb201bfe7592d037ba540ad",
+        "portable_sha256": "557a8a0ff54c564c086cc73ee99b578a914243bb113040b55b839e05f79a1012"
+      },
+      "data/drawdown/reservoir.save.000100": {
+        "original_sha256": "d947d328ac3962fdd26c112d998daba93e0a5766c2445c2b671cb670ae8c4be1",
+        "portable_sha256": "613cc2a22278da7ec93a07180af91697ca0c941ee9d61ac18831790056b9652e"
+      }
+    }
+  }
+}

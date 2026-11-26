@@ -1,0 +1,171 @@
+{
+  "problem": "An affine material cell is extended in one direction and compressed equally in another, at fixed pore pressure. Effective stress must control its shear yield load.",
+  "result": "The pressurized 3D case yields at 186.603 kPa, matching the analytical load. The largest stress/plastic-strain error over 20 load paths (EP, and EP-RSF at constant friction) is 1.28e-14 of the yield load.",
+  "scope": "Unit cells in 2D plane strain and 3D; five prescribed pressure/Biot/suction states and 64 load steps. The figure selects 3D EP at total confinement 1 MPa, pore pressure 0.8 MPa and Biot coefficient 1.",
+  "meaning": "This isolates pressure-dependent skeleton strength and its plastic strain. Constant-friction EP-RSF is checked; evolving RSF is checked on the rate-and-state page; flow, dilation, tensile returns and slope/injection applications remain separate requirements.",
+  "metric": 1.278248824818063e-14,
+  "metric_label": "stress/plastic-strain error / yield load",
+  "spacing_m": 1.0,
+  "evidence": {
+    "2d-elasto-plastic-dry-effective": {
+      "passed": true,
+      "max_error_over_yield_load": 1.1620443861982391e-15,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.54037844384,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-pressurized": {
+      "passed": true,
+      "max_error_over_yield_load": 1.278248824818063e-14,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.5403784439,
+      "bishop_pressure_Pa": 800000.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-dry-total": {
+      "passed": true,
+      "max_error_over_yield_load": 2.217928695200065e-15,
+      "expected_yield_load_Pa": 586602.5403784438,
+      "final_load_Pa": 586602.5403784439,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-biot": {
+      "passed": true,
+      "max_error_over_yield_load": 6.25616979784222e-15,
+      "expected_yield_load_Pa": 346602.54037844384,
+      "final_load_Pa": 346602.5403784439,
+      "bishop_pressure_Pa": 480000.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-suction": {
+      "passed": true,
+      "max_error_over_yield_load": 3.792127654258606e-15,
+      "expected_yield_load_Pa": 200136.06870210514,
+      "final_load_Pa": 200136.06870210514,
+      "bishop_pressure_Pa": -27067.05664732254,
+      "frames": 17
+    },
+    "2d-elasto-plastic-rate-state-friction-dry-effective": {
+      "passed": true,
+      "max_error_over_yield_load": 1.1620443861982391e-15,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.54037844384,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-rate-state-friction-pressurized": {
+      "passed": true,
+      "max_error_over_yield_load": 1.278248824818063e-14,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.5403784439,
+      "bishop_pressure_Pa": 800000.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-rate-state-friction-dry-total": {
+      "passed": true,
+      "max_error_over_yield_load": 2.217928695200065e-15,
+      "expected_yield_load_Pa": 586602.5403784438,
+      "final_load_Pa": 586602.5403784439,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-rate-state-friction-biot": {
+      "passed": true,
+      "max_error_over_yield_load": 6.25616979784222e-15,
+      "expected_yield_load_Pa": 346602.54037844384,
+      "final_load_Pa": 346602.5403784439,
+      "bishop_pressure_Pa": 480000.0,
+      "frames": 17
+    },
+    "2d-elasto-plastic-rate-state-friction-suction": {
+      "passed": true,
+      "max_error_over_yield_load": 3.792127654258606e-15,
+      "expected_yield_load_Pa": 200136.06870210514,
+      "final_load_Pa": 200136.06870210514,
+      "bishop_pressure_Pa": -27067.05664732254,
+      "frames": 17
+    },
+    "3d-elasto-plastic-dry-effective": {
+      "passed": true,
+      "max_error_over_yield_load": 2.9051109654955977e-15,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.54037844384,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-pressurized": {
+      "passed": true,
+      "max_error_over_yield_load": 1.278248824818063e-14,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.5403784439,
+      "bishop_pressure_Pa": 800000.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-dry-total": {
+      "passed": true,
+      "max_error_over_yield_load": 5.082753259833483e-16,
+      "expected_yield_load_Pa": 586602.5403784438,
+      "final_load_Pa": 586602.5403784439,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-biot": {
+      "passed": true,
+      "max_error_over_yield_load": 6.25616979784222e-15,
+      "expected_yield_load_Pa": 346602.54037844384,
+      "final_load_Pa": 346602.5403784439,
+      "bishop_pressure_Pa": 480000.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-suction": {
+      "passed": true,
+      "max_error_over_yield_load": 2.708662610184718e-15,
+      "expected_yield_load_Pa": 200136.06870210514,
+      "final_load_Pa": 200136.06870210514,
+      "bishop_pressure_Pa": -27067.05664732254,
+      "frames": 17
+    },
+    "3d-elasto-plastic-rate-state-friction-dry-effective": {
+      "passed": true,
+      "max_error_over_yield_load": 2.9051109654955977e-15,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.54037844384,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-rate-state-friction-pressurized": {
+      "passed": true,
+      "max_error_over_yield_load": 1.278248824818063e-14,
+      "expected_yield_load_Pa": 186602.54037844384,
+      "final_load_Pa": 186602.5403784439,
+      "bishop_pressure_Pa": 800000.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-rate-state-friction-dry-total": {
+      "passed": true,
+      "max_error_over_yield_load": 5.082753259833483e-16,
+      "expected_yield_load_Pa": 586602.5403784438,
+      "final_load_Pa": 586602.5403784439,
+      "bishop_pressure_Pa": 0.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-rate-state-friction-biot": {
+      "passed": true,
+      "max_error_over_yield_load": 6.25616979784222e-15,
+      "expected_yield_load_Pa": 346602.54037844384,
+      "final_load_Pa": 346602.5403784439,
+      "bishop_pressure_Pa": 480000.0,
+      "frames": 17
+    },
+    "3d-elasto-plastic-rate-state-friction-suction": {
+      "passed": true,
+      "max_error_over_yield_load": 2.708662610184718e-15,
+      "expected_yield_load_Pa": 200136.06870210514,
+      "final_load_Pa": 200136.06870210514,
+      "bishop_pressure_Pa": -27067.05664732254,
+      "frames": 17
+    }
+  }
+}

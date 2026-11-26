@@ -1,0 +1,144 @@
+{
+  "problem": "A circular opening concentrates stress in an elastic solid under isotropic compression.",
+  "result": "Radial/hoop stress RMS errors: 0.148% / 0.169% of $P$; largest local error 2.15%.",
+  "scope": "2D plane strain, $a=1$ m and $R=20a$, 0.025 m inner spacing. Compared with the finite-annulus solution; its wall hoop stress differs from infinite-domain Kirsch by 0.251%.",
+  "meaning": "This checks dry elastic stress, strain, curved-surface traction and symmetry constraints. Plasticity and excavation history remain separate checks; poroelastic injection is on the borehole page.",
+  "metric": 0.0016900957108212287,
+  "metric_label": "hoop stress RMS error / P",
+  "spacing_m": 0.025,
+  "evidence": {
+    "passed": true,
+    "cases": [
+      {
+        "spacing_m": 0.2,
+        "nodes": 462,
+        "elements": 834,
+        "errors": {
+          "radial_rms_over_load": 0.009110560554796563,
+          "hoop_rms_over_load": 0.008351487632138159,
+          "shear_rms_over_load": 0.007130321486795002,
+          "max_error_over_load": 0.031211625963555707,
+          "radial_strain_rms_over_P_G": 0.004254879903726776,
+          "hoop_strain_rms_over_P_G": 0.003952049658591993,
+          "out_of_plane_rms_over_load": 0.0011294392191295347
+        },
+        "maximum_abs_strain": 8.135645563183833e-05,
+        "input_sha256": "0d86fda7d5c0462526c3d7cfe3f9e7ff94b1b965a1d9abaf7070b2fe322504b0",
+        "mesh_input_sha256": "3cd2c2fa07c004e2d4b66820f24d459324b9aff77da51f612b8d8dafebe437d7",
+        "outputs_sha256": {
+          "kirsch.chkpt.000000": "f0b62246184dae3390a146b986f0cbed73f8ccfb9cc6af280c1b7b7fdae9bb5c",
+          "kirsch.chkpt.000001": "241ab3d2442428b0b6a5037f2176c01937af2fb003dcf93519d0d99051e7fe3a",
+          "kirsch.info": "09e20405e50806211dad1f59c83c2225db7614c986e4f05e0b12b39c99208b08",
+          "kirsch.save.000000": "274c607b685aa70a42399d1b10976a055edc82200bf7d993d5ad696dfa200e5f",
+          "kirsch.save.000001": "3f24fc66f37016ce2ff8433045db3ec3876ec22e71695f3c4e690a932b723226"
+        },
+        "max_free_force_over_PR": 6.764916479593007e-08,
+        "folder": "h0.2"
+      },
+      {
+        "spacing_m": 0.1,
+        "nodes": 1642,
+        "elements": 3113,
+        "errors": {
+          "radial_rms_over_load": 0.005613381685816269,
+          "hoop_rms_over_load": 0.005107322006123842,
+          "shear_rms_over_load": 0.005295926717275119,
+          "max_error_over_load": 0.023582270700916924,
+          "radial_strain_rms_over_P_G": 0.0026373788976013636,
+          "hoop_strain_rms_over_P_G": 0.0024369080250768844,
+          "out_of_plane_rms_over_load": 0.0006556152691559568
+        },
+        "maximum_abs_strain": 8.412494002930872e-05,
+        "input_sha256": "9c6c5a5d8e164083bc7aa06bf27aa2ed4025df2007fdf20f12e443b44f4d005f",
+        "mesh_input_sha256": "3e81d970fb5e42ead4a3bacb4ff5f6ce3e5735cc467122627c4490da4ba640e4",
+        "outputs_sha256": {
+          "kirsch.chkpt.000000": "caba89191a585e33a0f6701f02e1e01a4cd623e09a3a31daf8f0b602f40d7935",
+          "kirsch.chkpt.000001": "fe90ead9431113d61f826a162b3109bfff4b35db05afc1d4e0be05fcdebd980c",
+          "kirsch.info": "65dc0aedc233a3478af00b184f5b27aa28b170fb0dd6a97b936028adef20f46a",
+          "kirsch.save.000000": "f418520ee9f480a561a11a99eb7505cb0a6e5cc3a76381991c3ea299058924fc",
+          "kirsch.save.000001": "6fa7b148f457232b28f9b8ac4b1ee3f8ccf4f8117d5cf0e8a1a88404b197bf1e"
+        },
+        "max_free_force_over_PR": 3.780057769665591e-08,
+        "folder": "h0.1"
+      },
+      {
+        "spacing_m": 0.05,
+        "nodes": 6227,
+        "elements": 12119,
+        "errors": {
+          "radial_rms_over_load": 0.0029918082358219972,
+          "hoop_rms_over_load": 0.003418073729203408,
+          "shear_rms_over_load": 0.0025923163020376734,
+          "max_error_over_load": 0.025920804780320033,
+          "radial_strain_rms_over_P_G": 0.001452574531299772,
+          "hoop_strain_rms_over_P_G": 0.001619345909594097,
+          "out_of_plane_rms_over_load": 0.0003489912772756915
+        },
+        "maximum_abs_strain": 8.65674189370772e-05,
+        "input_sha256": "72a9431991aafa7392d096b62558df1d1b1e2a8b287a3920850c9c574e69345d",
+        "mesh_input_sha256": "192122c9c7cef7bf113ae477b15cc8b1cb82067955927d66f427b61bb5ec28ae",
+        "outputs_sha256": {
+          "kirsch.chkpt.000000": "e5640065aaab545855a3389cbdb538ae06ac0b16edd8c0b8715092983974f22e",
+          "kirsch.chkpt.000001": "9a3df9575d5c3a736e7344d9d2c8639324d6bd5696c6c259eff5380b0ca186df",
+          "kirsch.info": "7eba71ff3a490307f79e5e0777ce8418e54ddf3d37ec37d7243cd897df7eff6d",
+          "kirsch.save.000000": "1ce6ecd5951447e92e639a18afeb29ca43b26027e2bceccd0531dc8ee582ee34",
+          "kirsch.save.000001": "369ace6171538d5b493aa112df9213d284efac72e0f95ac340f7836cf80ef652"
+        },
+        "max_free_force_over_PR": 2.8573130709866148e-08,
+        "folder": "h0.05"
+      },
+      {
+        "spacing_m": 0.025,
+        "nodes": 24548,
+        "elements": 48443,
+        "errors": {
+          "radial_rms_over_load": 0.0014771321117690982,
+          "hoop_rms_over_load": 0.0016900957108212287,
+          "shear_rms_over_load": 0.001429983797812548,
+          "max_error_over_load": 0.021522228105241084,
+          "radial_strain_rms_over_P_G": 0.0007191638216539729,
+          "hoop_strain_rms_over_P_G": 0.0008022880696158083,
+          "out_of_plane_rms_over_load": 0.00016794807685296302
+        },
+        "max_free_force_over_PR": 1.560487825545988e-08,
+        "maximum_abs_strain": 8.727214983061788e-05,
+        "input_sha256": "9f4de71b51053952c5f2217dcbbc39cab1dd96c625d1237fdc504c9f3e82ae51",
+        "mesh_input_sha256": "613cd34e6e4f331ccd9997b87dcb01bb7a5685b2553a04e7ff58c088dea9a96f",
+        "outputs_sha256": {
+          "kirsch.chkpt.000000": "8fa8bde4feb73d7eee9b061d79d50a4d309b104605b3dcb9d5e19617a88dafec",
+          "kirsch.chkpt.000001": "ed0c55ebabcd7e917797643a91a561cadc54b5fa8434edfced24fbbdd2e2e2d6",
+          "kirsch.info": "e4c858ed4db46080ed54160f5ded2c3fd4eeb4bad1674996b317d9169da1c4f3",
+          "kirsch.save.000000": "49d65e84a51f7fa6b23832fe406f1d44f51bfa31f94375ef8e87ea336c8f61eb",
+          "kirsch.save.000001": "d768bba2df1d0300fb2da879dccf49f88670619c1d5dcda2941203b966347115"
+        },
+        "folder": "finer/h0.025"
+      }
+    ],
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "executable_sha256": "68274bd2086d2b8ed54195f53c9b46e025bef48dee5084a4d5b6e483f8fe3349",
+    "reference": {
+      "opening_radius_m": 1.0,
+      "outer_radius_m": 20.0,
+      "outer_pressure_Pa": 100000.0,
+      "finite_boundary_hoop_factor": 1.0025062656641603
+    },
+    "analysis_sha256": "4247a0361abe947b85fec92199ce1dd0914f8587d4d578fc754a4fb1530cfd5d",
+    "reference_sha256": "295cbe908f1abbcc740465e3ee70c0a2014e767296cb97657a4c948f6d56fe6c",
+    "scope": "Dry isotropic compression, small-strain plane-strain annulus. Plasticity, anisotropic far loading and coupled injection are not qualified.",
+    "source_files_sha256": {
+      "benchmarks/hydromechanics/kirsch_reference.py": "295cbe908f1abbcc740465e3ee70c0a2014e767296cb97657a4c948f6d56fe6c",
+      "benchmarks/hydromechanics/qualify_kirsch.py": "0a36b09fcfc940d90847156f61e8007b256a13e1953036ed8f86ce8536b80342",
+      "tests/functional/hydromechanics/check_kirsch.py": "4247a0361abe947b85fec92199ce1dd0914f8587d4d578fc754a4fb1530cfd5d",
+      "benchmarks/hydromechanics/setup_drawings.py": "100a6a33344f45a78e7a3e30523c40d2008a7153c9443e6ab51c5b6d3c2eb288",
+      "doc/hydro/kirsch.md": "fe3f9bac7dddc3eb1f402cab16cad7a7b4e1b639d3c8979465184b81016a7afe"
+    },
+    "artifacts_sha256": {
+      "fig/kirsch/result.pdf": "00167d788967ccf6de9c1c8f8157acb42d1a7efcc4f3d59ccb9f32034c4bb17b",
+      "fig/kirsch/result.png": "082da430539eb33113d1ca5f6f708dbc916467ed785be958c60dd11bfaddda5a",
+      "fig/kirsch/result.svg": "9c4b3cc5c90235119959b29d04e9aeddcdf7d342e582c494c93fb4ac1b0c74bb",
+      "fig/kirsch/setup.pdf": "58dcf0ec4def3700264bf323d8799df18ecb413398871bc9f05967e926c7a0f6",
+      "fig/kirsch/setup.png": "206b4ca0c41f88ca3e4fce1a046f040756145f395c53ad09640c20f58bd74c70",
+      "fig/kirsch/setup.svg": "2671f9b2a88ad1a6c44ba30b05bc9a70b15eb6663b2cfd1bd1bc92e568d315ea"
+    }
+  }
+}

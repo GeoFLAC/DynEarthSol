@@ -1,0 +1,18 @@
+{
+  "problem": "A rigid saturated cell receives uniform heat while every face holds zero pore pressure. Thermal expansion expels water, reducing retained heat capacity and exporting sensible heat.",
+  "result": "Temperature errors at 100 and 200 steps are 0.000845 and 0.000422 K. Retained energy plus measured boundary export closes against supplied heat within 20 microjoules.",
+  "scope": "2D unit volume per metre thickness, 30 MW supplied for 5 s, 200 steps, no gravity, solid expansion or conduction. (a) total supplied heat; (b) exported sensible heat. The reference uses the actual exponential water density.",
+  "meaning": "At zero pressure and zero bulk strain this isolates open-system sensible heat without mechanical boundary work. Owned solid heat capacity stays fixed while fluid mass changes. It does not qualify full thermodynamic pressure work or a thermal plume.",
+  "metric": 0.00042234696888954204,
+  "metric_label": "maximum temperature error (K)",
+  "spacing_m": 1.0,
+  "evidence": {
+    "qualification": "runs/finite-content-20261110/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "2d-native/mass/heat/drained-200",
+    "temperature_errors_K": [
+      0.0008446865364817313,
+      0.00042234696888954204
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "problem": "Water infiltrates a partly saturated column from the top while the base stays at the water table.",
+  "result": "Largest error in $K/K_s$: 0.714% at 7230 s and 2.52% over all saved times.",
+  "scope": "3D, 0.025 m mesh, all saved times compared; shown at 7230 s. Halving the mesh reduces the error about fivefold.",
+  "meaning": "This checks conservative unsaturated flow against an independent transient solution. It does not test Bishop effective stress.",
+  "metric": 0.007138986257724245,
+  "metric_label": "final K/Ks error",
+  "spacing_m": 0.025,
+  "evidence": "unsaturated-integration-20261107/figures/index.html"
+}

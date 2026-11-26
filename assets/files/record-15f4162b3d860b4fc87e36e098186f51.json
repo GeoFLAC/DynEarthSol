@@ -1,0 +1,10 @@
+{
+  "problem": "A constant inflow from the top produces a steady suction profile above a water table at the base. The van Genuchten law has no air-entry pressure, so the soil desaturates as soon as the pressure falls below zero.",
+  "result": "Largest pressure error: 5.69 Pa, 0.96% of the profile range.",
+  "scope": "2D, 0.025 m mesh, steady state; storage does not enter the steady solution.",
+  "meaning": "This checks the retention-dependent conductivity and the flux boundary. It does not test transient storage or coupled slope behaviour.",
+  "metric": 5.688684874057856,
+  "metric_label": "maximum pressure error (Pa)",
+  "spacing_m": 0.025,
+  "evidence": "unsaturated-integration-20261107/figures/index.html"
+}

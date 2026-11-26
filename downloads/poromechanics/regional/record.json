@@ -1,0 +1,60 @@
+{
+  "problem": "A well field pumps a soft confined aquifer for six months, rests for six months and repeats. The ground subsides around the wells, partly rebounds in each rest season and keeps a growing subsidence farther out.",
+  "result": "Largest subsidence error at the observation wells on the 25 m mesh (peak subsidence 24.1 cm): 0.32 cm at 250 m, 0.10 cm at 500 m, 0.01 cm at 1000 m. Over 250–1500 m after the first frame, the largest subsidence error is 7.0% of the largest subsidence in the same frame, and the largest pressure error 0.4% of the largest pressure drop; at the first frame (0.12 yr, a cone only a few elements wide) the subsidence error is 12.8%.",
+  "scope": "3D quarter of a 6 km square, 50 m thick; Q = 0.02 m$^3$/s; PT (adaptive dynamic relaxation). The run in the result above uses the 25 m mesh with 416 steps; with 104 steps its well errors were 250 m: 1.41 cm, 500 m: 0.42 cm, 1000 m: 0.09 cm. Meshes at 104 steps 100, 50, 25 m: subsidence errors after the first frame 20.5%, 18.3%, 13.0%. The step dominates near each rate change: on the 50 m mesh, 416 steps give pressure 0.9% and subsidence 12.1% after the first frame (against 3.8% and 18.3%), and the worst 250 m well error falls from 1.46 to 0.41 cm. (a) bowl at the ends of the seasons; (b) observation wells; (c) errors by mesh and step: open markers 104 steps, solid 416.",
+  "meaning": "This applies the verified pumping and averaged-aquifer physics at field scale, with a realistic schedule and rebound. The reference is the averaged model of a closed basin: fixed outer walls add a uniform areal strain $h(t)$ that deepens the drawdown everywhere, which the infinite-domain line well misses by up to about 20% in the rest seasons. Only changes from the initial state are computed; gravity, an overlying aquitard and inelastic compaction of clays, which set most real subsidence, are not modelled.",
+  "metric": 0.12841548797585742,
+  "metric_label": "subsidence error / max",
+  "spacing_m": 25.0,
+  "evidence": {
+    "executable_sha256": "b44a3705c04a19c3025a8decd36f9c08d1fd347c0f65463cbb65c1845290356d",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "order": 0.0930575576688695,
+    "wells_max_abs_m": {
+      "250": 0.003194209736120182,
+      "500": 0.0010453047840549498,
+      "1000": 7.634902697602544e-05
+    },
+    "outer_radius_m": 3385.137501286538,
+    "time_check": {
+      "steps": 416,
+      "spacing_m": 50.0,
+      "nodes": 7442,
+      "pressure_error": 0.019024613460949486,
+      "subsidence_error": 0.2026489846181729,
+      "input_sha256": "211d51dafbc3f39cb157c82bd4a34c1f7e1d3ced83ee0095f0a96133443dcfe6"
+    },
+    "final": {
+      "steps": 416,
+      "executable_sha256": "b44a3705c04a19c3025a8decd36f9c08d1fd347c0f65463cbb65c1845290356d",
+      "spacing_m": 25.0,
+      "nodes": 43923,
+      "pressure_error": 0.009002076303391572,
+      "subsidence_error": 0.12841548797585742,
+      "input_sha256": "6d391dbf4f1bcb25b1aa515ca5ef2593f132163064cd7446e32b5428a5911ea9"
+    },
+    "cases": [
+      {
+        "spacing_m": 100.0,
+        "nodes": 1922,
+        "pressure_error": 0.16571873721166303,
+        "subsidence_error": 0.3600381434017712,
+        "input_sha256": "f3493cfd164f91a1f04d58592b480771d5fb010561e91258cc79ad92c7e7466f"
+      },
+      {
+        "spacing_m": 50.0,
+        "nodes": 7442,
+        "pressure_error": 0.0464639266277215,
+        "subsidence_error": 0.3874460553568141,
+        "input_sha256": "325cfaa873731f5917c84fdfcca694d247fac5ff875897048e1a36f20622cbde"
+      },
+      {
+        "spacing_m": 25.0,
+        "nodes": 43923,
+        "pressure_error": 0.03659871757967071,
+        "subsidence_error": 0.3164625193431727,
+        "input_sha256": "ff37356749ecc41fc4c9d76e9e3c4d91a81e0e6581bc3747728a59074393bc8a"
+      }
+    ]
+  }
+}

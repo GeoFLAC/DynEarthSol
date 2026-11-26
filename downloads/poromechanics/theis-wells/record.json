@@ -1,0 +1,728 @@
+{
+  "problem": "Two wells extract water and one injects it into a confined slab; all stop after 40 s and the pressure recovers.",
+  "result": "Maximum pressure error: 0.688% of $C_\\Sigma$; independent fluid-budget error below 1.13e-17 m³.",
+  "scope": "3D, 160 by 160 by 5 m, 2.5 m spacing and 0.125 s outer step, through 80 s. Mesh and time-step studies show slight error cancellation. Separate single-well superposition agrees within 1.13e-15 of the pressure scale.",
+  "meaning": "This checks linear saturated flow, signed pumping/injection, recovery and the closed volume budget. Mechanical feedback and nonlinear property changes are outside this comparison.",
+  "metric": 0.006881608259086293,
+  "metric_label": "pressure error / summed scale",
+  "spacing_m": 2.5,
+  "evidence": {
+    "executable": "benchmarks/hydromechanics/results/runs/gvs-qualification-20261108/final-regression/binaries/dynearthsol3d",
+    "executable_sha256": "bfddc427d8d2052241706212bc6698c18ebd4dc1be89e9148844330eb7e531d2",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "binary_manifest_sha256": "a83d80b0963c1790bfb76971b446945c3261e41620b616c0f4920ca269c09257",
+    "runner_sha256": "8dae5c9af72b3fad3cdb1d0415a5441cf9a2f63192872946df6025bd8f3f89ce",
+    "reference": {
+      "box_side_m": 160.0,
+      "thickness_m": 5.0,
+      "pump_until_s": 40.0,
+      "end_s": 80.0,
+      "pressure_scale_Pa": 25684.401996099718,
+      "storage_per_Pa": 1.1463636364386363e-10,
+      "transmissivity": 5.731818182193182e-10,
+      "storativity": 5.731818182193182e-10
+    },
+    "cases": {
+      "joint-h5-dt1": {
+        "spacing_m": 5.0,
+        "dt_s": 1.0,
+        "wells": [
+          [
+            60.0,
+            80.0,
+            0.0001
+          ],
+          [
+            100.0,
+            80.0,
+            6e-05
+          ],
+          [
+            80.0,
+            100.0,
+            -2.5e-05
+          ]
+        ],
+        "nodes": 2178,
+        "elements": 5120,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.0196412328574402,
+            "rms_error_over_scale": 0.0024684853919862203,
+            "stored_m3": -0.001349999999999999,
+            "exact_stored_m3": -0.00135,
+            "absolute_volume_error_m3": 1.0842021724855044e-18,
+            "far_reference_over_scale": 4.867823815604005e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.025472698028204118,
+            "rms_error_over_scale": 0.0033196762996095777,
+            "stored_m3": -0.002699999999999999,
+            "exact_stored_m3": -0.0027,
+            "absolute_volume_error_m3": 1.3010426069826053e-18,
+            "far_reference_over_scale": 3.3652382753850717e-22
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.023311119308294062,
+            "rms_error_over_scale": 0.0037506226629849438,
+            "stored_m3": -0.0040499999999999954,
+            "exact_stored_m3": -0.00405,
+            "absolute_volume_error_m3": 4.336808689942018e-18,
+            "far_reference_over_scale": 1.6332713571285123e-15
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.021302035924407787,
+            "rms_error_over_scale": 0.004145580380284106,
+            "stored_m3": -0.0053999999999999986,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 1.734723475976807e-18,
+            "far_reference_over_scale": 3.898199974115208e-12
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.019098503808536997,
+            "rms_error_over_scale": 0.004209081520072863,
+            "stored_m3": -0.0053999999999999986,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 1.734723475976807e-18,
+            "far_reference_over_scale": 4.3438325526009715e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.012805095092274905,
+            "rms_error_over_scale": 0.0035067001857373784,
+            "stored_m3": -0.005399999999999999,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 8.673617379884035e-19,
+            "far_reference_over_scale": 1.0370959294262641e-08
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.008969302485353315,
+            "rms_error_over_scale": 0.00247115649397526,
+            "stored_m3": -0.005399999999999998,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 2.6020852139652106e-18,
+            "far_reference_over_scale": 1.0218282908489438e-07
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.005486102878416046,
+            "rms_error_over_scale": 0.0019152556519559153,
+            "stored_m3": -0.005399999999999999,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 8.673617379884035e-19,
+            "far_reference_over_scale": 5.773167249164079e-07
+          }
+        ],
+        "max_error_over_scale": 0.025472698028204118,
+        "max_volume_error_m3": 4.336808689942018e-18,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "bfe934d72c4373cd41ed24a7b7ab9013f8d76e0ab11b584b0f3afe5767a7f3cd",
+          "multiwell.chkpt.000001": "3565fdff67858f8ed6d07454ceee19b93fb8e0ac343f46baf202859373834f69",
+          "multiwell.chkpt.000002": "39c8afef9cc72eddaf54808ecb99f1a33eb1a0bb234310d4cabf702e8c8f35c4",
+          "multiwell.chkpt.000003": "8be5d6bf8289387ba43abdd8e768d61210117f6ddacc0e20aebc4decd0b87c9f",
+          "multiwell.chkpt.000004": "c3b821e320042c251877eb329c86dd82e01f0382d00f96728cbde0ad7de9bc10",
+          "multiwell.chkpt.000005": "5fe4f04ab5a1212705d5c52988b458ab5eab5314d162205eed848f8a3d6b07c3",
+          "multiwell.chkpt.000006": "269a87b294003aa59715576aec41e93bfcbbc02c93ce7972322ee1f369f7b5e7",
+          "multiwell.chkpt.000007": "46daf68fdb01978984e2da0cd95c89b04c64a37e9f49c8c9fa879a0cd4c6f97b",
+          "multiwell.chkpt.000008": "df8e733e678d0a089efa33826f0c2b0b271fc13bb30702370ade4ae06b7b64d3",
+          "multiwell.info": "847008ae0f3a57e94283736083ebf0d41a2ab2b2ef4ece8158040599197fc9d1",
+          "multiwell.save.000000": "e409eee9961f05f7df4f9f7fbbc455b528895a63d5386f7443e010f58223c3fc",
+          "multiwell.save.000001": "3749acd5ead86fc5e1fd26d24a5d8bc6dca1391569c514c0d86dabc5bbc60fef",
+          "multiwell.save.000002": "5f5f0d0e03cedc39df34c85cb02aafa8d41e2f6da19734b7def4e224806ff024",
+          "multiwell.save.000003": "2673d7c5cbba1c990d3c930b5e92942fc8467c64bbeacfbed291269f1dd0f263",
+          "multiwell.save.000004": "c55c07bad06941a9939e02314b1c5dfd9adc5a54ab4cbbeee62c63a2db88f99a",
+          "multiwell.save.000005": "16d615f321a53e869168ecb10f31df7ff057e88f95b1cd99d0cd97dec5c24f4b",
+          "multiwell.save.000006": "4a88bb51b42209edb16148bf4dcacf0c91aa1e22bc720f9d6ea77f9e172f8593",
+          "multiwell.save.000007": "1d141e5cb46b28eb3ae761271be5335eff5f9388024bd66febc2c7339418d56a",
+          "multiwell.save.000008": "4a2b10b53cc1bd51d35f16397edaf0ba17a641a7e9c40cdfdb2078e7794a41d2"
+        },
+        "input_sha256": "c9a526142af42386fe3b99ba37e7f62d207e9022d4ba1967c714f772e6e6ce7d"
+      },
+      "joint-h2.5-dt1": {
+        "spacing_m": 2.5,
+        "dt_s": 1.0,
+        "wells": [
+          [
+            60.0,
+            80.0,
+            0.0001
+          ],
+          [
+            100.0,
+            80.0,
+            6e-05
+          ],
+          [
+            80.0,
+            100.0,
+            -2.5e-05
+          ]
+        ],
+        "nodes": 12675,
+        "elements": 40960,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.004819279875597049,
+            "rms_error_over_scale": 0.0005139896262529751,
+            "stored_m3": -0.00135,
+            "exact_stored_m3": -0.00135,
+            "absolute_volume_error_m3": 0.0,
+            "far_reference_over_scale": 4.867823815604005e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.004670939987040298,
+            "rms_error_over_scale": 0.0006543003298498377,
+            "stored_m3": -0.002699999999999997,
+            "exact_stored_m3": -0.0027,
+            "absolute_volume_error_m3": 3.0357660829594124e-18,
+            "far_reference_over_scale": 3.3652382753850717e-22
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.005612668966679256,
+            "rms_error_over_scale": 0.0007785579119702104,
+            "stored_m3": -0.004049999999999999,
+            "exact_stored_m3": -0.00405,
+            "absolute_volume_error_m3": 8.673617379884035e-19,
+            "far_reference_over_scale": 1.6332713571285123e-15
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.0062910457004015045,
+            "rms_error_over_scale": 0.0008710323671573781,
+            "stored_m3": -0.005399999999999996,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 4.336808689942018e-18,
+            "far_reference_over_scale": 3.898199974115208e-12
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.006390992196288132,
+            "rms_error_over_scale": 0.0010842741569110628,
+            "stored_m3": -0.005399999999999998,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 2.6020852139652106e-18,
+            "far_reference_over_scale": 4.3438325526009715e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.0032523052117834125,
+            "rms_error_over_scale": 0.0008600900232499129,
+            "stored_m3": -0.005399999999999999,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 8.673617379884035e-19,
+            "far_reference_over_scale": 1.0370959294262641e-08
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.001992408046223252,
+            "rms_error_over_scale": 0.0006123734498989929,
+            "stored_m3": -0.005400000000000004,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 3.469446951953614e-18,
+            "far_reference_over_scale": 1.0218282908489438e-07
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.0013602049051706585,
+            "rms_error_over_scale": 0.0004802597585135548,
+            "stored_m3": -0.005399999999999996,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 4.336808689942018e-18,
+            "far_reference_over_scale": 5.773167249164079e-07
+          }
+        ],
+        "max_error_over_scale": 0.006390992196288132,
+        "max_volume_error_m3": 4.336808689942018e-18,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "2ab14d6c1732c43fe80dfb8f303a2b3641769fedc63e6bc82be3cf5985c745ba",
+          "multiwell.chkpt.000001": "1c6415515c53b31df43970b57991ecb47c448bc078ecbccfd3a793b3d95cdb66",
+          "multiwell.chkpt.000002": "cc08d114c6bd8c3e340c9bd2dd4b13a19e9df6cfd0fc9241cf78d927abe2bf9c",
+          "multiwell.chkpt.000003": "9b015440ebaf6435572293cdc583e6b42361faf6706f085c83e5ba7d0e029d4b",
+          "multiwell.chkpt.000004": "12f7b0a0a422dcd8539b157084a321e67323d3091dad282c13142185cb60c9e9",
+          "multiwell.chkpt.000005": "119a7156a4c5773867fad5e12991e622a0397e64df45cfce6002ee5288772d3d",
+          "multiwell.chkpt.000006": "a8e3dd0b86e7fa40eaaa9c4130b4a232e83bc60eb65589922e61ea3f5557ffeb",
+          "multiwell.chkpt.000007": "8adf23a984378ff1f4b02ada5275bfd81f106af38977ad68342d849f07b77bb2",
+          "multiwell.chkpt.000008": "430f439fbbe689156a5b09275488c3b96724e6fed5bb6b32874fdc3425460dbb",
+          "multiwell.info": "458d6e2caac902a5ffa7bf89f9b74dd763d034fd22ff9b7f73806337f66ea002",
+          "multiwell.save.000000": "215d1f068d01f723e41b6e1a8f74b4b4fdf2e0d5f7ef14ff0b31a6dde3d5490d",
+          "multiwell.save.000001": "31aa7a94bb3056cd71e9092aaec5fdbe51f163d7005761b2eba192c78e63fb73",
+          "multiwell.save.000002": "4b12a9deef98474fd732eb3d0fe1a4cde0b20c65f4fa86b85b7c4c8796fdc04a",
+          "multiwell.save.000003": "b0eafac6dc609f7f1e570938299647f716022381c725c87e79db670da5e40900",
+          "multiwell.save.000004": "8057b5b8ac162097f57e44ba161f9c577863e5fc406b11622129932a4fc58907",
+          "multiwell.save.000005": "b190d89597f5f5ddc92a0de42d77ded484db542e403a729adc3a6a40c188e21c",
+          "multiwell.save.000006": "1a2f20b2bc702746692b386615e15fd6ba6ddf7a58a988448a6e032a765f7614",
+          "multiwell.save.000007": "609fc3e1db0ef64cf8db5cc135ee273bc40ce526944905620dd92abd24755bd9",
+          "multiwell.save.000008": "cdcf7370f487d5cd04efb865c72fee88215773af4427fe338be2805dafede1a9"
+        },
+        "input_sha256": "986f7f515aa14ce45e726cd5977d0cba977ff3e1739b54550381a57ad6d8b840"
+      },
+      "joint-h2.5-dt0.125": {
+        "spacing_m": 2.5,
+        "dt_s": 0.125,
+        "wells": [
+          [
+            60.0,
+            80.0,
+            0.0001
+          ],
+          [
+            100.0,
+            80.0,
+            6e-05
+          ],
+          [
+            80.0,
+            100.0,
+            -2.5e-05
+          ]
+        ],
+        "nodes": 12675,
+        "elements": 40960,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.005156788949413474,
+            "rms_error_over_scale": 0.0005791215147548518,
+            "stored_m3": -0.0013500000000000003,
+            "exact_stored_m3": -0.00135,
+            "absolute_volume_error_m3": 2.168404344971009e-19,
+            "far_reference_over_scale": 4.867823815604005e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.004794107395342927,
+            "rms_error_over_scale": 0.0006898719504091653,
+            "stored_m3": -0.0026999999999999997,
+            "exact_stored_m3": -0.0027,
+            "absolute_volume_error_m3": 4.336808689942018e-19,
+            "far_reference_over_scale": 3.3652382753850717e-22
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.0056164759678158475,
+            "rms_error_over_scale": 0.0007992747268468828,
+            "stored_m3": -0.004049999999999997,
+            "exact_stored_m3": -0.00405,
+            "absolute_volume_error_m3": 2.6020852139652106e-18,
+            "far_reference_over_scale": 1.6332713571285123e-15
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.006405144892618659,
+            "rms_error_over_scale": 0.0008958599525448674,
+            "stored_m3": -0.005399999999999992,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 8.673617379884035e-18,
+            "far_reference_over_scale": 3.898199974115208e-12
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.006881608259086293,
+            "rms_error_over_scale": 0.001186366228971079,
+            "stored_m3": -0.0053999999999999925,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 7.806255641895632e-18,
+            "far_reference_over_scale": 4.3438325526009715e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.003590997676589039,
+            "rms_error_over_scale": 0.0009618617684045151,
+            "stored_m3": -0.0054000000000000055,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 5.204170427930421e-18,
+            "far_reference_over_scale": 1.0370959294262641e-08
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.0022134654343098446,
+            "rms_error_over_scale": 0.0006826499765886473,
+            "stored_m3": -0.005400000000000003,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 2.6020852139652106e-18,
+            "far_reference_over_scale": 1.0218282908489438e-07
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.001481397675437066,
+            "rms_error_over_scale": 0.0005314111565476049,
+            "stored_m3": -0.005400000000000003,
+            "exact_stored_m3": -0.0054,
+            "absolute_volume_error_m3": 2.6020852139652106e-18,
+            "far_reference_over_scale": 5.773167249164079e-07
+          }
+        ],
+        "max_error_over_scale": 0.006881608259086293,
+        "max_volume_error_m3": 8.673617379884035e-18,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "93e1f5b9d23d3cfa806ccec441e9c3ca0b98d90b07d459676c46c0f16bcbc581",
+          "multiwell.chkpt.000001": "20f367c7784b353fd941fde72ff67647ac3e98f1315d6aa4394b8d5e9d593421",
+          "multiwell.chkpt.000002": "4639bd6c1554220352dd69edc6143cabfbed73f607c5be9cc759447b1d01d1e0",
+          "multiwell.chkpt.000003": "38f19b86af81aa4b8fade3908ca117867a3e1ee0eabba9336d533f25c3ff7335",
+          "multiwell.chkpt.000004": "b0c87b124c5e694b4d46054fcd45c75669613f6d548f93330622fab7bc888712",
+          "multiwell.chkpt.000005": "0da8ace2fae7a334fba7fd0a15abe3febc6a6c2660b7852f22b10c49bbf21857",
+          "multiwell.chkpt.000006": "cf197fa986dbf1d9d55f2441d12f735e9edd2ef336d87549bc493875ef406dec",
+          "multiwell.chkpt.000007": "0d1c3e639fd37e0ebc4d08ae7457ac5a247df75270ebc712b4f924a1fd81e130",
+          "multiwell.chkpt.000008": "2710ef82709ff8fc382e23fe0021a4b922ab1eb9a36180696d4e1065f42fb9aa",
+          "multiwell.info": "d2c266ddd46e15c29c3790fb50cac3ec3560983fed3cba10629e8e6dab8ec6de",
+          "multiwell.save.000000": "55907e2a680f77562cb822bd5672d7f25e121f0e91d0894f7cc9a37d4e4aa2ff",
+          "multiwell.save.000001": "3c033cd94398dddb6d3b82a105201d9cf338f66a7a34264d711741cc73870a1c",
+          "multiwell.save.000002": "7034166c95c23600c5775cd22969cc596be718390372120aae4a9ca1714215df",
+          "multiwell.save.000003": "aaf95104a46c3fd18b66101fd2743b32b6b4ef82373e96c0b1c42fa367513c22",
+          "multiwell.save.000004": "38ca2a17df67fbed8cce9a168cdec736f96c3c24f6b92f3679accbb617b7764a",
+          "multiwell.save.000005": "ad34031771096c669664401c31eebc193ff7b93da001af40e761cf39386d09ef",
+          "multiwell.save.000006": "ec6eb4e0fb83d6f3f104b77f32b01958e80a025c40760d57ab9c9a3ace97084b",
+          "multiwell.save.000007": "8493737e991f65d2039a93115a2e8d5ed7960d546f789ef22e93e9a2fa140a6c",
+          "multiwell.save.000008": "513f55d84d5b687fd00293026fff921c3681e7067e13710e5d43bd5285e6c155"
+        },
+        "input_sha256": "c931180296c7f09ceededfa5520ae746ecebfc4ee6536f39c00faf34b1b6c43e"
+      },
+      "well1-h2.5": {
+        "spacing_m": 2.5,
+        "dt_s": 0.125,
+        "wells": [
+          [
+            60.0,
+            80.0,
+            0.0001
+          ]
+        ],
+        "nodes": 12675,
+        "elements": 40960,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.0051567889508632656,
+            "rms_error_over_scale": 0.0006932677210496142,
+            "stored_m3": -0.0009999999999999994,
+            "exact_stored_m3": -0.001,
+            "absolute_volume_error_m3": 6.505213034913027e-19,
+            "far_reference_over_scale": 4.867823815604005e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.004794116990643534,
+            "rms_error_over_scale": 0.0008423226932945542,
+            "stored_m3": -0.001999999999999998,
+            "exact_stored_m3": -0.002,
+            "absolute_volume_error_m3": 2.168404344971009e-18,
+            "far_reference_over_scale": 3.3652382753850717e-22
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.005610625769968047,
+            "rms_error_over_scale": 0.0009731394610790455,
+            "stored_m3": -0.002999999999999995,
+            "exact_stored_m3": -0.003,
+            "absolute_volume_error_m3": 5.204170427930421e-18,
+            "far_reference_over_scale": 1.6332713571290878e-15
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.006386643161170536,
+            "rms_error_over_scale": 0.001095059063267103,
+            "stored_m3": -0.003999999999999992,
+            "exact_stored_m3": -0.004,
+            "absolute_volume_error_m3": 7.806255641895632e-18,
+            "far_reference_over_scale": 3.898199975199094e-12
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.00684991641878682,
+            "rms_error_over_scale": 0.0014480032559563752,
+            "stored_m3": -0.003999999999999996,
+            "exact_stored_m3": -0.004,
+            "absolute_volume_error_m3": 4.336808689942018e-18,
+            "far_reference_over_scale": 4.343832618826312e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.003541134847091718,
+            "rms_error_over_scale": 0.0012179380792809822,
+            "stored_m3": -0.003999999999999989,
+            "exact_stored_m3": -0.004,
+            "absolute_volume_error_m3": 1.1275702593849246e-17,
+            "far_reference_over_scale": 1.0370961579177323e-08
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.002171939190394754,
+            "rms_error_over_scale": 0.0008844036375852737,
+            "stored_m3": -0.003999999999999994,
+            "exact_stored_m3": -0.004,
+            "absolute_volume_error_m3": 6.071532165918825e-18,
+            "far_reference_over_scale": 1.0218298091806959e-07
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.0014444331870715876,
+            "rms_error_over_scale": 0.000669431712547639,
+            "stored_m3": -0.003999999999999996,
+            "exact_stored_m3": -0.004,
+            "absolute_volume_error_m3": 4.336808689942018e-18,
+            "far_reference_over_scale": 5.773203179288273e-07
+          }
+        ],
+        "max_error_over_scale": 0.00684991641878682,
+        "max_volume_error_m3": 1.1275702593849246e-17,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "8ad997a2979be5a08f5e2c51473838622836293055830e42202ee8b8e25b8da1",
+          "multiwell.chkpt.000001": "f2260c594f65570aa817c3fd04ad3e6878e9bf71cb0ba7d319d5945e20b2ad7e",
+          "multiwell.chkpt.000002": "c83a07568526b89785ef6d6bb0e8acb822a0bd6b96239918494d6f9775855b06",
+          "multiwell.chkpt.000003": "7a08f8361b768f1e5c575a6fd076abe40bd8e0fb54fd41b42aa7c48561694aef",
+          "multiwell.chkpt.000004": "08a004688e3bf78ff19c26923032ecfc421f62286701685c0020a7f1385abbb0",
+          "multiwell.chkpt.000005": "446fd38c5b5fab67a872ef7766c2e24880b978feee69e4de7d911739a9d393db",
+          "multiwell.chkpt.000006": "8972503372dd159d835d9e276d4a4d92c9618d359ba54eb1aea634be2a8ada3f",
+          "multiwell.chkpt.000007": "e4f7a7568c95b771ce07689f808c29caf6b999e8c25339ccaa1f9fb2afd0473d",
+          "multiwell.chkpt.000008": "559670bbe0c462c09b1f9f8b246efabf5fc697864292aa2fcd37467f899f54e6",
+          "multiwell.info": "ad1c48098e7e4b5b5ef702515f1dbf848203ba589456a767e0911aa0c25f988c",
+          "multiwell.save.000000": "0e0031a3a766ef138d4ad394f7dd2e60431d372ace49702988a372fbfc5007d7",
+          "multiwell.save.000001": "45ffd35257ed70c43fcab2a8f1241a521d9b472afca0b5633db1bbe3ccfe6e35",
+          "multiwell.save.000002": "d383d25bda52d64a2f0a7f53cc26f1f70c9293b10c7e3e2da2b3542295f3188a",
+          "multiwell.save.000003": "4a3453bd46ba527a21dad9df78022024858675b95a0eb7c2de46003f641cfd0e",
+          "multiwell.save.000004": "b1139b00229434bf1f945a35e4b57df6e59d5e2174c908989e7dbbdd8a7f2897",
+          "multiwell.save.000005": "9684f24b9c307df265b5088b9e75f1e4d7b11a7655e3714f26c9a623d628681c",
+          "multiwell.save.000006": "e977e49fcc1453963f661e5ba15f089b305af764fc4b15171d3d800c612acc45",
+          "multiwell.save.000007": "a48eeb53950de4624ff70b9a0a6a7e20a981679f9e960f9509f23d76b188ef41",
+          "multiwell.save.000008": "9037794d86282090eb39568518603cdc99e9df6b0dbb40b2d6e3014792c4a63c"
+        },
+        "input_sha256": "ac0dcb6e68eb4f7a921b464b2445521e32a1413b94541aee99c927f7a98245a2"
+      },
+      "well2-h2.5": {
+        "spacing_m": 2.5,
+        "dt_s": 0.125,
+        "wells": [
+          [
+            100.0,
+            80.0,
+            6e-05
+          ]
+        ],
+        "nodes": 12675,
+        "elements": 40960,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.003094073370517959,
+            "rms_error_over_scale": 0.00041596063262976834,
+            "stored_m3": -0.0006000000000000001,
+            "exact_stored_m3": -0.0006000000000000001,
+            "absolute_volume_error_m3": 0.0,
+            "far_reference_over_scale": 2.920694289362403e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.002876470194386126,
+            "rms_error_over_scale": 0.0005053936159767318,
+            "stored_m3": -0.001199999999999999,
+            "exact_stored_m3": -0.0012000000000000001,
+            "absolute_volume_error_m3": 1.0842021724855044e-18,
+            "far_reference_over_scale": 2.019142965231043e-22
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.003366375461980851,
+            "rms_error_over_scale": 0.0005838836766474276,
+            "stored_m3": -0.0017999999999999984,
+            "exact_stored_m3": -0.0018,
+            "absolute_volume_error_m3": 1.5178830414797062e-18,
+            "far_reference_over_scale": 9.799628142774529e-16
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.003831985896702336,
+            "rms_error_over_scale": 0.0006570354379602639,
+            "stored_m3": -0.0023999999999999963,
+            "exact_stored_m3": -0.0024000000000000002,
+            "absolute_volume_error_m3": 3.903127820947816e-18,
+            "far_reference_over_scale": 2.3389199851194565e-12
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.004109949851272078,
+            "rms_error_over_scale": 0.0008688019535738229,
+            "stored_m3": -0.0024000000000000015,
+            "exact_stored_m3": -0.0024000000000000002,
+            "absolute_volume_error_m3": 1.3010426069826053e-18,
+            "far_reference_over_scale": 2.606299571295787e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.0021246809082550735,
+            "rms_error_over_scale": 0.0007307628475685889,
+            "stored_m3": -0.002399999999999998,
+            "exact_stored_m3": -0.0024000000000000002,
+            "absolute_volume_error_m3": 2.168404344971009e-18,
+            "far_reference_over_scale": 6.2225769475063934e-09
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.001303163514236817,
+            "rms_error_over_scale": 0.0005306421825511594,
+            "stored_m3": -0.002399999999999999,
+            "exact_stored_m3": -0.0024000000000000002,
+            "absolute_volume_error_m3": 1.3010426069826053e-18,
+            "far_reference_over_scale": 6.130978855084176e-08
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.0008666599122429383,
+            "rms_error_over_scale": 0.00040165902752858207,
+            "stored_m3": -0.0024000000000000015,
+            "exact_stored_m3": -0.0024000000000000002,
+            "absolute_volume_error_m3": 1.3010426069826053e-18,
+            "far_reference_over_scale": 3.463921907572964e-07
+          }
+        ],
+        "max_error_over_scale": 0.004109949851272078,
+        "max_volume_error_m3": 3.903127820947816e-18,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "e806a8b54262ba9434ecb7575f6f62ef642fc598ab09efd9075da91e1433fb95",
+          "multiwell.chkpt.000001": "afe7ea2fab56c338734f5d82cefddc4c7ca2835da1b8d1466578428121bced0d",
+          "multiwell.chkpt.000002": "1c83221f7cf6234a845ee872e1ec97959256eb930d2903131c851297b1dbda0a",
+          "multiwell.chkpt.000003": "379aa7061dea3efa9cca84847b9e21c22498bc48d743953366dca2f6c32922c4",
+          "multiwell.chkpt.000004": "130c77c2d7e68ea32abda963fadf084f95e22d5f35d9be1e00f9d04acca8015c",
+          "multiwell.chkpt.000005": "83b32c070100caa295b71c981784c5b103bd22a47017288e4568ef04295f3697",
+          "multiwell.chkpt.000006": "249f362836c01649f96b165aa1fe9fd912b9dc1965f41c0635a9cdb10c442057",
+          "multiwell.chkpt.000007": "e9c470a4b3fa472b8f91f1a228cfdfe4b15494a1ffe2be1e6ddfa84a49e597f3",
+          "multiwell.chkpt.000008": "afa798c0879960e5d5b5199c4f067b611d23c6d9f32b3f9af98af45781527081",
+          "multiwell.info": "3ea9f3881005781c7c399bf1d269c968deaa82d60615927dbc457ee855946ea4",
+          "multiwell.save.000000": "a089413f03dfbe5e57dfdf0b9bdad2bbf468b5e4bcff59c5d6044495734162cb",
+          "multiwell.save.000001": "ac87055ca63761b6ae4b3d1d1117d3bd350d36e0c37ddde587c4a11aa5f8c83b",
+          "multiwell.save.000002": "f359f2763fb40b1991d2fa4783a196df1fde5b4a55b191c7393bc673f8ff391b",
+          "multiwell.save.000003": "ef643afb7eb1f5273b7eac69dd8e3501adb11aa820ae67f53f6caff0b6c4042a",
+          "multiwell.save.000004": "774e6bc4fadaa3b9ee10a5a199886c4ecf4ac035d29d61ecfabde9294ae6321e",
+          "multiwell.save.000005": "2a1e6f0a3eae96a7c7417320e7d408a0808647a773281e95f574a73f2699b2eb",
+          "multiwell.save.000006": "91ee38e91d535e25ad66ff350f939acf0758b087f486b68d6980958cc3ef5b95",
+          "multiwell.save.000007": "73c3c02853fc9784bec74638c297931b42b8eaa1b53b37b922b63d72caefe199",
+          "multiwell.save.000008": "1ae076c88dd4cdea4a8b67df3c99ec0c5dcfceee196bdbae16706c5020507f9a"
+        },
+        "input_sha256": "9affd913f6268641f807a1b19b8756aeb8c69494f9162d067d8d4896b45ac375"
+      },
+      "well3-h2.5": {
+        "spacing_m": 2.5,
+        "dt_s": 0.125,
+        "wells": [
+          [
+            80.0,
+            100.0,
+            -2.5e-05
+          ]
+        ],
+        "nodes": 12675,
+        "elements": 40960,
+        "frames": [
+          {
+            "time_s": 10.0,
+            "max_error_over_scale": 0.0012891972377158164,
+            "rms_error_over_scale": 0.00017331693026240356,
+            "stored_m3": 0.00024999999999999984,
+            "exact_stored_m3": 0.00025,
+            "absolute_volume_error_m3": 1.6263032587282567e-19,
+            "far_reference_over_scale": 1.2169559539010012e-42
+          },
+          {
+            "time_s": 20.0,
+            "max_error_over_scale": 0.0011985292476608836,
+            "rms_error_over_scale": 0.00021058067332363855,
+            "stored_m3": 0.0004999999999999995,
+            "exact_stored_m3": 0.0005,
+            "absolute_volume_error_m3": 5.421010862427522e-19,
+            "far_reference_over_scale": 8.413095688462679e-23
+          },
+          {
+            "time_s": 30.0,
+            "max_error_over_scale": 0.0014026564424920117,
+            "rms_error_over_scale": 0.00024328486526976138,
+            "stored_m3": 0.0007499999999999989,
+            "exact_stored_m3": 0.00075,
+            "absolute_volume_error_m3": 1.0842021724855044e-18,
+            "far_reference_over_scale": 4.0831783928227196e-16
+          },
+          {
+            "time_s": 40.0,
+            "max_error_over_scale": 0.001596660790292634,
+            "rms_error_over_scale": 0.00027376476581677573,
+            "stored_m3": 0.000999999999999998,
+            "exact_stored_m3": 0.001,
+            "absolute_volume_error_m3": 1.951563910473908e-18,
+            "far_reference_over_scale": 9.745499937997735e-13
+          },
+          {
+            "time_s": 50.0,
+            "max_error_over_scale": 0.001712479104696705,
+            "rms_error_over_scale": 0.0003620008139890938,
+            "stored_m3": 0.0009999999999999996,
+            "exact_stored_m3": 0.001,
+            "absolute_volume_error_m3": 4.336808689942018e-19,
+            "far_reference_over_scale": 1.085958154706578e-10
+          },
+          {
+            "time_s": 60.0,
+            "max_error_over_scale": 0.0008852837117729295,
+            "rms_error_over_scale": 0.00030448451982024554,
+            "stored_m3": 0.0009999999999999985,
+            "exact_stored_m3": 0.001,
+            "absolute_volume_error_m3": 1.5178830414797062e-18,
+            "far_reference_over_scale": 2.5927403947943307e-09
+          },
+          {
+            "time_s": 70.0,
+            "max_error_over_scale": 0.0005429847975986885,
+            "rms_error_over_scale": 0.00022110090939631856,
+            "stored_m3": 0.0009999999999999994,
+            "exact_stored_m3": 0.001,
+            "absolute_volume_error_m3": 6.505213034913027e-19,
+            "far_reference_over_scale": 2.5545745229517398e-08
+          },
+          {
+            "time_s": 80.0,
+            "max_error_over_scale": 0.0003611082967678969,
+            "rms_error_over_scale": 0.00016735792813690967,
+            "stored_m3": 0.0009999999999999994,
+            "exact_stored_m3": 0.001,
+            "absolute_volume_error_m3": 6.505213034913027e-19,
+            "far_reference_over_scale": 1.4433007948220682e-07
+          }
+        ],
+        "max_error_over_scale": 0.001712479104696705,
+        "max_volume_error_m3": 1.951563910473908e-18,
+        "outputs_sha256": {
+          "multiwell.chkpt.000000": "89151226f358b76a3367bfa8e6e7807de7b9b325991f5f244a6d5ba698afeb76",
+          "multiwell.chkpt.000001": "83687193eccb7981f0a5837776fabc10c852195c5f6d36e5abd199b82fbcf928",
+          "multiwell.chkpt.000002": "1b97c2ed2c4a974a0bde9cfeae8f3c3988293d6b1854039c801986c8e77b8659",
+          "multiwell.chkpt.000003": "d419ba3c71f5a0f16adb8bf3b664e921f18274547aaa94e985e97f296f869039",
+          "multiwell.chkpt.000004": "4ccd3212319ad83c84b905954f465e5f213514fa72124dda15042a42e561f596",
+          "multiwell.chkpt.000005": "42fb11894c258687802938b0cb9132a304323e039f726531a0ab9a60bcf26c83",
+          "multiwell.chkpt.000006": "cb19b0376a5cef9375c7ce94ba8658efef50f7ccaef2fd7f943bb7d382f5b7d1",
+          "multiwell.chkpt.000007": "cac44e6a879aca75f77d96342e0033dddbd95908b1075775de19cca4c0dda3ee",
+          "multiwell.chkpt.000008": "eb34d11e548576f69f10c58cc1cf34e9d0e9b02fedf78e7efa6e94cb040a247e",
+          "multiwell.info": "ee9ec55fce939452d22dbcfd6e22d816abdd8df7f4d7fc983cb44e1083a5926b",
+          "multiwell.save.000000": "7bd30e4d15bd974149dd850f905fbc0459ec5734232f1598a5b746228e9dc3ef",
+          "multiwell.save.000001": "bdd9e4767f1a572f7456c6fb28933c3e19c0130f1949cdb6c841a1898735d3f3",
+          "multiwell.save.000002": "54e149257dfb3a50ee560038ab99890c33316af55e09eaa8dc586f69d10da8d4",
+          "multiwell.save.000003": "c2e9a0d42e30249b60411fd1f8b5298d67b9e3e2e814a55bd09d779c7fb7e03d",
+          "multiwell.save.000004": "66cc20b82b408cc3f84454f0a5c9ade392e1bef845230d35c09fdb6890b00c7f",
+          "multiwell.save.000005": "b55902652a07286ba7c30814131f050213eb52ca7fdf54f4073e69e119754b6b",
+          "multiwell.save.000006": "f4d64fd6643dcddb57d546086e2e08a5598f8eccd7e1c3b9f977574fd62355f3",
+          "multiwell.save.000007": "4b400b9d596d5dfe0a8bb00c31d8f91d31b8a53e254dbd11c0f3a543c9059a14",
+          "multiwell.save.000008": "317c5257e6501a6c44a5523a70b6760354e19112c863ecb0091f2010cbd76248"
+        },
+        "input_sha256": "a38d1675bab193b475f995b8113c5f97deb75600f7568f46ad31eda53198cbd7"
+      }
+    },
+    "max_discrete_superposition_error_over_scale": 1.1331324926760312e-15,
+    "analytical_error_below_one_percent": true,
+    "mesh_error_decreases": true,
+    "passed": true
+  }
+}

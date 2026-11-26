@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img">
+  <title>A terminal window running a build</title>
+  <circle cx="120" cy="120" r="108" fill="currentColor" opacity="0.07"/>
+  <rect x="30" y="50" width="180" height="130" rx="14" fill="currentColor" opacity="0.06" stroke="currentColor" stroke-width="6"/>
+  <line x1="30" y1="86" x2="210" y2="86" stroke="currentColor" stroke-width="6"/>
+  <circle cx="50" cy="68" r="6" fill="currentColor"/>
+  <circle cx="70" cy="68" r="6" fill="currentColor"/>
+  <circle cx="90" cy="68" r="6" fill="currentColor"/>
+  <path d="M55,110 L80,130 L55,150" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="95" y1="150" x2="140" y2="150" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+  <g stroke="currentColor" stroke-width="6" stroke-linecap="round" opacity="0.5">
+    <line x1="55" y1="170" x2="150" y2="170"/>
+    <line x1="55" y1="185" x2="120" y2="185"/>
+  </g>
+</svg>

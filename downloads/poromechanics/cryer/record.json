@@ -1,0 +1,64 @@
+{
+  "problem": "A drained poroelastic sphere is suddenly loaded on its surface. The shell drains and contracts first, squeezing the core, so the centre pressure rises before it decays.",
+  "result": "Largest pressure error after $ct/R^2=0.05$: 0.62% of $p_0$, and 2.12% including the first-step lag. Sampled centre peak: DES $1.4347\\,p_0$, analytical $1.4410\\,p_0$.",
+  "scope": "3D octant, 0.07 m mesh, 800 PT steps over $0.5\\,R^2/c$. Largest error after $ct/R^2=0.05$ by mesh and step count: 0.2 m: 200 steps 8.57%; 0.1 m: 200 steps 0.92%, 400 steps 1.57%, 800 steps 2.14%; 0.07 m: 200 steps 2.19%, 400 steps 0.52%, 800 steps 0.62%. A finer mesh lowers the centre peak and a longer step raises it, so their errors partly cancel and the two must be refined together. (a) centre pressure; (b) radial profiles; (c) error by mesh and step count.",
+  "meaning": "This checks 3D two-way coupling under a sudden load, the Mandel–Cryer pressure and the normal-stress load on a curved surface. It does not remove the one-step lag of the sequential coupling in the earliest frames, which falls with the time step.",
+  "metric": 0.006244019910088096,
+  "metric_label": "pressure error / p0 after ct/R^2 = 0.05",
+  "spacing_m": 0.07,
+  "evidence": {
+    "executable_sha256": "689d487c8db1d573bf4001cbb9127b3e28116eb2d706f3f7f6be0fe8a46bc10c",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "table": [
+      {
+        "spacing_m": 0.2,
+        "steps": 200,
+        "late_max": 0.0856789539638794,
+        "late_rms": 0.04785477393994073,
+        "centre_peak": 1.4097730934369292
+      },
+      {
+        "spacing_m": 0.1,
+        "steps": 200,
+        "late_max": 0.009185595557696926,
+        "late_rms": 0.0031785100577728966,
+        "centre_peak": 1.4417827138035662
+      },
+      {
+        "spacing_m": 0.07,
+        "steps": 200,
+        "late_max": 0.02188182251426334,
+        "late_rms": 0.005863219108420141,
+        "centre_peak": 1.4556037434666156
+      },
+      {
+        "spacing_m": 0.07,
+        "steps": 400,
+        "late_max": 0.0052310232917718285,
+        "late_rms": 0.001155547855982439,
+        "centre_peak": 1.4415777601737132
+      },
+      {
+        "spacing_m": 0.07,
+        "steps": 800,
+        "late_max": 0.006244019910088096,
+        "late_rms": 0.0023816333522948914,
+        "centre_peak": 1.4347355523291574
+      },
+      {
+        "spacing_m": 0.1,
+        "steps": 800,
+        "late_max": 0.021423978134002396,
+        "late_rms": 0.008637162371556805,
+        "centre_peak": 1.4259705368357485
+      },
+      {
+        "spacing_m": 0.1,
+        "steps": 400,
+        "late_max": 0.01572565007946114,
+        "late_rms": 0.007385204393169675,
+        "centre_peak": 1.4291163442710155
+      }
+    ]
+  }
+}

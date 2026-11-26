@@ -1,0 +1,41 @@
+{
+  "problem": "A well pumps a thin poroelastic aquifer. The drawdown spreads radially and the layer contracts, splitting its volume change between areal and vertical strain.",
+  "result": "RMS errors: 0.71% in pressure, 1.97% in areal strain and 1.90% in vertical strain, relative to the largest analytical values.",
+  "scope": "3D quarter slab, 5 m mesh, four times while the front stays inside. RMS errors by mesh (pressure, areal, vertical): 20 m: 2.29%, 3.94%, 5.55%; 10 m: 0.85%, 2.51%, 2.53%; 5 m: 0.71%, 1.97%, 1.90%. (a) pressure drawdown; (b) strain split; (c) mesh convergence.",
+  "meaning": "This checks two-way coupled pumping deformation against the thickness-averaged model. It does not remove the $O((B/r)^2)$ slab-model difference, which remains at the finest mesh.",
+  "metric": 0.018994935227317444,
+  "metric_label": "vertical strain RMS error",
+  "spacing_m": 5.0,
+  "evidence": {
+    "executable_sha256": "bdcf8bd41192319c1c2efa9b0bc3a36a9b9365b1be1709c4662732e3de3ac66c",
+    "cases": [
+      {
+        "resolution_m": 20.0,
+        "nodes": 882,
+        "elements": 2000,
+        "pressure_rms": 0.022944152682497606,
+        "areal_rms": 0.03938069472419763,
+        "vertical_rms": 0.05552561835574414,
+        "input_sha256": "0c972dd22044184b72ca24481c7c51f855193efe712892dca6e7b39e9f9f810c"
+      },
+      {
+        "resolution_m": 10.0,
+        "nodes": 3362,
+        "elements": 8000,
+        "pressure_rms": 0.008489934899239632,
+        "areal_rms": 0.025076134532951825,
+        "vertical_rms": 0.025309497946423343,
+        "input_sha256": "814e9028d5e2d090184ccf54c86988cbeb1ea0d22a1178d2afda7eada5ad4e31"
+      },
+      {
+        "resolution_m": 5.0,
+        "nodes": 19683,
+        "elements": 64000,
+        "pressure_rms": 0.007056095919342149,
+        "areal_rms": 0.019746807127180223,
+        "vertical_rms": 0.018994935227317444,
+        "input_sha256": "0ebaa20d599b165bb05dcd64205a5606c09154e635e0ca92fd8046774124a9fa"
+      }
+    ]
+  }
+}

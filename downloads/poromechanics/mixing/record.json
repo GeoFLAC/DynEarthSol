@@ -1,0 +1,18 @@
+{
+  "problem": "Warm water enters a pressure-controlled, well-mixed saturated cell. Natural outflow removes water at the cell temperature; inlet and retained water have different EOS densities.",
+  "result": "Maximum temperature error is 0.000545 K at 200 steps and falls with timestep refinement. Retained energy equals injected sensible heat minus boundary export within 20 microjoules.",
+  "scope": "2D unit cell, 0.01 m³/s inlet at 323 K, initial 273 K, 0–5 s, 200 steps. (a) temperature and the independent integral solution; (b) injected, exported and retained sensible heat.",
+  "meaning": "This checks inlet-temperature ownership, injection density, outflow enthalpy and changing retained fluid storage together. Sources are distributed uniformly by nodal volume, so it is a mixing control rather than a spatial plume benchmark.",
+  "metric": 0.0005454737871559701,
+  "metric_label": "maximum temperature error (K)",
+  "spacing_m": 1.0,
+  "evidence": {
+    "qualification": "runs/finite-content-20261110/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "2d-native/mass/heat/expanding-mixing-200",
+    "temperature_errors_K": [
+      0.0010907050678383712,
+      0.0005454737871559701
+    ]
+  }
+}

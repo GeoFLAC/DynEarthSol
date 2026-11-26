@@ -1,0 +1,10 @@
+{
+  "problem": "A constant inflow from the top produces a steady suction profile above a water table at the base. The Brooks–Corey law stays saturated up to its air-entry suction, so the profile has a kink where desaturation begins.",
+  "result": "Largest pressure error: 18.84 Pa, 1.69% of the profile range.",
+  "scope": "2D, 0.025 m mesh, steady state; storage does not enter the steady solution.",
+  "meaning": "This checks the retention-dependent conductivity and the flux boundary. It does not test transient storage or coupled slope behaviour.",
+  "metric": 18.83749215072862,
+  "metric_label": "maximum pressure error (Pa)",
+  "spacing_m": 0.025,
+  "evidence": "unsaturated-integration-20261107/figures/index.html"
+}

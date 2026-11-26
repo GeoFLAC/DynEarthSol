@@ -1,0 +1,10 @@
+{
+  "problem": "One point supplies water and heat while another extracts them, over time windows that end inside time steps.",
+  "result": "Largest stored-volume error: $1.6\\times10^{-16}$ and largest stored-heat error: $4.5\\times10^{-13}$ of the final net supply.",
+  "scope": "3D closed box, 0.25 m mesh, 0–4 s, fixed mesh and constant capacity. Further checks pass in 2D and 3D: signed schedules, thermal substeps, a source at a well, unit conversion of point coordinates and restart after remeshing. (a) stored water; (b) stored heat.",
+  "meaning": "This checks that every source acts exactly once over each integration interval. It does not test the spatial point-source solution.",
+  "metric": 4.547473508864641e-13,
+  "metric_label": "stored amount error / final net supply",
+  "spacing_m": 0.25,
+  "evidence": "runs/private-des-integration-20261107/style/points-3d/summary.json"
+}

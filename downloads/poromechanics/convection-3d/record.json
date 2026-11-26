@@ -1,0 +1,17 @@
+{
+  "problem": "A unit porous cube heated from below supports a temperature mode that varies in all three directions. Its growth changes sign at a known Rayleigh number.",
+  "result": "At 1/32 m spacing, growth-rate errors are 0.62%, 2.44%, 1.55% below and above onset. Halving the physical timestep changes the selected growth rate by 0.0067%. The unseeded cube stays exactly at conduction.",
+  "scope": "3D rigid saturated matrix, explicit Darcy and heat transport, 35,937 nodes and 163,840 tetrahedra. All three spatial meshes use the same 10 Pa fluid bulk modulus; the analytical reference retains its finite pressure storage. No material or amplitude fitting.",
+  "meaning": "This checks three-dimensional buoyancy and heat advection, growth and decay, a rest state, and separate spatial/time controls. The amplitude in panel (b) is normalized at dimensionless time 0.1; only the analytical growth slope is compared. It does not qualify nonlinear steady planforms or realistic water compressibility.",
+  "metric": 0.02440973040013661,
+  "metric_label": "largest 3D modal growth-rate error",
+  "spacing_m": 0.03125,
+  "evidence": {
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "executable_sha256": "443f38763eb03739748d3bff33c185a49a2610c4138b71310aba7dcec906148a",
+    "reference_sha256": "cdac64087a28a61ac4e6e48e32c070b7d3b6a8e79f6cbc0d906b972359ef37b5",
+    "temporal_rate_change": 6.691912774492437e-05,
+    "selected": "storage10-h0.03125-ra1.4-dt500",
+    "finite_storage": true
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "problem": "Two pressure modes drain from a square; scalar permeability and directional anisotropy change together at 0.5 s.",
+  "result": "Maximum pressure error 0.0900% of P₀; spatial orders 2.008 and 2.014 between successive meshes. Halving the time step halves the change in the solution (ratio 2.00004): first order in time. A restart inside the second phase reproduces the uninterrupted run exactly.",
+  "scope": "2D fixed square, h=0.025 m, physical step 1.25e-05 s, two prescribed axis-aligned tensors. Storage uses the physical strain-form capacity, but volumetric strain does not feed back into the pressure equation. Pressure still loads mechanics; the physical step respects the elastic limit.",
+  "meaning": "This checks directional diffusion, a prescribed coefficient jump and operator reconstruction at restart. Continuous state-dependent permeability, off-axis time changes and coupled fluid-content budgets remain separate requirements.",
+  "metric": 0.0008996130506511157,
+  "metric_label": "pressure error / initial scale",
+  "spacing_m": 0.025,
+  "evidence": {
+    "spatial_orders": [
+      2.0079649694286057,
+      2.0143311482962423
+    ],
+    "time_difference_Pa": [
+      0.005987594526686735,
+      0.002993733972573409
+    ],
+    "temporal_difference_ratio": 2.0000422821603645,
+    "finest_pressure_error": 0.0008996130506511157,
+    "numerical_checks_passed": true
+  }
+}

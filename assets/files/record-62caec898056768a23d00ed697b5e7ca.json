@@ -1,0 +1,38 @@
+{
+  "problem": "A prestressed, sealed fault patch slips at 1 m/s under 50 MPa normal compression. Plastic dissipation heats the mixture; expanding water raises pore pressure and reduces shear resistance.",
+  "result": "At 100 mm slip, shear resistance falls 34.9%, temperature rises 70.15 K and pore pressure reaches 22.56 MPa. Saved-frame shear errors are 0.0011% of the initial resistance against the differential reference.",
+  "scope": "2D homogeneous two-triangle patch with one free normal platen mode; constant-friction Mohr–Coulomb, zero dilation, fixed reference heat capacity, no Darcy flux or conduction. The reference imposes normal equilibrium; physical inertia gives a small measured departure. There is no spatial rupture front, flash heating or complete earthquake cycle.",
+  "meaning": "Ordinary explicit mechanics with physical mixture inertia and zero damping follows the thermal weakening path. Companion GVS runs and slow-to-fast physical restarts check the mass/timestep transition and retain pending plastic heat separately from kinetic energy.",
+  "metric": 1.0733008415042731e-05,
+  "metric_label": "shear error",
+  "spacing_m": 0.01,
+  "evidence": {
+    "selected_case": "physical-large-slip",
+    "numerical_source": {
+      "frames": 601,
+      "steps": 1454418,
+      "actual_end_time_s": 0.10000000242490169,
+      "normal_stress_error_over_load": 2.1374497655034067e-05,
+      "shear_error_over_initial": 1.0733008415042731e-05,
+      "temperature_error_over_final_rise": 8.460994097221882e-07,
+      "pressure_error_over_N_over_alpha": 2.842312663741177e-06,
+      "heat_error_over_reference_work": 2.368151789252379e-07,
+      "accepted_heat_budget_error_over_tau0": null,
+      "every_step_saved": false,
+      "max_split_fluid_budget_over_volume": 8.76078723455187e-15,
+      "final_temperature_rise_K": 70.14716380143085,
+      "final_pressure_Pa": 22559143.737773184,
+      "final_shear_Pa": 16828705.00913548,
+      "reference_final_shear_Pa": 16828702.37092562,
+      "passed": true,
+      "mode": "physical",
+      "heating": true,
+      "expansion": true,
+      "executable_sha256": "34afb6fc43de376f1451d84f3c3238953a784f6e1796991c1f40f6eb6db82e14",
+      "runner_sha256": "d6f16666bfa30b10ce7228b5291622fe5534c53fc18ef36b659d016a7f50845f",
+      "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+      "scope": "2D homogeneous direct shear with one normal platen degree of freedom; fixed capacity and zero flux; no rupture front."
+    },
+    "qualification": "qualification.json"
+  }
+}

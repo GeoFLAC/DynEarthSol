@@ -1,0 +1,10 @@
+{
+  "problem": "A sudden load compresses a saturated column. Water drains through the top, the pressure falls and the column settles.",
+  "result": "Largest pressure error: 0.011% of the applied load; largest settlement error: 0.007% of the final drained settlement.",
+  "scope": "2D plane strain, 0.25 m mesh, 0.25 s steps, compared every 1200 s to 8400 s, $T_v=c_vt/H^2=2.01$ (about 99% consolidated). Maximum pressure errors on 1, 0.5 and 0.25 m meshes: 0.182%, 0.033%, 0.011% of the load; halving the step from 1 s changes the result at first order. 3D check: 0.014% of the load on the 0.25 m mesh. (a) pressure profiles; (b) settlement history.",
+  "meaning": "This checks fluid storage and elastic coupling together, through both pressure and settlement. It does not test a sudden load with GVS or large strain.",
+  "metric": 0.00011435205907058843,
+  "metric_label": "pressure error / load",
+  "spacing_m": 0.25,
+  "evidence": "runs/terzaghi-full-20261108/history-2d/index.html"
+}

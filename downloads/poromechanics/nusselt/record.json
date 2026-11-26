@@ -1,0 +1,113 @@
+{
+  "problem": "Above onset the heated porous cell settles into a steady convection roll that carries several times the conductive heat flow. Its Nusselt number has no closed form; an independent fine-grid solution supplies it.",
+  "result": "DES Nusselt numbers on the 0.0125 H mesh: Ra = 100: 2.6506 against 2.6459 (0.17%); Ra = 200: 3.8415 against 3.8098 (0.83%).",
+  "scope": "Unit square cell, impermeable walls, insulated sides; the steady state is reached: Nu changes by less than 9e-09 (relative) at the end. Errors on meshes 0.05, 0.025, 0.0125 H: Ra = 100: 4.30%, 0.26%, 0.17%; Ra = 200: 17.89%, 2.43%, 0.83%. At Ra = 100 the volume form flattens near 0.17% above the reference, likely from rebuilding the Darcy flux from saved fields; the wall-gradient estimate approaches from below (0.67% at Ra = 100, 1.41% at Ra = 200, on the finest mesh). Reference: Ra = 100: 2.6459 (order 1.99 on $32^2$, $64^2$, $128^2$ grids); Ra = 200: 3.8098 (order 1.98 on $32^2$, $64^2$, $128^2$ grids). (a) isotherms; (b) approach to steady state; (c) mesh convergence.",
+  "meaning": "This checks finite-amplitude Darcy convection: buoyancy, heat advection by the Darcy flux and conduction together, through the heat they carry. Storage only sets the transient, so a compressible pore fluid shortens the runs; the transient itself is not compared.",
+  "metric": 0.00833162400878118,
+  "metric_label": "Nu error",
+  "spacing_m": 0.0125,
+  "evidence": {
+    "executable_sha256": "6b19b29b4486d57f25ce35300c94aa47319af84efbdb4cdd6e202a64d858c869",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "orders": {
+      "100.0": 2.3101210878067997,
+      "200.0": 2.212057141393895
+    },
+    "reference": {
+      "100": {
+        "Ra": 100.0,
+        "grids": [
+          32,
+          64,
+          128
+        ],
+        "nu": [
+          2.6985705661741433,
+          2.6591807142463275,
+          2.649235258463106
+        ],
+        "observed_order": 1.9857145997296755,
+        "nu_extrapolated": 2.6459201065353657,
+        "error_estimate": 0.003315151927740345
+      },
+      "200": {
+        "Ra": 200.0,
+        "grids": [
+          32,
+          64,
+          128
+        ],
+        "nu": [
+          3.9500118341983828,
+          3.845277215489109,
+          3.8186662970738228
+        ],
+        "observed_order": 1.976648178106597,
+        "nu_extrapolated": 3.809795990935394,
+        "error_estimate": 0.008870306138428763
+      }
+    },
+    "cases": [
+      {
+        "ra": 100.0,
+        "spacing_m": 0.05,
+        "nu": 2.759798240245961,
+        "nu_wall": 2.439099392358694,
+        "nu_ref": 2.6459201065353657,
+        "error": 0.0430391429542103,
+        "wall_error": 0.07816589535936058,
+        "steady_change": 2.192208406715561e-09
+      },
+      {
+        "ra": 100.0,
+        "spacing_m": 0.025,
+        "nu": 2.652743371492313,
+        "nu_wall": 2.596347739450617,
+        "nu_ref": 2.6459201065353657,
+        "error": 0.0025787872204054985,
+        "wall_error": 0.01873539830711668,
+        "steady_change": 9.156656069472076e-09
+      },
+      {
+        "ra": 100.0,
+        "spacing_m": 0.0125,
+        "nu": 2.650550403644758,
+        "nu_wall": 2.6281464374295833,
+        "nu_ref": 2.6459201065353657,
+        "error": 0.0017499761606389885,
+        "wall_error": 0.006717386916514134,
+        "steady_change": 8.462154585531797e-09
+      },
+      {
+        "ra": 200.0,
+        "spacing_m": 0.05,
+        "nu": 4.491227932033224,
+        "nu_wall": 3.300401586259506,
+        "nu_ref": 3.809795990935394,
+        "error": 0.17886310519491166,
+        "wall_error": 0.13370647821770099,
+        "steady_change": 4.160559233541876e-09
+      },
+      {
+        "ra": 200.0,
+        "spacing_m": 0.025,
+        "nu": 3.9025342817054534,
+        "nu_wall": 3.6802196652310633,
+        "nu_ref": 3.809795990935394,
+        "error": 0.024342062144721233,
+        "wall_error": 0.03401135546696732,
+        "steady_change": 6.165218987772918e-09
+      },
+      {
+        "ra": 200.0,
+        "spacing_m": 0.0125,
+        "nu": 3.8415377786820297,
+        "nu_wall": 3.7560847930833177,
+        "nu_ref": 3.809795990935394,
+        "error": 0.00833162400878118,
+        "wall_error": 0.014098182154601124,
+        "steady_change": 7.480341727861673e-09
+      }
+    ]
+  }
+}

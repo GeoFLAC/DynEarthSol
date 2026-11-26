@@ -1,0 +1,287 @@
+{
+  "problem": "The water table under a laterally confined elastic column drops. Above it the soil drains; suction weighted by the effective saturation tightens the skeleton, and the drained soil becomes lighter.",
+  "result": "Largest settlement error on the 0.25 m mesh, relative to the top settlement: 0.040% in 2D and 0.041% in 3D for the van Genuchten, Brooks–Corey and Gardner laws; 0.158% and 0.172% for the column with two laws, where saturation jumps at the shared interface nodes.",
+  "scope": "Column 10 m high, water table from 9 m to 5 m; PT mechanics with pressure feedback; both states drained to within 2e-05 of the hydrostatic pressure change. Error orders on 2D meshes: van Genuchten 2.21, Brooks–Corey 2.31, Gardner 2.09, van Genuchten / Gardner 1.34. (a) settlement; (b) strain change; (c) mesh convergence, 2D lines and 3D squares.",
+  "meaning": "This checks the Bishop coupling: the effective-stress increment from each element's own retention law, including nodes shared by two laws, and gravity on the partly saturated bulk weight. Drained end states do not test the transient or the coupling term in the flow equation.",
+  "metric": 0.0003970917550342036,
+  "metric_label": "settlement error / max |u|",
+  "spacing_m": 0.25,
+  "evidence": {
+    "executable_sha256": "f72ecedc9b5860485a2654fd8c6205bbd4d1a3595b17624cfd545e8a82335d2d",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "orders": {
+      "van_genuchten": 2.2054900828227297,
+      "brooks_corey": 2.3108079218337574,
+      "gardner": 2.0860816120148833,
+      "layered": 1.3443646048272588
+    },
+    "cases_2d": [
+      {
+        "spacing_m": 1.0,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 3.3950204161165717e-11,
+        "top_des_m": -0.008401308241790814,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.002554300636695123,
+        "input_sha256": "cdcbf33abb9bf6f8ab5be187894f7597d2de79ced897ce6af69a8e51e140c84e"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.5465822972729423e-10,
+        "top_des_m": -0.00840097018154821,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.0005473941093754798,
+        "input_sha256": "ea9638893b6ccd68f35b4d680873d954b11316550ce99b59134373112b23e10d"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 2.3092265171070074e-10,
+        "top_des_m": -0.00840082818148147,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.0001200700444734679,
+        "input_sha256": "0f23d4d1b4ab18d922e1fd63a16e23971ccb5a9db904dfa7b64050ff160fb665"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 4.114433310742734e-06,
+        "top_des_m": -0.006835643521382705,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.0058396814043234916,
+        "input_sha256": "df390b08cefc0371080038f172c66532531eff2bd9529666fe1e4fe6fa3d3066"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.2995864020065804e-05,
+        "top_des_m": -0.0068045696359653445,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.001267274006187255,
+        "input_sha256": "acb13d7dee953921b7c16977d1f4d8e4db35789a9587f702e941defcb359fc84"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.836662044080611e-05,
+        "top_des_m": -0.00679734618709293,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.00023721609729091957,
+        "input_sha256": "ec970a1357020ad9feb9949a9862e3df02060a4b7e10ea7538409f937d2e72b8"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.5835035174598996e-13,
+        "top_des_m": -0.005325110240753911,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.007158749189914904,
+        "input_sha256": "7e93dc5275de5f12a9b2e5624c1e1afb7e74bab3439a2fc6d4ae574d40e52374"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 6.630689201916394e-13,
+        "top_des_m": -0.00532099817428338,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.0015515625432376804,
+        "input_sha256": "a963aa71f23dea251d273ded4d006bc39ad9de104fe6c44e7eac3c94fb2ecdbb"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 2.7349738738329647e-12,
+        "top_des_m": -0.005320000411583136,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.0003970917550342036,
+        "input_sha256": "68eef0af6066a6040293699ab176ef6984a0eb863033aaa36430870a03697f42"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 2.4308818634542484e-13,
+        "top_des_m": -0.005892148842972054,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.010186287729993805,
+        "input_sha256": "add52d1aa50ccdc82e2e810cd9f9d052fd61b4b72f3858c5dc9d494eb624bfb3"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.074891087905742e-12,
+        "top_des_m": -0.00589804813561069,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.0038100795636991304,
+        "input_sha256": "f0092afc4c343f71b8fd8d2d90e4d84a83ec45feedce29717cc26261c9e92619"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 4.4022881161045594e-12,
+        "top_des_m": -0.005899545419976795,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.0015798934446920744,
+        "input_sha256": "19357feb9068fcb6194b4a77843501d54b82011e18c51d33ed3180ff3dbb6395"
+      }
+    ],
+    "cases_3d": [
+      {
+        "spacing_m": 1.0,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 3.3814289866283035e-11,
+        "top_des_m": -0.008400335908999695,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.002571676292098013,
+        "input_sha256": "cdcbf33abb9bf6f8ab5be187894f7597d2de79ced897ce6af69a8e51e140c84e"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.560446297038806e-10,
+        "top_des_m": -0.008400741636214591,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.000551081769648214,
+        "input_sha256": "ea9638893b6ccd68f35b4d680873d954b11316550ce99b59134373112b23e10d"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "van_genuchten",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 2.3493462660616675e-10,
+        "top_des_m": -0.008400773056625984,
+        "top_ref_m": -0.008400764497629554,
+        "max_error": 0.0001204192944973155,
+        "input_sha256": "0f23d4d1b4ab18d922e1fd63a16e23971ccb5a9db904dfa7b64050ff160fb665"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 4.006980556708266e-06,
+        "top_des_m": -0.0068339508334221664,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.005590608626666322,
+        "input_sha256": "df390b08cefc0371080038f172c66532531eff2bd9529666fe1e4fe6fa3d3066"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.303095825675236e-05,
+        "top_des_m": -0.0068041480467080214,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.001205238705056814,
+        "input_sha256": "acb13d7dee953921b7c16977d1f4d8e4db35789a9587f702e941defcb359fc84"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "brooks_corey",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.849636244238562e-05,
+        "top_des_m": -0.006797240974013807,
+        "top_ref_m": -0.006795957295937045,
+        "max_error": 0.00023551649714891488,
+        "input_sha256": "ec970a1357020ad9feb9949a9862e3df02060a4b7e10ea7538409f937d2e72b8"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 4.194244679735706e-13,
+        "top_des_m": -0.005323957542007715,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.007201983694113681,
+        "input_sha256": "7e93dc5275de5f12a9b2e5624c1e1afb7e74bab3439a2fc6d4ae574d40e52374"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.7572438916823733e-12,
+        "top_des_m": -0.005320741552011999,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.0016102420361754303,
+        "input_sha256": "a963aa71f23dea251d273ded4d006bc39ad9de104fe6c44e7eac3c94fb2ecdbb"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "gardner",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 7.089237702932592e-12,
+        "top_des_m": -0.0053199402539976445,
+        "top_ref_m": -0.005319670542192123,
+        "max_error": 0.0004096390997500923,
+        "input_sha256": "68eef0af6066a6040293699ab176ef6984a0eb863033aaa36430870a03697f42"
+      },
+      {
+        "spacing_m": 1.0,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 6.630689201916394e-13,
+        "top_des_m": -0.00589167162153785,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.010819563181142905,
+        "input_sha256": "add52d1aa50ccdc82e2e810cd9f9d052fd61b4b72f3858c5dc9d494eb624bfb3"
+      },
+      {
+        "spacing_m": 0.5,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 3.2014955190237266e-12,
+        "top_des_m": -0.0058979671734858815,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.004095769346759793,
+        "input_sha256": "f0092afc4c343f71b8fd8d2d90e4d84a83ec45feedce29717cc26261c9e92619"
+      },
+      {
+        "spacing_m": 0.25,
+        "law": "layered",
+        "baseline_step": 4,
+        "final_time": 400000.0,
+        "drained_residual": 1.3057599672487538e-11,
+        "top_des_m": -0.005899529252484378,
+        "top_ref_m": -0.005900051576291426,
+        "max_error": 0.0017177275240244634,
+        "input_sha256": "19357feb9068fcb6194b4a77843501d54b82011e18c51d33ed3180ff3dbb6395"
+      }
+    ]
+  }
+}

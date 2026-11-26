@@ -1,0 +1,35 @@
+{
+  "problem": "Rain falls on a partly saturated soil layer over impermeable bedrock. The water spreads down to the bedrock, a perched water table rises, and the slope fails when the pore pressure on the bedrock is high enough.",
+  "result": "Basal yield starts after 6.5 h at a base pressure of 8.9 kPa on the 0.25 m mesh, and the basal slip reaches a plastic strain of 0.001 after 8.72 and 8.71 h on the 0.5 and 0.25 m meshes, at 12.4 kPa: 0.9 kPa more than the same soil needs when the pressure comes from the bedrock. The surface never saturates.",
+  "scope": "2D, the slope of the pressure-driven page with $c=1$ kPa and $\\phi=30^\\circ$, Gardner retention ($\\alpha=2.4\\times10^{-4}$ Pa$^{-1}$, $S_r=0.05$), Bishop $\\chi=S_e$, initial suction 5 kPa (Bishop stress -1.5 kPa), rain 36 mm/h; sealed bedrock, draining toe. Meshes 0.5 m: onset 9.05 kPa, plastic strain 0.001 at 12.32 kPa after 8.72 h, last PT equilibrium 15.77 kPa after 9.86 h; 0.25 m: onset 8.94 kPa, plastic strain 0.001 at 12.39 kPa after 8.71 h, last PT equilibrium 13.52 kPa after 9.31 h. Loaded from the bedrock (gravity applied elastically first), the same soil reaches that slip at 11.38, 11.49, 11.41 kPa on the 0.5, 0.25, 0.125 m meshes; estimates: pointwise onset 8.8 kPa, Davis 11.9 kPa, classical factor of safety 15.5 kPa. As on the pressure-driven page, the slip curve converges and the last PT equilibrium does not, so failure is read at a fixed slip. DES has no runoff or ponding, so rain that meets a saturated surface would be forced in; the rate is low enough that the surface stays unsaturated throughout. (a) pressure field; (b) slip against base pressure; (c) base pressure along the slope.",
+  "meaning": "Rain fails the slope at a higher base pressure than pressure from the bedrock does: the perched table leaves suction (Bishop strength) above it and seepage parallel to the slope, instead of an upward seepage force through the whole layer. The time to failure is the same on both meshes. No exact solution exists; this is an application of the verified unsaturated flow, Bishop stress and effective-stress plasticity together.",
+  "metric": 8.708360707238885,
+  "metric_label": "time to basal plastic strain 0.001 (h)",
+  "spacing_m": 0.25,
+  "evidence": {
+    "executable_sha256": "d26cc84f43d8a0cbd06017160e47add950f012ff885db1c8ecbbd46b79b262ff",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "onset": [
+      9045.152570664546,
+      8940.039193459397
+    ],
+    "slip": 0.001,
+    "failure_time": [
+      31407.592414345367,
+      31350.098546059988
+    ],
+    "failure_pressure": [
+      12323.270226029445,
+      12391.587953917366
+    ],
+    "failure_pressure_driven": {
+      "0.5": 11379.422413890496,
+      "0.25": 11485.512967463303,
+      "0.125": 11409.524908666073
+    },
+    "last_equilibrium": [
+      15767.348698805055,
+      13515.858601334212
+    ]
+  }
+}

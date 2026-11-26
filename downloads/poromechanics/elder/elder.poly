@@ -1,0 +1,19 @@
+#### node coordinates ####
+5 2 0 0
+0 0 0
+1 0 -1.0
+2 1 -1.0
+3 2.0 -1.0
+4 2.0 0
+#### segments ####
+5 1
+0 0 1 1      # x0: symmetry axis
+1 1 2 16     # z0: heater
+2 2 3 64     # n0: insulated base
+3 3 4 2      # x1: far wall
+4 4 0 32     # z1: cold top
+#### holes, must be 0 ####
+0
+#### regions ####
+1
+0 1 -0.5 0 0.0001057159916729051

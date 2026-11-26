@@ -1,0 +1,39 @@
+{
+  "problem": "Water enters a laterally confined elastic column through its base and leaves through a pressure-controlled top. Pressure and deformation independently measure its stored fluid.",
+  "result": "Late pressure error is 0.0286% of the steady scale. The coupled split budget closes within 2.4e-15 of injected volume across 19 cases.",
+  "scope": "Selected 2D PT column: 0.05 m mesh, 0.005 s step, 0–4 s. Lines are the mixed-boundary diffusion series; symbols are DES. (a) pressure profiles; (b) physical stored content and drain outflow. The small pending PT increment is tabulated separately.",
+  "meaning": "Independent mesh-integrated pressure and strain, boundary reaction and Darcy outflow distinguish a physical budget from the pressure-equation residual. Temporal controls measure first-order PT lag; ordinary explicit, adaptive GVS, tiny 3D and restart controls are supporting evidence.",
+  "metric": 0.0002862166858940895,
+  "metric_label": "pressure error / steady pressure",
+  "spacing_m": 0.05,
+  "evidence": {
+    "qualification": "runs/fluid-content-20261108/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "spatial-pt/h0.05",
+    "cases": 19,
+    "saved_frames": 6494,
+    "restart_suites": 8,
+    "exact_restart_payloads": 4757,
+    "selected_metrics": {
+      "method": "pt",
+      "dimension": 2,
+      "nodes": 63,
+      "elements": 80,
+      "frames": 801,
+      "final_time_s": 3.999999999999937,
+      "max_step_residual": 1.2924697071141057e-16,
+      "max_storage_reconstruction_error": 7.237830359838992e-16,
+      "max_mechanics_reconstruction_error": 1.3786343542550463e-16,
+      "max_content_budget_error": 8.488850601127407e-16,
+      "final_pending_over_injected": 2.323326414565387e-05,
+      "final_physical_budget_error": 2.323326414624337e-05,
+      "final_content_error_over_injected": 5.025150859576018e-07,
+      "final_reaction_drain_error_over_injected": 2.2730749060219594e-05,
+      "final_darcy_drain_error_over_injected": 9.751386130551903e-05,
+      "late_pressure_error_over_steady": 0.0002862166858940895,
+      "smallest_step_s": 0.004999999999999893,
+      "largest_step_s": 0.0050000000000001155,
+      "measured_expansion": 1.185316095493628e-06
+    }
+  }
+}

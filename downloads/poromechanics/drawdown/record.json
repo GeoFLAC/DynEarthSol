@@ -1,0 +1,84 @@
+{
+  "problem": "A reservoir stands at the crest of the embankment and the slope is saturated. When the reservoir is drawn down quickly the water no longer supports the face, while the pore pressure inside falls only as the slope drains: the classic critical case for the upstream slope of a dam.",
+  "result": "250 s after drawdown DES brackets the factor of safety at 0.8–0.85 against 0.857 from Bishop on the same pore pressure; at 20000 s, 0.9–0.95 against 0.918. Largest gap between the bracket midpoint and Bishop: 4.2%. 3 of 6 brackets contain Bishop. The other values exceed the upper edge by 0.00202–0.01341; DES is slightly conservative. The original all-times containment criterion is not met. The slope that stands dry (FS 1.369) fails on rapid drawdown, and draining restores only part of its strength in this time.",
+  "scope": "2D, 0.5 m mesh, the embankment of the strength-reduction page, saturated (porosity 0.3, saturated unit weight 20 kN/m³), Gardner retention ($\\alpha=2.4\\times10^{-4}$ Pa$^{-1}$), Bishop $\\chi=S_e$, permeability 1e-13 m². The reservoir at the crest loads the face; the slope fills to hydrostatic (misfit 0.25% of the base pressure). Drawdown removes the load and drains the face and the toe platform; everything is explicit DES with the dry page's settings, because DES does not switch hydraulic formulation mid-run. Strength-reduction trials restart at each time with the pore pressure held (permeability frozen, pore fluid made compressible), as limit equilibrium assumes. Brackets: 250 s: 0.8–0.85 (Bishop 0.857); 1000 s: 0.85–0.9 (Bishop 0.877); 3000 s: 0.85–0.9 (Bishop 0.890); 6000 s: 0.85–0.9 (Bishop 0.902); 12000 s: 0.85–0.9 (Bishop 0.913); 20000 s: 0.9–0.95 (Bishop 0.918). (a) pore pressure; (b) factor of safety in time; (c) mechanism.",
+  "meaning": "All 72 fine-mesh trials and six Bishop searches reproduce their recorded metrics from raw fields. The 0.05 factor spacing and small conservative misses remain visible; no tuning is used to match Bishop. This joins the verified pieces in the problem dam engineers check first: the undrained response to unloading, unsaturated drainage and effective-stress plasticity. Limit equilibrium needs the pore pressure as an input; DES computes it and finds the mechanism.",
+  "metric": 0.042046961766420865,
+  "metric_label": "FS midpoint vs Bishop",
+  "spacing_m": 0.5,
+  "evidence": {
+    "executable_sha256": "b8028481dd0d74f6e5909c466623ebe130e9fd40f94c12c5735898a9ae727566",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "hydrostatic_misfit": 0.002477762065749487,
+    "contained": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      true
+    ],
+    "states": [
+      {
+        "time": 250.00030456283275,
+        "fs_bishop": 0.8568490814059503,
+        "bracket": [
+          0.8,
+          0.85
+        ],
+        "p_max": 190587.6713448399,
+        "p_min": -21.08178808711709
+      },
+      {
+        "time": 1000.001218251331,
+        "fs_bishop": 0.8768956104791376,
+        "bracket": [
+          0.85,
+          0.9
+        ],
+        "p_max": 188527.73917028494,
+        "p_min": -57.02494751250007
+      },
+      {
+        "time": 3000.000296926846,
+        "fs_bishop": 0.8900416336695183,
+        "bracket": [
+          0.85,
+          0.9
+        ],
+        "p_max": 186070.16354804678,
+        "p_min": -156.6948773046697
+      },
+      {
+        "time": 6000.000593853692,
+        "fs_bishop": 0.9020167727307283,
+        "bracket": [
+          0.85,
+          0.9
+        ],
+        "p_max": 185149.94853041563,
+        "p_min": -299.7245634680727
+      },
+      {
+        "time": 12000.001196877562,
+        "fs_bishop": 0.913405944839905,
+        "bracket": [
+          0.85,
+          0.9
+        ],
+        "p_max": 184231.34672053208,
+        "p_min": -576.0357993188195
+      },
+      {
+        "time": 20000.000886741687,
+        "fs_bishop": 0.9184413013234987,
+        "bracket": [
+          0.9,
+          0.95
+        ],
+        "p_max": 183238.2438839102,
+        "p_min": -922.6552815177215
+      }
+    ]
+  }
+}

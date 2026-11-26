@@ -1,0 +1,16 @@
+{
+  "problem": "Heating half the base of a sealed porous layer creates plumes that rise and merge. There is no closed-form solution; an independent stream-function solver provides the reference.",
+  "result": "At dimensionless time 0.1, the selected DES mesh differs by 1.05% in heat content and 0.23 in temperature scaled by the 10 K heater contrast. The early heat discrepancy reaches 14.0%.",
+  "scope": "2D symmetric half box, Ra = 400, 15,692 nodes and 30,985 triangles, 50 s physical steps. Panels (a,b) show the final time; panel (c) retains all six comparison times. The 128 × 256 and 256 × 512 references differ by up to 0.12 in scaled temperature and less than 0.5% in heat content.",
+  "meaning": "This is a measured nonlinear application limit: early DES plumes differ, and coarse reference grids follow another branch. The incompressible reference and DES with deliberately scaled finite storage are distinct approximations. No material or timestep fitting is used.",
+  "metric": 0.01049044255635212,
+  "metric_label": "final heat-content difference",
+  "spacing_m": 0.015625,
+  "evidence": {
+    "executable_sha256": "b8028481dd0d74f6e5909c466623ebe130e9fd40f94c12c5735898a9ae727566",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "reference_sha256": "a68478be2c5d4957de596ed54d875b2a09328c6340e6b694e036abe7abbff62c",
+    "archived_reference_sha256": "5bc1156bfa4b9ced7a8c8ae238fbef91af27a97d0d780148190ae7fe559c0b45",
+    "limits": "Early plume and finite-storage discrepancies retained."
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "problem": "Water in a porous box heated from below becomes lighter at the base. Above a critical Rayleigh number buoyancy overturns it into a convection cell; below it, a disturbance decays.",
+  "result": "Fitted onset: $Ra=39.54$ against $4\\pi^2=39.48$, 0.14% apart; largest growth-rate error: $0.105\\,\\lambda/(CH^2)$ over 5 Rayleigh numbers. The unseeded box stays at rest to round-off: $|T-T_c|\\le5.7\\times10^{-15}\\,\\Delta T$.",
+  "scope": "2D, 0.025 m mesh, 400 steps of 1000 s. On the 0.05 m mesh the onset error is 1.04% and the largest rate error 0.426 (in units of $\\lambda/(CH^2)$); halving the spacing reduces the rate error 4.0-fold (order 2.0). (a) growth rates; (b) mode amplitudes; (c) the grown cell.",
+  "meaning": "This checks Boussinesq buoyancy in Darcy flow together with heat advection, and that the conductive state stays at rest. It does not test finite-amplitude convection (see the Nusselt-number page) or 3D cells; the fastest run reaches a temperature departure of 10.7% of $\\Delta T$, so its late growth is only approximately linear.",
+  "metric": 0.001435305524474469,
+  "metric_label": "onset Rayleigh number error",
+  "spacing_m": 0.025,
+  "evidence": {
+    "executable_sha256": "aa6d107ceb6bfbed891fddd8f4ff7a4ca1a0b033bb090a4526d23d549af0cb05",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "fitted_onset": 39.535081195242476,
+    "max_rate_error": 0.10539526034036228,
+    "max_departure_over_dT": 0.10721222435538494,
+    "cases": [
+      {
+        "ra_over_critical": 0.5,
+        "seed_K": 0.001,
+        "fitted_rate": -9.927884810905086e-06,
+        "exact_rate": -9.869604401089359e-06,
+        "relative_error": 0.005905040105689974,
+        "sign_ok": true
+      },
+      {
+        "ra_over_critical": 0.9,
+        "seed_K": 0.001,
+        "fitted_rate": -2.0351315808160553e-06,
+        "exact_rate": -1.9739208802178715e-06,
+        "relative_error": 0.031009703180923668,
+        "sign_ok": true
+      },
+      {
+        "ra_over_critical": 1.1,
+        "seed_K": 0.001,
+        "fitted_rate": 1.9312721161947508e-06,
+        "exact_rate": 1.9739208802178715e-06,
+        "relative_error": 0.021606116258526712,
+        "sign_ok": true
+      },
+      {
+        "ra_over_critical": 1.5,
+        "seed_K": 0.001,
+        "fitted_rate": 9.90344802279565e-06,
+        "exact_rate": 9.869604401089354e-06,
+        "relative_error": 0.0034290758100253456,
+        "sign_ok": true
+      },
+      {
+        "ra_over_critical": 2.0,
+        "seed_K": 0.001,
+        "fitted_rate": 1.9844604062519072e-05,
+        "exact_rate": 1.9739208802178708e-05,
+        "relative_error": 0.00533938626398902,
+        "sign_ok": true
+      },
+      {
+        "ra_over_critical": 2.0,
+        "seed_K": 0.0,
+        "rest_max_theta_over_dT": 5.684341886080802e-15
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "problem": "A well pumps a confined aquifer and then shuts in. The drawdown spreads radially and recovers.",
+  "result": "Largest drawdown error: 0.079% of $C_Q$, over $10\\le r\\le30$ m and eight times through pumping and recovery.",
+  "scope": "3D quarter box, 0.625 m mesh, 80 steps of 2 s. On meshes of 5, 2.5, 1.25, 0.625 m the error falls with order 1.97. (a) radial profiles; (b) histories at two radii; (c) mesh convergence.",
+  "meaning": "The closed-box water budget differs from the prescribed pumping integral by at most 2.34e-17 m³. This checks the rate-controlled well, hydraulic storage and radial diffusion, including shut-in superposition. Mechanical pressure feedback is disabled in this flow-isolation test.",
+  "metric": 0.0007934069333284883,
+  "metric_label": "drawdown error / C_Q",
+  "spacing_m": 0.625,
+  "evidence": {
+    "executable_sha256": "bdcf8bd41192319c1c2efa9b0bc3a36a9b9365b1be1709c4662732e3de3ac66c",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "mesh_order": 1.9686726879439167,
+    "maximum_water_budget_error_m3": 2.3418766925686896e-17,
+    "cases": [
+      {
+        "spacing_m": 5.0,
+        "nodes": 338,
+        "window": [
+          10,
+          30.0
+        ],
+        "max_error_over_scale": 0.047124588477033616,
+        "rms_error_over_scale": 0.01089942942001282,
+        "max_abs_strain": 3.5001862405204644e-18,
+        "input_sha256": "6799d63cdbc5a30d69a31083052b286f1b3b0d77ab2f1de2c3f28a3162f96fe2"
+      },
+      {
+        "spacing_m": 2.5,
+        "nodes": 1875,
+        "window": [
+          10,
+          30.0
+        ],
+        "max_error_over_scale": 0.011731973468967578,
+        "rms_error_over_scale": 0.002235779843068985,
+        "max_abs_strain": 1.7144293715987088e-17,
+        "input_sha256": "b7d00b6ccf5c9618a2f77676cb6195ca9d817150883f180fd188af460ff42662"
+      },
+      {
+        "spacing_m": 1.25,
+        "nodes": 12005,
+        "window": [
+          10,
+          30.0
+        ],
+        "max_error_over_scale": 0.00291293305061961,
+        "rms_error_over_scale": 0.0005542445299631015,
+        "max_abs_strain": 7.377422009008632e-17,
+        "input_sha256": "e207653513da8f2b650a4f1502efc12c4307e77d626517c9c74e7437a287c23a"
+      },
+      {
+        "spacing_m": 0.625,
+        "nodes": 84681,
+        "window": [
+          10,
+          30.0
+        ],
+        "max_error_over_scale": 0.0007934069333284883,
+        "rms_error_over_scale": 0.00013815359994988623,
+        "max_abs_strain": 3.0186120878672223e-16,
+        "input_sha256": "c2e11d2b1b3a941889442312c7eab0287092fc116f39117ce06558d69096f22b"
+      }
+    ]
+  }
+}

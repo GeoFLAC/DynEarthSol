@@ -1,0 +1,48 @@
+{
+  "problem": "A sealed porous column is compressed through Mohr–Coulomb yield. Total volume change fixes its mean pressure independently of the plastic stress return.",
+  "result": "The corrected source conserves fluid content plus the pending PT increment to round-off. The parent drift was 1.24% in the selected 2D case and 4.49% in the 3D dilation control.",
+  "scope": "Selected 2D plane-strain unit cell: 100 Pa cohesion, 20° friction, 10° dilation, 0.001 m/s top compression, 0.01 s step. (a) pressure; (b) pressure storage plus pending increment against imposed volume loss. Porosity and mesh remain fixed.",
+  "meaning": "Forty-eight primary cases cover both dimensions and containers, negative/zero/positive dilation, hydraulic substeps, open drainage, Gardner suction, evolving-pressure EP-RSF and thermal expansion. Old checkpoints preserve earlier offsets. Conservative remapping, finite-grain plastic porosity and general energy remain open.",
+  "metric": 8.675734962252171e-16,
+  "metric_label": "split content error / imposed volume",
+  "spacing_m": 0.5,
+  "evidence": {
+    "qualification": "runs/plastic-source-20261108/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "qualified-2d/pt-psi10",
+    "selected_metrics": {
+      "case": "pt-psi10",
+      "dimension": 2,
+      "frames": 101,
+      "max_budget_error_over_imposed_volume": 8.675734962252171e-16,
+      "max_pressure_error_over_reference_scale": 1.250555214937814e-15,
+      "max_imposed_volume_error": 6.505213034913027e-16,
+      "largest_step_residual": 3.3881317890172014e-18,
+      "max_plastic_strain": 9.133669901772994e-05,
+      "hydraulic_substeps": 1,
+      "changed_step": {
+        "dimension": 2,
+        "frames": 61,
+        "max_budget_error_over_imposed_volume": 2.1641691802347374e-16,
+        "max_pressure_error_over_reference_scale": 6.821210263297166e-16,
+        "max_imposed_volume_error": 6.505213034913027e-16,
+        "largest_step_residual": 6.776263578034403e-18,
+        "max_plastic_strain": 9.133669901803736e-05,
+        "hydraulic_substeps": 1,
+        "changed_step": true,
+        "cumulative_boundary_in_m3": 0.0,
+        "pressure_reference": "closed-column recurrence"
+      },
+      "cumulative_boundary_in_m3": 0.0,
+      "pressure_reference": "closed-column recurrence",
+      "exact_restart_payloads": 260
+    },
+    "primary_cases": 48,
+    "saved_frames": 4848,
+    "exact_restart_payloads": 5760,
+    "core_comparisons": {
+      "2": "BIT-EXACT",
+      "3": "BIT-EXACT"
+    }
+  }
+}

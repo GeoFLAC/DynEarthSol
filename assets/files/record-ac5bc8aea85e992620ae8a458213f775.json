@@ -1,0 +1,289 @@
+{
+  "problem": "The drained surface of a fluid-saturated half-space is suddenly heated. Pore water expands more than the grains, so pressure rises below the surface while it drains upward, and the solid heaves.",
+  "result": "Largest errors over all saved times on the 0.00625 m mesh with 400 steps: pressure 0.46% of its peak, temperature 0.04% of $\\Delta T$, vertical strain 1.03% and surface heave 0.91%.",
+  "scope": "2D column 1 m deep; mesh study at 200 PT steps (the result above uses 400) to 40 ks; meshes 0.05, 0.025, 0.0125, 0.00625 m. Mesh orders: pressure 1.41, temperature 1.60, vertical strain 1.09, surface heave 0.50. With 200 steps the finer meshes reach the time-step floor of the sequential coupling (pressure 0.99%); doubling the steps halves the pressure, strain and heave errors. 3D at 0.0125 m: pressure 1.68%, heave 2.33%. Heat ledger: stored heat against the exact input through the surface, at 5 ks on meshes 0.05, 0.025, 0.0125, 0.00625 m: +1.505%, +0.366%, +0.091%, +0.022% (second order in the mesh; the relative error is smaller at later times because the surface-node surplus is a fixed amount). Pressure work and the mechanical energy are not in the ledger. (a) pressure; (b) temperature; (c) mesh convergence.",
+  "meaning": "This checks the thermal pressurization source, the thermal stress and their two-way coupling with drainage and deformation. Heat advection is off.",
+  "metric": 0.004594332339937418,
+  "metric_label": "pressure error / peak",
+  "spacing_m": 0.00625,
+  "evidence": {
+    "executable_sha256": "f72ecedc9b5860485a2654fd8c6205bbd4d1a3595b17624cfd545e8a82335d2d",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "orders": {
+      "pressure_error": 1.4069278382619352,
+      "temperature_error": 1.6044634625439538,
+      "strain_error": 1.0853716440300565,
+      "heave_error": 0.49643151124297485
+    },
+    "heat_ledger": {
+      "0.05": [
+        {
+          "time": 5000.0,
+          "stored": 2146219.2764638457,
+          "exact": 2114394.1301774704,
+          "error": 0.015051662238441788
+        },
+        {
+          "time": 10000.0,
+          "stored": 3012287.495760569,
+          "exact": 2990204.823951075,
+          "error": 0.007385003071567198
+        },
+        {
+          "time": 15000.0,
+          "stored": 3680161.850306504,
+          "exact": 3662238.0098283645,
+          "error": 0.004894231459025011
+        },
+        {
+          "time": 20000.0,
+          "stored": 4244265.333137766,
+          "exact": 4228788.194280124,
+          "error": 0.0036599465725373204
+        },
+        {
+          "time": 25000.0,
+          "stored": 4741747.975014777,
+          "exact": 4727928.927504548,
+          "error": 0.002922854324191926
+        },
+        {
+          "time": 30000.0,
+          "stored": 5191787.04914022,
+          "exact": 5179186.644154238,
+          "error": 0.0024328926242123128
+        },
+        {
+          "time": 35000.0,
+          "stored": 5605817.030444603,
+          "exact": 5594160.942128512,
+          "error": 0.002083616906391139
+        },
+        {
+          "time": 40000.0,
+          "stored": 5991306.1428370895,
+          "exact": 5980409.60117706,
+          "error": 0.0018220393562817794
+        }
+      ],
+      "0.025": [
+        {
+          "time": 5000.0,
+          "stored": 2122132.6665688497,
+          "exact": 2114394.1301774704,
+          "error": 0.003659930890334895
+        },
+        {
+          "time": 10000.0,
+          "stored": 2995653.0714275977,
+          "exact": 2990204.823951075,
+          "error": 0.0018220315320487401
+        },
+        {
+          "time": 15000.0,
+          "stored": 3666680.0986063513,
+          "exact": 3662238.0098283645,
+          "error": 0.001212943769920427
+        },
+        {
+          "time": 20000.0,
+          "stored": 4232632.401636084,
+          "exact": 4228788.194280124,
+          "error": 0.0009090564907363596
+        },
+        {
+          "time": 25000.0,
+          "stored": 4731365.816097009,
+          "exact": 4727928.927504548,
+          "error": 0.0007269332185741995
+        },
+        {
+          "time": 30000.0,
+          "stored": 5182323.183378204,
+          "exact": 5179186.644154238,
+          "error": 0.0006056045938229726
+        },
+        {
+          "time": 35000.0,
+          "stored": 5597064.220897087,
+          "exact": 5594160.942128512,
+          "error": 0.0005189837758707849
+        },
+        {
+          "time": 40000.0,
+          "stored": 5983124.954536429,
+          "exact": 5980409.60117706,
+          "error": 0.0004540413684765987
+        }
+      ],
+      "0.0125": [
+        {
+          "time": 5000.0,
+          "stored": 2116316.2008182076,
+          "exact": 2114394.1301774704,
+          "error": 0.0009090408516108095
+        },
+        {
+          "time": 10000.0,
+          "stored": 2991562.4772718204,
+          "exact": 2990204.823951075,
+          "error": 0.0004540335531100226
+        },
+        {
+          "time": 15000.0,
+          "stored": 3663346.133937997,
+          "exact": 3662238.0098283645,
+          "error": 0.0003025811284407265
+        },
+        {
+          "time": 20000.0,
+          "stored": 4229747.68695958,
+          "exact": 4228788.194280124,
+          "error": 0.0002268954214244001
+        },
+        {
+          "time": 25000.0,
+          "stored": 4728787.032154013,
+          "exact": 4727928.927504548,
+          "error": 0.0001814969435081082
+        },
+        {
+          "time": 30000.0,
+          "stored": 5179969.927159313,
+          "exact": 5179186.644154238,
+          "error": 0.00015123668230021536
+        },
+        {
+          "time": 35000.0,
+          "stored": 5594886.08439728,
+          "exact": 5594160.942128512,
+          "error": 0.0001296248492435037
+        },
+        {
+          "time": 40000.0,
+          "stored": 5981087.883788316,
+          "exact": 5980409.60117706,
+          "error": 0.00011341741728232435
+        }
+      ],
+      "0.00625": [
+        {
+          "time": 5000.0,
+          "stored": 2114857.8571315734,
+          "exact": 2114394.1301774704,
+          "error": 0.0002193190699333325
+        },
+        {
+          "time": 10000.0,
+          "stored": 2990532.638020193,
+          "exact": 2990204.823951075,
+          "error": 0.00010962930247870872
+        },
+        {
+          "time": 15000.0,
+          "stored": 3662505.644307347,
+          "exact": 3662238.0098283645,
+          "error": 7.30794880792196e-05
+        },
+        {
+          "time": 20000.0,
+          "stored": 4229019.96189471,
+          "exact": 4228788.194280124,
+          "error": 5.480709932426109e-05
+        },
+        {
+          "time": 25000.0,
+          "stored": 4728136.221050945,
+          "exact": 4727928.927504548,
+          "error": 4.384447177097073e-05
+        },
+        {
+          "time": 30000.0,
+          "stored": 5179375.872932384,
+          "exact": 5179186.644154238,
+          "error": 3.653638904088652e-05
+        },
+        {
+          "time": 35000.0,
+          "stored": 5594336.131637769,
+          "exact": 5594160.942128512,
+          "error": 3.1316494299771236e-05
+        },
+        {
+          "time": 40000.0,
+          "stored": 5980573.47434639,
+          "exact": 5980409.60117706,
+          "error": 2.7401663139858812e-05
+        }
+      ]
+    },
+    "mesh": [
+      {
+        "spacing_m": 0.05,
+        "nodes": 42,
+        "input_sha256": "ed726a199d8d21b39e1f1bda78c2a539b8fd86ad0f4bd016f3e5a5a31ef05986",
+        "temperature_error": 0.01043632996972601,
+        "pressure_error": 0.15784015608712398,
+        "strain_error": 0.19444436535722198,
+        "heave_error": 0.0531846228548527
+      },
+      {
+        "spacing_m": 0.025,
+        "nodes": 82,
+        "input_sha256": "a325e3f229eadc72bc8488ef469b7a3bbe09fc0f86c9afd2856cd6edb6023a0e",
+        "temperature_error": 0.002710662343820136,
+        "pressure_error": 0.03861735409441892,
+        "strain_error": 0.055701573684578835,
+        "heave_error": 0.023497871738254683
+      },
+      {
+        "spacing_m": 0.0125,
+        "nodes": 162,
+        "input_sha256": "cc54fac42b94e9a279b0ebce18892cc6f9d405a52a74fe2686c9aed50f62d16b",
+        "temperature_error": 0.0006678889031193514,
+        "pressure_error": 0.00915720595805141,
+        "strain_error": 0.020945470948445587,
+        "heave_error": 0.018994801895186764
+      },
+      {
+        "spacing_m": 0.00625,
+        "nodes": 322,
+        "input_sha256": "2d82a2c3044a994eed50a280a4f6b07208aba018efa2ff14027d67a43eae08d5",
+        "temperature_error": 0.0004086637378439865,
+        "pressure_error": 0.009880958507771027,
+        "strain_error": 0.021942683389921742,
+        "heave_error": 0.018132099146494052
+      }
+    ],
+    "selected": {
+      "steps": 400,
+      "spacing_m": 0.00625,
+      "nodes": 322,
+      "input_sha256": "f1ba3605f1f36b66925a9fc8e93578375c18405fcea38db63212468f81d59ae8",
+      "temperature_error": 0.0004086637378439865,
+      "pressure_error": 0.004594332339937418,
+      "strain_error": 0.010325513427835158,
+      "heave_error": 0.009140892460409167
+    },
+    "three_d": [
+      {
+        "spacing_m": 0.025,
+        "nodes": 164,
+        "input_sha256": "59107773c490ef8d8636abb5bcf14e6fabe4f6c1f6ba872f91b796d65857d29c",
+        "temperature_error": 0.0021813288549180853,
+        "pressure_error": 0.05820690888792584,
+        "strain_error": 0.06483764760475089,
+        "heave_error": 0.02915422442832738
+      },
+      {
+        "spacing_m": 0.0125,
+        "nodes": 324,
+        "input_sha256": "81a10c123f960fd8b9d29175f82357550060bce8af0f6fa02d16b29ed89a3d0e",
+        "temperature_error": 0.0005378827805015973,
+        "pressure_error": 0.01678420820498301,
+        "strain_error": 0.02536785421154098,
+        "heave_error": 0.023290462172556037
+      }
+    ]
+  }
+}

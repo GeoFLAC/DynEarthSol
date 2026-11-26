@@ -1,0 +1,189 @@
+{
+  "problem": "Fluid at pressure $p_w$ enters a borehole wall: it loads the wall and diffuses into the rock, which changes the stresses around the hole as it goes. The axisymmetric part of Detournay and Cheng’s borehole problem, on a finite annulus.",
+  "result": "On the 0.05 a mesh: pressure within 0.06% of $p_w$ at every node for 1.05 a ≤ r ≤ 4 a and all four times; total stress rms 0.16% (hoop) with a largest element error of 1.06%.",
+  "scope": "2D plane strain, quarter annulus a = 1 m, R = 20 m, sealed traction-free outer arc, PT. Largest pressure error on meshes 0.2, 0.1, 0.05 a: 0.130%, 0.067%, 0.058%; largest stress error 4.57%, 1.85%, 1.06% (constant-stress triangles at the wall, where the hoop stress is steepest). A time-step check with 576 steps on the 0.1 a mesh gives pressure 0.040%. 3D is queued for a larger machine. (a) pressure; (b) stress; (c) errors.",
+  "meaning": "This checks the coupled poroelastic response around an opening: diffusion from a curved boundary, the pressure-driven hoop stress and the wall load together. It precedes the tunnel-excavation problems.",
+  "metric": 0.0005809052146814938,
+  "metric_label": "pressure error / p_w",
+  "spacing_m": 0.05,
+  "evidence": {
+    "executable_sha256": "389e460d3fa6531ea6fa6d95fb7f7ab251c45cf61ba430fe510c44b13892910a",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "diffusivity": 0.25000000000000006,
+    "cases": [
+      {
+        "spacing_m": 0.2,
+        "nodes": 1240,
+        "elements": 2355,
+        "frames": [
+          {
+            "time": 9.0,
+            "pressure_error": 0.0011113979967444902,
+            "pressure_rms": 0.00036835475084984176,
+            "radial_error": 0.031395874178342636,
+            "hoop_error": 0.045732142718251156,
+            "hoop_rms": 0.004314484058616388
+          },
+          {
+            "time": 18.0,
+            "pressure_error": 0.0011676055749920197,
+            "pressure_rms": 0.00044466192556845906,
+            "radial_error": 0.028896010400255676,
+            "hoop_error": 0.04370373072089767,
+            "hoop_rms": 0.004230225156552285
+          },
+          {
+            "time": 27.0,
+            "pressure_error": 0.0012537773830755615,
+            "pressure_rms": 0.0007417039246839233,
+            "radial_error": 0.02777429208818183,
+            "hoop_error": 0.042742920065216954,
+            "hoop_rms": 0.004189168194258602
+          },
+          {
+            "time": 36.0,
+            "pressure_error": 0.0013010948059933726,
+            "pressure_rms": 0.0008996399057469934,
+            "radial_error": 0.027098684986105074,
+            "hoop_error": 0.04216179348527011,
+            "hoop_rms": 0.004161326442034585
+          }
+        ],
+        "input_sha256": "56b2f6efdb32334fa83699a8ddd838d714f82b33e0752d0ca49b0d263a6051b7",
+        "mesh_sha256": "e5def681e2019ad74c374fa44b6d81fcc6a8702131a1f5953e92f8022f84de0e",
+        "pressure_error": 0.0013010948059933726,
+        "stress_error": 0.045732142718251156
+      },
+      {
+        "spacing_m": 0.1,
+        "nodes": 4585,
+        "elements": 8938,
+        "frames": [
+          {
+            "time": 9.0,
+            "pressure_error": 0.0006675465305505786,
+            "pressure_rms": 0.0003463570981324089,
+            "radial_error": 0.01592176216504199,
+            "hoop_error": 0.018542781492408074,
+            "hoop_rms": 0.002108445605834104
+          },
+          {
+            "time": 18.0,
+            "pressure_error": 0.00037002090277749814,
+            "pressure_rms": 0.0001506269671704024,
+            "radial_error": 0.0157979849040549,
+            "hoop_error": 0.0180083295395248,
+            "hoop_rms": 0.001754119074783817
+          },
+          {
+            "time": 27.0,
+            "pressure_error": 0.0003489054701241257,
+            "pressure_rms": 0.0001817683922456311,
+            "radial_error": 0.01575937229559,
+            "hoop_error": 0.017715609558147202,
+            "hoop_rms": 0.0016787963294666185
+          },
+          {
+            "time": 36.0,
+            "pressure_error": 0.0003368536238661327,
+            "pressure_rms": 0.00020702154021704096,
+            "radial_error": 0.01574670389857446,
+            "hoop_error": 0.017532761805310264,
+            "hoop_rms": 0.0016478381859541397
+          }
+        ],
+        "input_sha256": "2923f0e526fa60cc2f1442cab2de790ccaf39ec59ea96564b9481b03177caca6",
+        "mesh_sha256": "ef4e5c8668ff7c27c9a8ea71cf980fbdc5f3d642abef42cd13871393285f94a0",
+        "pressure_error": 0.0006675465305505786,
+        "stress_error": 0.018542781492408074
+      },
+      {
+        "spacing_m": 0.05,
+        "nodes": 17849,
+        "elements": 35227,
+        "frames": [
+          {
+            "time": 9.0,
+            "pressure_error": 0.0005809052146814938,
+            "pressure_rms": 0.0003259525785418944,
+            "radial_error": 0.010253958322612453,
+            "hoop_error": 0.010632302739405073,
+            "hoop_rms": 0.0016406882220398914
+          },
+          {
+            "time": 18.0,
+            "pressure_error": 0.00017464002233510837,
+            "pressure_rms": 0.00010124053884480105,
+            "radial_error": 0.009437171581492876,
+            "hoop_error": 0.00987956765720161,
+            "hoop_rms": 0.0010377781870372937
+          },
+          {
+            "time": 27.0,
+            "pressure_error": 9.048406352044549e-05,
+            "pressure_rms": 4.2189245976419916e-05,
+            "radial_error": 0.009065774485187954,
+            "hoop_error": 0.009518586833070964,
+            "hoop_rms": 0.0008960841223858987
+          },
+          {
+            "time": 36.0,
+            "pressure_error": 7.048179184563923e-05,
+            "pressure_rms": 1.9885530239873286e-05,
+            "radial_error": 0.008841055271953228,
+            "hoop_error": 0.009295928368972963,
+            "hoop_rms": 0.0008438509076480146
+          }
+        ],
+        "input_sha256": "82e9be8945d145279e1b827bf6bc1c061f5ee81a4488f81d0d9a5159aca80dc4",
+        "mesh_sha256": "0301d10d5e4f9de3a728c07cbea5c3cdf268c80f8a0549dc2c4f9cc919a99fab",
+        "pressure_error": 0.0005809052146814938,
+        "stress_error": 0.010632302739405073
+      }
+    ],
+    "refined": {
+      "spacing_m": 0.1,
+      "nodes": 4585,
+      "elements": 8938,
+      "frames": [
+        {
+          "time": 9.0,
+          "pressure_error": 0.00039365648818283805,
+          "pressure_rms": 0.00011613881811335903,
+          "radial_error": 0.01591562061150768,
+          "hoop_error": 0.018759822374922807,
+          "hoop_rms": 0.0017823835776235766
+        },
+        {
+          "time": 18.0,
+          "pressure_error": 0.00035951316591651994,
+          "pressure_rms": 0.00018450630063857613,
+          "radial_error": 0.015800001036728267,
+          "hoop_error": 0.018056442381217376,
+          "hoop_rms": 0.0017110663869694279
+        },
+        {
+          "time": 27.0,
+          "pressure_error": 0.00039571655265591106,
+          "pressure_rms": 0.00025025750450696527,
+          "radial_error": 0.015763248514186822,
+          "hoop_error": 0.017722389218110708,
+          "hoop_rms": 0.0016740602911482422
+        },
+        {
+          "time": 36.0,
+          "pressure_error": 0.0003921410578674695,
+          "pressure_rms": 0.0002684877058871023,
+          "radial_error": 0.015751285119795823,
+          "hoop_error": 0.01752256005612301,
+          "hoop_rms": 0.0016514273117437034
+        }
+      ],
+      "input_sha256": "d80ebf88fab801e0ac51666b0da2eda81fbd8cc3c15de3cd9b4d3f20295d9f90",
+      "mesh_sha256": "ef4e5c8668ff7c27c9a8ea71cf980fbdc5f3d642abef42cd13871393285f94a0",
+      "pressure_error": 0.00039571655265591106,
+      "stress_error": 0.018759822374922807
+    },
+    "refined_steps": 576
+  }
+}

@@ -1,0 +1,197 @@
+{
+  "qualification": {
+    "raw_replay_passed": true,
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "des-b-0001/h0.015625",
+    "files_sha256": {
+      "ref-full.npz": "a68478be2c5d4957de596ed54d875b2a09328c6340e6b694e036abe7abbff62c",
+      "ref-full.json": "b26e16e98ab5478db29dc60ab0061a24a99c0d31d6387aaac32830c1a0f21d73",
+      "des-b-0001/summary.json": "cf7e2f957c0b9de54cec23aecf9d1c2012fa2b1b4b261a57f051a56e3677e41b",
+      "des-b-0001/h0.015625/elder.cfg": "8434ee15cd1b5122b3aa2ece4a5a8d11449480f5c65847df093ce44f4e83a65a",
+      "des-b-0001/h0.015625/elder.poly": "6b7dbe07b8cd72eb0d4ad2078771764bd8e043ffc5cab9252564f206b192542a",
+      "des-b-0001/h0.015625/elder.info": "7f5bdc29d86f65c2c6eda2cc0b48c6faed8ff28a18450be295a91bcf3f330a40",
+      "des-b-0001/h0.015625/elder.save.000000": "249f27b630aa022c80658c025f993e0939b8d5672c0d76932770a9b5214da1c2",
+      "des-b-0001/h0.015625/elder.save.000001": "12e6ca551a82e03c6d0524a44d5a0da95b5eef7f869f33d350b2a3aee4b840ff",
+      "des-b-0001/h0.015625/elder.save.000002": "8c0164d968e80029fc715e4ddfad5c917f42870dd0e7ccddc160435a8919d8a4",
+      "des-b-0001/h0.015625/elder.save.000004": "cbf6c720816ef300d9d85f3bffa8b00fb3b6b48c06859ed526e17030fb47f585",
+      "des-b-0001/h0.015625/elder.save.000010": "3d8f637dc2e0d22e2166ef3300ec8c9075e77a2b0972c1c109fbc5c4c157b3ea",
+      "des-b-0001/h0.015625/elder.save.000015": "3dd292585cb72203eabe6d9e7993b7bdc1cd59f077200acc36d79c8496f49da2",
+      "des-b-0001/h0.015625/elder.save.000020": "d29e0a442aee072015ce33d875d1becfd8b95d5b0878f9fd459701ab5757041c"
+    },
+    "series": [
+      {
+        "tau": 0.005,
+        "max_abs_difference": 0.0980159120721904,
+        "rms_difference": 0.007465693305053636,
+        "heat_des": 0.0928367250017576,
+        "heat_reference": 0.08868679606166147,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.01,
+        "max_abs_difference": 0.281532252252274,
+        "rms_difference": 0.035686618553480896,
+        "heat_des": 0.1501469771256094,
+        "heat_reference": 0.14118610190704378,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.02,
+        "max_abs_difference": 0.5560854263551717,
+        "rms_difference": 0.0767847919393007,
+        "heat_des": 0.29866832597386367,
+        "heat_reference": 0.2619778926913444,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.05,
+        "max_abs_difference": 0.14113150491585724,
+        "rms_difference": 0.03395659587493344,
+        "heat_des": 0.50126486054021,
+        "heat_reference": 0.5061518441275266,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.075,
+        "max_abs_difference": 0.5197361044551115,
+        "rms_difference": 0.11006982955859412,
+        "heat_des": 0.5847985589609033,
+        "heat_reference": 0.5697356126652605,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.1,
+        "max_abs_difference": 0.2322790407523535,
+        "rms_difference": 0.0527542893364916,
+        "heat_des": 0.5966338199023109,
+        "heat_reference": 0.5904398446292464,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      }
+    ],
+    "reference_policy": "Stored 256 x 512 reference; no integration repeated"
+  },
+  "archived_case": {
+    "spacing_m": 0.015625,
+    "nodes": 15692,
+    "elements": 30985,
+    "series": [
+      {
+        "tau": 0.005,
+        "max_abs_difference": 0.08486574785198003,
+        "rms_difference": 0.007534967884528066,
+        "heat_des": 0.09283672500175758,
+        "heat_reference": 0.08875640415977662,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.01,
+        "max_abs_difference": 0.2815706175372724,
+        "rms_difference": 0.035816052501435165,
+        "heat_des": 0.15014697712560934,
+        "heat_reference": 0.14132025875224435,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.02,
+        "max_abs_difference": 0.572883334742658,
+        "rms_difference": 0.07827002145405362,
+        "heat_des": 0.2986683259738638,
+        "heat_reference": 0.2620154860283908,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.05,
+        "max_abs_difference": 0.176114810199757,
+        "rms_difference": 0.03771695405245871,
+        "heat_des": 0.50126486054021,
+        "heat_reference": 0.5070748437792459,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.075,
+        "max_abs_difference": 0.5150833899893945,
+        "rms_difference": 0.1050780710054117,
+        "heat_des": 0.5847985589609032,
+        "heat_reference": 0.5723687792590308,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      },
+      {
+        "tau": 0.1,
+        "max_abs_difference": 0.2342340612511491,
+        "rms_difference": 0.05245471801354435,
+        "heat_des": 0.5966338199023108,
+        "heat_reference": 0.5908246107168325,
+        "theta_min": 0.0,
+        "theta_max": 1.0
+      }
+    ]
+  },
+  "reference_grid": 256,
+  "series": [
+    {
+      "tau": 0.005,
+      "max_abs_difference": 0.0980159120721904,
+      "rms_difference": 0.007465693305053636,
+      "heat_des": 0.0928367250017576,
+      "heat_reference": 0.08868679606166147,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    },
+    {
+      "tau": 0.01,
+      "max_abs_difference": 0.281532252252274,
+      "rms_difference": 0.035686618553480896,
+      "heat_des": 0.1501469771256094,
+      "heat_reference": 0.14118610190704378,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    },
+    {
+      "tau": 0.02,
+      "max_abs_difference": 0.5560854263551717,
+      "rms_difference": 0.0767847919393007,
+      "heat_des": 0.29866832597386367,
+      "heat_reference": 0.2619778926913444,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    },
+    {
+      "tau": 0.05,
+      "max_abs_difference": 0.14113150491585724,
+      "rms_difference": 0.03395659587493344,
+      "heat_des": 0.50126486054021,
+      "heat_reference": 0.5061518441275266,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    },
+    {
+      "tau": 0.075,
+      "max_abs_difference": 0.5197361044551115,
+      "rms_difference": 0.11006982955859412,
+      "heat_des": 0.5847985589609033,
+      "heat_reference": 0.5697356126652605,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    },
+    {
+      "tau": 0.1,
+      "max_abs_difference": 0.2322790407523535,
+      "rms_difference": 0.0527542893364916,
+      "heat_des": 0.5966338199023109,
+      "heat_reference": 0.5904398446292464,
+      "theta_min": 0.0,
+      "theta_max": 1.0
+    }
+  ]
+}

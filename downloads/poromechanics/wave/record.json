@@ -1,0 +1,10 @@
+{
+  "problem": "A small initial velocity sets a sealed saturated column oscillating; compression raises the pressure and expansion lowers it.",
+  "result": "Largest velocity error: 0.171% and largest pressure error: 0.262% of their amplitudes, over all nodes and 65 saved times.",
+  "scope": "3D, 0.0125 m mesh, 8192 steps over one 1.162 ms period $T$; fixed mesh, no damping, physical inertia. (a) velocity at mid-height; (b) pressure at the sealed base.",
+  "meaning": "This checks fluid storage and elastic wave coupling together; local fluid content is conserved to round-off. It does not test a GVS earthquake cycle.",
+  "metric": 0.002617649548861954,
+  "metric_label": "pressure error / wave amplitude",
+  "spacing_m": 0.0125,
+  "evidence": "runs/physical-pressure-fix-20261107/wave-qualification.json"
+}

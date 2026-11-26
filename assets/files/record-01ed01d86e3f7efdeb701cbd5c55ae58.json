@@ -1,0 +1,254 @@
+{
+  "problem": "A saturated sand column drains through its base: the top desaturates, pore pressure falls below zero and the column settles under the Bishop effective stress and its lighter weight, as in the Liakopoulos experiment. No closed form exists; an independent solver of the same continuum supplies the reference.",
+  "result": "Largest nodal pressure error on the 0.0125 m mesh with 480 steps at 5, 20, 60 and 120 min: 0.14 / 0.02 / 0.02 / 0.01% of $\\rho_fgH$; settlement 0.24 / 0.05 / 0.02 / 0.01%. With 960 steps: 0.07 / 0.02 / 0.01 / 0.01% and 0.12 / 0.03 / 0.01 / 0.01%.",
+  "scope": "2D, PT, 480 steps; pressure errors on meshes 0.05 m: 0.58 / 0.34 / 0.22 / 0.16%; 0.025 m: 0.17 / 0.09 / 0.06 / 0.04%; 0.0125 m: 0.14 / 0.02 / 0.02 / 0.01%. Late-time pressure converges at about second order with the mesh; the first frame and the settlement are limited by the step, since the base opens at once and the sequential coupling lags one step. The explicit strain form on the 0.05 m mesh gives 0.55 / 0.33 / 0.21 / 0.16% and settlement 0.01 / 0.01 / 0.00 / 0.00%. 3D is queued for a larger machine. Reference: 200 cells, BDF; grid differences fall at second order. (a) pressure profiles; (b) settlement history, DES saved every 5 min; (c) pressure error: circles 480 steps, diamonds 960 steps, open squares the explicit form.",
+  "meaning": "This checks Richards flow and the Bishop coupling together during drainage: desaturation, suction, the effective-stress change and the lighter weight of the drying column.",
+  "metric": 0.0007289644671352397,
+  "metric_label": "pressure error",
+  "spacing_m": 0.0125,
+  "evidence": {
+    "executable_sha256": "464d02daa7ffc3594f86a751118c05561bc257764ead83a2046a4c640f0a3bfe",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "reference": [
+      {
+        "time": 300.0,
+        "settlement": -0.0017899037326765327,
+        "p_top": -831.2158315825735,
+        "saturation_top": 0.962938756759877
+      },
+      {
+        "time": 1200.0,
+        "settlement": -0.0018855175924843968,
+        "p_top": -1482.1194189028097,
+        "saturation_top": 0.9061883936686043
+      },
+      {
+        "time": 3600.0,
+        "settlement": -0.0019904700990222212,
+        "p_top": -2143.105926049031,
+        "saturation_top": 0.8416007763677477
+      },
+      {
+        "time": 7200.0,
+        "settlement": -0.0020712143780150663,
+        "p_top": -2661.758283684402,
+        "saturation_top": 0.7920156834415361
+      }
+    ],
+    "cases": [
+      {
+        "spacing_m": 0.05,
+        "mode": "PT",
+        "steps": 480,
+        "frames": [
+          {
+            "time": 300.0,
+            "pressure_error": 0.005753476683894621,
+            "settlement": -0.001785530551335041,
+            "settlement_ref": -0.0017899037326765327,
+            "settlement_error": 0.002443249467362296,
+            "p_min": -805.579060214317
+          },
+          {
+            "time": 1200.0,
+            "pressure_error": 0.003360091817912212,
+            "settlement": -0.0018844190651135656,
+            "settlement_ref": -0.0018855175924843968,
+            "settlement_error": 0.0005826131642631127,
+            "p_min": -1469.8790598732223
+          },
+          {
+            "time": 3600.0,
+            "pressure_error": 0.0021551457565487653,
+            "settlement": -0.001989932627799085,
+            "settlement_ref": -0.0019904700990222212,
+            "settlement_error": 0.0002700222542404429,
+            "p_min": -2138.137820596111
+          },
+          {
+            "time": 7200.0,
+            "pressure_error": 0.0015920458872410708,
+            "settlement": -0.0020709619723202296,
+            "settlement_ref": -0.0020712143780150663,
+            "settlement_error": 0.00012186362624544422,
+            "p_min": -2660.3297955354146
+          }
+        ],
+        "pressure_error": 0.005753476683894621,
+        "settlement_error": 0.002443249467362296,
+        "input_sha256": "8a4fa7a2c4d24c8846d00b5c289839e1c27afeb3dac685dc7e5b4e3d81a0f305"
+      },
+      {
+        "spacing_m": 0.025,
+        "mode": "PT",
+        "steps": 480,
+        "frames": [
+          {
+            "time": 300.0,
+            "pressure_error": 0.001661836935442265,
+            "settlement": -0.001785589501624907,
+            "settlement_ref": -0.0017899037326765327,
+            "settlement_error": 0.002410314573272898,
+            "p_min": -823.2639245591146
+          },
+          {
+            "time": 1200.0,
+            "pressure_error": 0.0008675276217199423,
+            "settlement": -0.001884502051944418,
+            "settlement_ref": -0.0018855175924843968,
+            "settlement_error": 0.0005386004055473181,
+            "p_min": -1479.3055360713472
+          },
+          {
+            "time": 3600.0,
+            "pressure_error": 0.0005567864938331749,
+            "settlement": -0.0019899927209039102,
+            "settlement_ref": -0.0019904700990222212,
+            "settlement_error": 0.00023983184602749397,
+            "p_min": -2142.187147330518
+          },
+          {
+            "time": 7200.0,
+            "pressure_error": 0.00041540112369149046,
+            "settlement": -0.0020709651608418474,
+            "settlement_ref": -0.0020712143780150663,
+            "settlement_error": 0.00012032418076290963,
+            "p_min": -2661.6898502711706
+          }
+        ],
+        "pressure_error": 0.001661836935442265,
+        "settlement_error": 0.002410314573272898,
+        "input_sha256": "7abeae7905345b1293233c7b22400c10d90deb93dc3f938ba9fcdc9d6a086a54"
+      },
+      {
+        "spacing_m": 0.0125,
+        "mode": "PT",
+        "steps": 480,
+        "frames": [
+          {
+            "time": 300.0,
+            "pressure_error": 0.0014244488443121116,
+            "settlement": -0.0017856493039161694,
+            "settlement_ref": -0.0017899037326765327,
+            "settlement_error": 0.0023769036751498662,
+            "p_min": -827.8015688670885
+          },
+          {
+            "time": 1200.0,
+            "pressure_error": 0.00023527395917690702,
+            "settlement": -0.0018845224806106394,
+            "settlement_ref": -0.0018855175924843968,
+            "settlement_error": 0.000527765891829346,
+            "p_min": -1481.3473196452182
+          },
+          {
+            "time": 3600.0,
+            "pressure_error": 0.0001551193831291446,
+            "settlement": -0.001989999301146102,
+            "settlement_ref": -0.0019904700990222212,
+            "settlement_error": 0.00023652597260837016,
+            "p_min": -2142.9063120557416
+          },
+          {
+            "time": 7200.0,
+            "pressure_error": 0.0001207384439912598,
+            "settlement": -0.002070955339779011,
+            "settlement_ref": -0.0020712143780150663,
+            "settlement_error": 0.00012506587382010714,
+            "p_min": -2661.776282283981
+          }
+        ],
+        "pressure_error": 0.0014244488443121116,
+        "settlement_error": 0.0023769036751498662,
+        "input_sha256": "35fbda82e6813d7acaa372243389ed3e32bf6b3533422614cb435450e114eac2"
+      }
+    ],
+    "refined": {
+      "spacing_m": 0.0125,
+      "mode": "PT",
+      "steps": 960,
+      "frames": [
+        {
+          "time": 300.0,
+          "pressure_error": 0.0007289644671352397,
+          "settlement": -0.0017878222467469054,
+          "settlement_ref": -0.0017899037326765327,
+          "settlement_error": 0.0011629038431664185,
+          "p_min": -829.1338240179224
+        },
+        {
+          "time": 1200.0,
+          "pressure_error": 0.00021223247754579728,
+          "settlement": -0.0018850211449893302,
+          "settlement_ref": -0.0018855175924843968,
+          "settlement_error": 0.00026329507454370127,
+          "p_min": -1481.574704341392
+        },
+        {
+          "time": 3600.0,
+          "pressure_error": 0.0001470637996964174,
+          "settlement": -0.0019902356346814076,
+          "settlement_ref": -0.0019904700990222212,
+          "settlement_error": 0.00011779345036577737,
+          "p_min": -2142.9855173490823
+        },
+        {
+          "time": 7200.0,
+          "pressure_error": 0.00011642687243208339,
+          "settlement": -0.002071087152958886,
+          "settlement_ref": -0.0020712143780150663,
+          "settlement_error": 6.142534424768975e-05,
+          "p_min": -2661.818634451976
+        }
+      ],
+      "pressure_error": 0.0007289644671352397,
+      "settlement_error": 0.0011629038431664185,
+      "input_sha256": "a41cebed6f88337d802c6e7a3ca1166051718f9717384601a6b82a5bb59807f9"
+    },
+    "explicit": [
+      {
+        "spacing_m": 0.05,
+        "mode": "explicit",
+        "steps": 0,
+        "frames": [
+          {
+            "time": 300.0,
+            "pressure_error": 0.005544567766380575,
+            "settlement": -0.0017900050899265375,
+            "settlement_ref": -0.0017899037326765327,
+            "settlement_error": 5.662720746046901e-05,
+            "p_min": -807.3487674246734
+          },
+          {
+            "time": 1200.0,
+            "pressure_error": 0.003329249710208235,
+            "settlement": -0.0018853845037058602,
+            "settlement_ref": -0.0018855175924843968,
+            "settlement_error": 7.058474504140211e-05,
+            "p_min": -1470.1538919011648
+          },
+          {
+            "time": 3600.0,
+            "pressure_error": 0.0021452078577952343,
+            "settlement": -0.001990391021292569,
+            "settlement_ref": -0.0019904700990222212,
+            "settlement_error": 3.9728167577579576e-05,
+            "p_min": -2138.2274914585105
+          },
+          {
+            "time": 7200.0,
+            "pressure_error": 0.0015867950605077013,
+            "settlement": -0.0020712191368804696,
+            "settlement_ref": -0.0020712143780150663,
+            "settlement_error": 2.2976208806646525e-06,
+            "p_min": -2660.376910455919
+          }
+        ],
+        "pressure_error": 0.005544567766380575,
+        "settlement_error": 7.058474504140211e-05,
+        "input_sha256": "3ff0b9e6232dcd35b5b537785fb5785ff5a1312f3646bb4cbc3d828d6876029d"
+      }
+    ],
+    "sanity_3d": null
+  }
+}

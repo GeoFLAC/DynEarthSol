@@ -1,0 +1,78 @@
+{
+  "problem": "Water is injected at a constant rate at a point. Pressure diffuses outward and the solid swells, changing the stress that a nearby fault would feel.",
+  "result": "Largest RMS errors once the front reaches the band ($t>40$ s): 1.45% in pressure, 2.11% in radial strain and 1.82% in hoop strain, over $2.5\\le r\\le8$ m.",
+  "scope": "3D octant of a 60 m box refined within 10 m, 0.5 m mesh, 48 PT steps to 240 s. RMS errors by mesh (pressure, radial, hoop): 1 m: 2.96%, 3.64%, 2.17%; 0.7 m: 2.13%, 2.91%, 2.09%; 0.5 m: 1.45%, 2.11%, 1.82%; pressure order 1.03. Doubling the steps to 96 at 0.7 m changes the pressure RMS error from 2.13% to 1.88%. At $t=20$ s the front has not reached the band and the pressure RMS error is 7.1% of the much smaller pressures there. (a) pressure; (b) strains; (c) mesh convergence.",
+  "meaning": "This checks two-way poroelastic coupling around a fluid source: the coupled diffusivity and the irrotational strain field that sets injection-induced stress on faults. It does not test the fault itself, frictional slip or the singular region next to the source.",
+  "metric": 0.014471503267584541,
+  "metric_label": "pressure RMS error",
+  "spacing_m": 0.5,
+  "evidence": {
+    "executable_sha256": "689d487c8db1d573bf4001cbb9127b3e28116eb2d706f3f7f6be0fe8a46bc10c",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "mesh_sequence": [
+      {
+        "spacing_m": 1.0,
+        "nodes": 1595,
+        "elements": 7239,
+        "pressure_error": 0.24063641041151462,
+        "pressure_rms": 0.029550224182847806,
+        "radial_rms": 0.03643912084091238,
+        "hoop_rms": 0.021682986421992744,
+        "input_sha256": "9bcd702759aceb8f76c80b998edb2e98148eda4ce4d1997d2252d322fb83a294",
+        "all_pressure_rms": 0.03451488572181801,
+        "all_radial_rms": 0.08056963027647204,
+        "all_hoop_rms": 0.03633385849396435,
+        "first_time": 20.0,
+        "first_pressure_rms": 0.03451488572181801
+      },
+      {
+        "spacing_m": 0.7,
+        "nodes": 4015,
+        "elements": 19710,
+        "pressure_error": 0.43127414273512055,
+        "pressure_rms": 0.021270245775946973,
+        "radial_rms": 0.02912635728395541,
+        "hoop_rms": 0.020932523569542335,
+        "input_sha256": "bce751b5b8c15a0d851b3682ba2108924d16966cf60946b0fd2d77428a463165",
+        "all_pressure_rms": 0.053392572532486464,
+        "all_radial_rms": 0.06917670847731669,
+        "all_hoop_rms": 0.04006886616769561,
+        "first_time": 20.0,
+        "first_pressure_rms": 0.053392572532486464
+      },
+      {
+        "spacing_m": 0.5,
+        "nodes": 9966,
+        "elements": 51396,
+        "pressure_error": 0.6225190713523867,
+        "pressure_rms": 0.014471503267584541,
+        "radial_rms": 0.021116600401175654,
+        "hoop_rms": 0.018194379166974473,
+        "input_sha256": "945ce8e0bce3df3edb2632438380da524254ea372849830c4af4ea7589588ce6",
+        "all_pressure_rms": 0.0710012681325201,
+        "all_radial_rms": 0.07016792609390013,
+        "all_hoop_rms": 0.04187713900566415,
+        "first_time": 20.0,
+        "first_pressure_rms": 0.0710012681325201
+      }
+    ],
+    "time_check": [
+      {
+        "spacing_m": 0.7,
+        "nodes": 4015,
+        "elements": 19710,
+        "pressure_error": 0.418507137921024,
+        "pressure_rms": 0.01882266227657622,
+        "radial_rms": 0.02406944178009609,
+        "hoop_rms": 0.014972855735874471,
+        "input_sha256": "80aaa98b4771a077682a790a7daf24699d65efed7dd3ba7e56710e284af9f65b",
+        "all_pressure_rms": 0.0394763287727161,
+        "all_radial_rms": 0.03869468314846925,
+        "all_hoop_rms": 0.0205484498427443,
+        "first_time": 20.0,
+        "first_pressure_rms": 0.0394763287727161,
+        "steps": 96
+      }
+    ]
+  }
+}

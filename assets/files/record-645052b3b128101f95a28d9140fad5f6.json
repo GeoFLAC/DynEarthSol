@@ -1,0 +1,64 @@
+{
+  "problem": "A pressurized cell sheared at yield sees its loading rate rise tenfold. Rate-and-state friction jumps by $a\\ln10$, then decays over the slip distance $D_c$ to the new steady state ($b>a$: velocity weakening).",
+  "result": "DES follows its exact discrete recursion to round-off at every step (state and friction identical, stress within 9e-16), so the state is updated once per physical time step, not once per PT iteration. Against the continuum solution the largest friction error after the step is 9.56e-04, 4.67e-04, 2.31e-04, 1.15e-04 for steps of 1, 0.5, 0.25, 0.125 s: first order, against a jump of 0.0230.",
+  "scope": "2D unit cell with every node prescribed, so equilibrium and mesh errors cannot enter; EP-RSF, aging law, $a=0.01$, $b=0.015$, $D_c=0.001$ m, slip rate $V=2w\\dot\\epsilon_{II}$ (total-strain-rate projection); confinement 1 MPa, pore pressure 0.8 MPa, cohesion 100 kPa. The rate step is a restart from the last checkpoint with the new boundary velocity, which also checks that the state variable survives restart. Not covered: slip-law evolution, the maximum-shear projection, stick-slip instability and coupling of friction to flow or dilation. (a) friction; (b) stress; (c) step convergence.",
+  "meaning": "This verifies the evolving rate-and-state friction of the effective-stress plasticity, which the strength page checks only at constant friction.",
+  "metric": 0.00011470241570066264,
+  "metric_label": "friction error",
+  "spacing_m": 1.0,
+  "evidence": {
+    "executable_sha256": "389e460d3fa6531ea6fa6d95fb7f7ab251c45cf61ba430fe510c44b13892910a",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "discrete_worst": 0.0,
+    "cases": [
+      {
+        "refine": 1.0,
+        "dt": 1.0,
+        "frames": 128,
+        "theta_vs_discrete": 0.0,
+        "mu_vs_discrete": 0.0,
+        "stress_vs_discrete": 9.261713857850112e-16,
+        "element_spread": 0.0,
+        "mu_vs_continuum": 0.0009564244240536368,
+        "mu_jump": 0.02302585092994046,
+        "mu_drop": -0.011512925464970227
+      },
+      {
+        "refine": 2.0,
+        "dt": 0.5,
+        "frames": 256,
+        "theta_vs_discrete": 0.0,
+        "mu_vs_discrete": 0.0,
+        "stress_vs_discrete": 9.258214319038356e-16,
+        "element_spread": 0.0,
+        "mu_vs_continuum": 0.00046691125872044825,
+        "mu_jump": 0.02302585092994046,
+        "mu_drop": -0.011512925464970227
+      },
+      {
+        "refine": 4.0,
+        "dt": 0.25,
+        "frames": 512,
+        "theta_vs_discrete": 0.0,
+        "mu_vs_discrete": 0.0,
+        "stress_vs_discrete": 9.256535616996662e-16,
+        "element_spread": 0.0,
+        "mu_vs_continuum": 0.0002307401766361572,
+        "mu_jump": 0.02302585092994046,
+        "mu_drop": -0.011512925464970227
+      },
+      {
+        "refine": 8.0,
+        "dt": 0.125,
+        "frames": 1024,
+        "theta_vs_discrete": 0.0,
+        "mu_vs_discrete": 0.0,
+        "stress_vs_discrete": 9.255712953775657e-16,
+        "element_spread": 0.0,
+        "mu_vs_continuum": 0.00011470241570066264,
+        "mu_jump": 0.02302585092994046,
+        "mu_drop": -0.011512925464970227
+      }
+    ]
+  }
+}

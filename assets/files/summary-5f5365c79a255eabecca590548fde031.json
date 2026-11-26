@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "steps": 1000,
+      "dt": 0.0001,
+      "pressure_error": 0.012769473372473361,
+      "physical_mass_defect_kg": -0.012530410300058747,
+      "numerical_buffer_kg": 0.012530410301758933
+    },
+    {
+      "steps": 2000,
+      "dt": 5e-05,
+      "pressure_error": 0.006384910330132443,
+      "physical_mass_defect_kg": -0.006265448648491656,
+      "numerical_buffer_kg": 0.006265448651161194
+    },
+    {
+      "steps": 4000,
+      "dt": 2.5e-05,
+      "pressure_error": 0.003192498575449121,
+      "physical_mass_defect_kg": -0.003132785200790522,
+      "numerical_buffer_kg": 0.003132785205664718
+    }
+  ],
+  "scope": "First-order fixed-stress splitting error; exact budget is M+R, not physical M alone"
+}

@@ -1,0 +1,49 @@
+{
+  "problem": "A well pumps a confined aquifer covered by a leaky aquitard. Water drawn down through the aquitard limits the drawdown, which approaches a steady cone.",
+  "result": "Largest drawdown error: 0.410% of $C_Q$, over $10\\le r\\le30$ m and eight times through pumping and recovery. Leakage changes the drawdown by up to 53% of $C_Q$ from Theis.",
+  "scope": "3D quarter box, 0.625 m mesh, aquitard one element thick, 160 steps of 2 s; $\\lambda=15$ m, vertical permeability 10 times horizontal. On meshes of 2.5, 1.25, 0.625 m the error falls with order 2.00. (a) radial profiles, with Theis dashed; (b) histories at two radii, Theis dashed; (c) mesh convergence.",
+  "meaning": "This checks a layered aquifer system: an aquitard of a second material leaking from a fixed-pressure top, with the well, storage and radial diffusion of the Theis case. On the finest mesh the aquitard stores 0.03% of the aquifer's water, close to the no-storage assumption. Mechanical pressure feedback is disabled in this flow-isolation test.",
+  "metric": 0.004102448013875131,
+  "metric_label": "drawdown error / C_Q",
+  "spacing_m": 0.625,
+  "evidence": {
+    "executable_sha256": "86a7309264db15a8b593a31bbd47ea03dcde88e8c44e5db4d8d9fe409739f626",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "mesh_order": 1.9964605642762807,
+    "cases": [
+      {
+        "spacing_m": 2.5,
+        "nodes": 2883,
+        "aquitard_storage_ratio": 0.0011816019293350657,
+        "aquitard_transmissivity_ratio": 0.0027777777777777775,
+        "max_error_over_scale": 0.06531788539316313,
+        "rms_error_over_scale": 0.013762758559101638,
+        "leakage_effect_over_scale": 0.5310974764262462,
+        "max_abs_strain": 2.43181796446982e-16,
+        "input_sha256": "4c7a674856d382fe4d78870da560f4b115707309ed63cf38e7bf2abaa035bf3d"
+      },
+      {
+        "spacing_m": 1.25,
+        "nodes": 14884,
+        "aquitard_storage_ratio": 0.0005908009646675329,
+        "aquitard_transmissivity_ratio": 0.0006944444444444444,
+        "max_error_over_scale": 0.014915811764863274,
+        "rms_error_over_scale": 0.002987594991744314,
+        "leakage_effect_over_scale": 0.5310974764262462,
+        "max_abs_strain": 1.3882984918433098e-15,
+        "input_sha256": "28aeddeac18a146ee326e6522156ae4756b7888be41330bd6913285e43fd5f8b"
+      },
+      {
+        "spacing_m": 0.625,
+        "nodes": 87846,
+        "aquitard_storage_ratio": 0.00029540048233376643,
+        "aquitard_transmissivity_ratio": 0.0001736111111111111,
+        "max_error_over_scale": 0.004102448013875131,
+        "rms_error_over_scale": 0.0007581659892968414,
+        "leakage_effect_over_scale": 0.5310974764262462,
+        "max_abs_strain": 7.035232574537827e-15,
+        "input_sha256": "f7dbbc1c78f70a76d1259a2280779356bf00b3f458320c3a06c218dd35a68202"
+      }
+    ]
+  }
+}

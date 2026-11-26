@@ -1,0 +1,10 @@
+{
+  "problem": "Steady groundwater carries heat from a hot inlet along a saturated column while conduction spreads the front.",
+  "result": "Largest temperature error: 1.306% of the imposed 1 K jump, over all nodes and five saved times; the pressure stays exactly steady.",
+  "scope": "3D, 0.003125 m mesh, 8192 steps to 0.47 s, with scaled coefficients that isolate transport. Mesh and time-step refinement studies and an exact-restart check also pass in 2D and 3D.",
+  "meaning": "This checks Darcy heat advection and the mixed solid–fluid heat capacity: the front moves at the bulk-capacity speed, not the pore-water velocity. It does not test enthalpy conservation with evolving storage.",
+  "metric": 0.013063864486045101,
+  "metric_label": "temperature error / imposed jump",
+  "spacing_m": 0.003125,
+  "evidence": "runs/private-des-integration-20261107/heat-qualification.json"
+}

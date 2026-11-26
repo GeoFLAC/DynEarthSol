@@ -1,0 +1,65 @@
+{
+  "problem": "Rigid frictionless plates squeeze a drained poroelastic strip. The edges drain first, load shifts to the undrained core, and the centre pressure rises before it decays.",
+  "result": "Largest pressure error: 0.83% of $p_0$, over all nodes and times; largest relative settlement error: 0.11%. Sampled centre peak: DES $1.1257\\,p_0$, analytical $1.1265\\,p_0$.",
+  "scope": "2D, 0.05 m mesh, 800 PT steps over $a^2/c$. Halving the time step reduces the error with order 1.36; at 200 steps, meshes of 0.1, 0.05, 0.025 m give 5.85%, 4.71%, 4.90%, so the time step dominates. (a) pressure histories; (b) profiles; (c) time-step convergence.",
+  "meaning": "This checks two-way poroelastic coupling under a sudden load, the non-monotonic Mandel–Cryer pressure and the rigid-platen boundary. It does not test large strain or plasticity.",
+  "metric": 0.008318253044576614,
+  "metric_label": "pressure error / p0",
+  "spacing_m": 0.05,
+  "evidence": {
+    "executable_sha256": "3ef685492423f26f7e82005120a671951c2639f964da0308f75917c047ad33ca",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "time_order": 1.3586420975969349,
+    "time_sequence": [
+      {
+        "steps": 100,
+        "pressure": 0.13602235906358692,
+        "settlement": 0.022604498959252036
+      },
+      {
+        "steps": 200,
+        "pressure": 0.047067004764515155,
+        "settlement": 0.008721236146924103
+      },
+      {
+        "steps": 400,
+        "pressure": 0.016731344411814238,
+        "settlement": 0.0036967849244092647
+      },
+      {
+        "steps": 800,
+        "pressure": 0.008318253044576614,
+        "settlement": 0.0011276884736363597
+      }
+    ],
+    "mesh_sequence": [
+      {
+        "spacing_m": 0.1,
+        "max_error_over_p0": 0.05845456947293403,
+        "max_settlement_error": 0.004592257074247611,
+        "max_platen_vz_spread": 0.0,
+        "centre_peak_des_over_p0": 1.123194980306649,
+        "centre_peak_ref_over_p0": 1.1264618515269482,
+        "input_sha256": "063ffb667a69cb2989c35d99bb1b59fbfa267b2ae68221dfe5369f53e76a3cd7"
+      },
+      {
+        "spacing_m": 0.05,
+        "max_error_over_p0": 0.047067004764515155,
+        "max_settlement_error": 0.008721236146924103,
+        "max_platen_vz_spread": 0.0,
+        "centre_peak_des_over_p0": 1.1261348793261898,
+        "centre_peak_ref_over_p0": 1.1264618515269482,
+        "input_sha256": "4f598f2be518ae00b808ad8f767c9a571148922f0d26d86063ae0b1aefd4e118"
+      },
+      {
+        "spacing_m": 0.025,
+        "max_error_over_p0": 0.04900052147793631,
+        "max_settlement_error": 0.009857608884303651,
+        "max_platen_vz_spread": 0.0,
+        "centre_peak_des_over_p0": 1.126990701350834,
+        "centre_peak_ref_over_p0": 1.1264618515269482,
+        "input_sha256": "383d8a1eeebd2fcc47eaa7cbf7106337fc91c0384012cbd9c5ee0ee581f1f7c8"
+      }
+    ]
+  }
+}

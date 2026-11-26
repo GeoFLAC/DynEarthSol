@@ -1,0 +1,53 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "kind": "drained",
+      "steps": 100,
+      "reference_error": 0.0008446865364817313,
+      "exact_restart_payloads": 4250
+    },
+    {
+      "kind": "drained",
+      "steps": 200,
+      "reference_error": 0.00042234696888954204,
+      "exact_restart_payloads": 8500
+    },
+    {
+      "kind": "sealed",
+      "steps": 100,
+      "reference_error": 7.327116691158153e-11,
+      "exact_restart_payloads": 4250
+    },
+    {
+      "kind": "sealed",
+      "steps": 200,
+      "reference_error": 4.0472514228895307e-11,
+      "exact_restart_payloads": 8500
+    },
+    {
+      "kind": "mixing",
+      "steps": 100,
+      "reference_error": 0.0011079114269705315,
+      "exact_restart_payloads": 4250
+    },
+    {
+      "kind": "mixing",
+      "steps": 200,
+      "reference_error": 0.0005540796440186568,
+      "exact_restart_payloads": 8500
+    },
+    {
+      "kind": "expanding-mixing",
+      "steps": 100,
+      "reference_error": 0.0010907050678383712,
+      "exact_restart_payloads": 4250
+    },
+    {
+      "kind": "expanding-mixing",
+      "steps": 200,
+      "reference_error": 0.0005454737871559701,
+      "exact_restart_payloads": 8500
+    }
+  ]
+}

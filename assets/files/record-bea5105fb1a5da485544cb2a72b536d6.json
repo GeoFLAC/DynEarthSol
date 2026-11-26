@@ -1,0 +1,60 @@
+{
+  "problem": "A 2 m soil layer on 20° bedrock is loaded by its own weight and then by pore pressure rising from the bedrock. Plastic flow starts at the base and spreads along it, and the basal slip accelerates as the pressure rises.",
+  "result": "Basal yield starts at 13.9 kPa on the 0.125 m mesh (pointwise estimate 14.1 kPa). The slip then grows along one curve on every mesh and step count: the basal plastic strain reaches 0.001 at 16.42–16.54 kPa, at Davis's non-associated estimate (16.5 kPa), and PT stops finding an equilibrium at 17.3–18.6 kPa, below the classical factor of safety (20.8 kPa).",
+  "scope": "2D plane strain, 40 m long with 4 m strong ends (they keep the corners elastic), Mohr–Coulomb $c=2$ kPa, $\\phi=35^\\circ$, no dilation, $K=50$ MPa, $G=5.17$ MPa ($\\nu=0.45$), saturated; gravity applied as a load by restart from an unstressed checkpoint; base pressure ramped over 2000 s, quasi-steady seepage. Meshes 0.5, 0.25, 0.125 m at 404 steps and 0.25 m at 808 steps: onset 12.94, 13.56, 13.87 kPa (first order toward the estimate); pressure at basal plastic strain 0.001: 16.47, 16.54, 16.42, 16.51 kPa; at 0.002: 17.22, 17.19, 16.95, 17.16 kPa; last PT equilibrium: 18.08, 18.00, 17.30, 18.55 kPa. The slip curve converges; the last PT equilibrium does not (it rises with the step count and falls on the finest mesh), so it marks where the accelerating slip outruns PT, not a collapse pressure. There is no sharp limit load, probably because the strong ends buttress the layer. (a) plastic strain; (b) basal slip; (c) pressure at fixed slip.",
+  "meaning": "Onset agrees with the poroelastic infinite-slope estimate. Slip develops through Davis’s non-associated estimate and accelerates well before the classical factor of safety, as zero-dilation flow predicts: limit-equilibrium design values overestimate the stability of such a slope. The rainfall page applies the same slope to infiltration.",
+  "metric": 0.00712084355797721,
+  "metric_label": "spread of u at plastic strain 0.001",
+  "spacing_m": 0.125,
+  "evidence": {
+    "executable_sha256": "d26cc84f43d8a0cbd06017160e47add950f012ff885db1c8ecbbd46b79b262ff",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "u_point": 14104.804527089145,
+    "u_davis": 16499.951293560047,
+    "u_star": 20784.50983547512,
+    "k0": 0.8182563862198267,
+    "onset": [
+      12938.35737258326,
+      13561.892667647515,
+      13873.660315179644
+    ],
+    "runs": [
+      {
+        "spacing_m": 0.5,
+        "steps": 404
+      },
+      {
+        "spacing_m": 0.25,
+        "steps": 404
+      },
+      {
+        "spacing_m": 0.125,
+        "steps": 404
+      },
+      {
+        "spacing_m": 0.25,
+        "steps": 808
+      }
+    ],
+    "level": {
+      "0.001": [
+        16465.28498723017,
+        16540.516019560866,
+        16423.13188368159,
+        16509.39867013202
+      ],
+      "0.002": [
+        17216.69127688324,
+        17193.227145482368,
+        16950.829690298564,
+        17164.708053707167
+      ]
+    },
+    "last_equilibrium": [
+      18082.523556863358,
+      18004.581644980324,
+      17303.10443803304,
+      18550.175028161542
+    ]
+  }
+}

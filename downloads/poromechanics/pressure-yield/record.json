@@ -1,0 +1,100 @@
+{
+  "problem": "Rising pore pressure lowers the effective stress until the ground yields, the mechanism of injection- and rainfall-induced failure. In a laterally confined layer the yield pressure at each depth is exact, so a yield front moving down can be compared element by element.",
+  "result": "On the 0.025 m mesh with 6400 steps every element yields within 0.23% (mean 0.15%) of its exact pressure, and 96 of 160 elements yield, as predicted. DES always yields slightly late; the delay falls with both the step and the mesh.",
+  "scope": "2D plane strain, uniaxial strain, elastic–perfectly plastic Mohr–Coulomb without dilation, fully saturated. Before yield the DES effective stresses follow the exact path within 0.05%, so the remaining error is the onset itself: it is read at the first saved step with plastic strain (up to one load increment late) and carries the one-step lag of the sequential coupling; both shrink with the step, and a spatial part with the mesh. Mean errors: 0.2 m, 400 steps: 1.25%; 0.1 m, 400 steps: 0.90%; 0.05 m, 400 steps: 0.70%; 0.05 m, 1600 steps: 0.35%; 0.05 m, 6400 steps: 0.28%; 0.025 m, 1600 steps: 0.23%; 0.025 m, 6400 steps: 0.15%. With PT option 1 instead of 0 (0.05 m, 1600 steps) the mean error is 0.351% against 0.354%. 3D: the first elements yield within 0.33%, but PT then stalls on the Mohr–Coulomb edge of equal horizontal stresses; queued for a larger machine. (a) yield front; (b) stress paths; (c) error.",
+  "meaning": "This checks effective-stress plasticity in a boundary-value problem driven by pore pressure: the Biot coefficient in the effective stress, the Mohr–Coulomb return and the pressure coupling together.",
+  "metric": 0.0023243185730693994,
+  "metric_label": "yield-pressure error",
+  "spacing_m": 0.025,
+  "evidence": {
+    "executable_sha256": "464d02daa7ffc3594f86a751118c05561bc257764ead83a2046a4c640f0a3bfe",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "dp_max": 45101.03548481891,
+    "runs": [
+      {
+        "steps": 400,
+        "spacing_m": 0.2,
+        "elements": 20,
+        "yielded": 11,
+        "max_error": 0.01977096587070653,
+        "mean_error": 0.012474872972249189,
+        "max_increment": 0.0030308694411720323,
+        "onset_top_des": 37319.469038315816,
+        "onset_top_ref": 37200.20246556373,
+        "input_sha256": "5b7f3dbb3a0b5aa63889426483c07bfc3ea74564173bfea9d2720ef3c7bbacce"
+      },
+      {
+        "steps": 400,
+        "spacing_m": 0.1,
+        "elements": 40,
+        "yielded": 23,
+        "max_error": 0.013250435527249214,
+        "mean_error": 0.009018950693336202,
+        "max_increment": 0.003049787260421486,
+        "onset_top_des": 37094.76359000848,
+        "onset_top_ref": 36970.08467291493,
+        "input_sha256": "06682f7f5ef4b839e17b3a123e0d1d7ee7360bf93b904158af120ce47392129b"
+      },
+      {
+        "steps": 400,
+        "spacing_m": 0.05,
+        "elements": 80,
+        "yielded": 47,
+        "max_error": 0.00926582353500643,
+        "mean_error": 0.006990185543547251,
+        "max_increment": 0.00305934029661001,
+        "onset_top_des": 36982.425547923674,
+        "onset_top_ref": 36855.02577659052,
+        "input_sha256": "23f3b27adb247fa5b1971491d83fd1c1f83dfce91748dbddfd0e89ae5b6fce4a"
+      },
+      {
+        "steps": 1600,
+        "spacing_m": 0.05,
+        "elements": 80,
+        "yielded": 48,
+        "max_error": 0.005594725420224271,
+        "mean_error": 0.0035433722206761075,
+        "max_increment": 0.0007647829335761329,
+        "onset_top_des": 36897.85957716321,
+        "onset_top_ref": 36855.02577659052,
+        "input_sha256": "7470a939c3bc2e2bc13bc65e95557d7120e9f29f3a25ac66c5eed5100bff3fa3"
+      },
+      {
+        "steps": 6400,
+        "spacing_m": 0.05,
+        "elements": 80,
+        "yielded": 48,
+        "max_error": 0.004299243391359775,
+        "mean_error": 0.0028429959886525427,
+        "max_increment": 0.00019120199350597245,
+        "onset_top_des": 36862.62616324306,
+        "onset_top_ref": 36855.02577659052,
+        "input_sha256": "eb00a1e9a15a677230b394c5954a71ceee52c66928a7c2e65f3c1da0fe51c492"
+      },
+      {
+        "steps": 1600,
+        "spacing_m": 0.025,
+        "elements": 160,
+        "yielded": 96,
+        "max_error": 0.0033718915032813594,
+        "mean_error": 0.0022730287859277277,
+        "max_increment": 0.0007660189536170936,
+        "onset_top_des": 36841.69507441042,
+        "onset_top_ref": 36797.49632842832,
+        "input_sha256": "713f49b43563532cb85ab7f0f068ac06621e98e09144677b87c626e10a81c325"
+      },
+      {
+        "steps": 6400,
+        "spacing_m": 0.025,
+        "elements": 160,
+        "yielded": 96,
+        "max_error": 0.0023243185730693994,
+        "mean_error": 0.0015307513023197176,
+        "max_increment": 0.00019150137533640552,
+        "onset_top_des": 36806.46019234538,
+        "onset_top_ref": 36797.49632842832,
+        "input_sha256": "770a69115f734aabfca8c606e45d2728522b03704f28a80a74566be94dc41fee"
+      }
+    ]
+  }
+}

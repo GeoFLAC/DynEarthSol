@@ -1,0 +1,21 @@
+{
+  "problem": "A sealed saturated cell is compressed at a prescribed rate. The fluid EOS and evolving Biot porosity give an independent pressure and physical water inventory.",
+  "result": "The finest step gives 0.319% pressure error. Halving the step halves both the pressure error and physical mass defect; the separate mass-plus-buffer budget closes within 2 micrograms.",
+  "scope": "2D unit cell, 0.01/s logarithmic compression to 0.1 s, 4,000 physical steps. (a) DES and the implicit sealed-cell solution; (b) physical mass defect and negative numerical buffer. The temporal table retains 1,000 and 2,000 steps.",
+  "meaning": "The stabilised split conserves M+R. R is a numerical lag, contributes no density or heat capacity, and must not be described as physical water. Native/HDF5, 3D, restart, remap, source and transport controls are supporting evidence.",
+  "metric": 0.003192498575449121,
+  "metric_label": "sealed pressure error",
+  "spacing_m": 1.0,
+  "evidence": {
+    "qualification": "runs/finite-content-20261110/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "2d-native/mass/lag/4000",
+    "selected_metrics": {
+      "steps": 4000,
+      "dt": 2.5e-05,
+      "pressure_error": 0.003192498575449121,
+      "physical_mass_defect_kg": -0.003132785200790522,
+      "numerical_buffer_kg": 0.003132785205664718
+    }
+  }
+}

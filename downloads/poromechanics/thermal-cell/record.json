@@ -1,0 +1,40 @@
+{
+  "problem": "Uniform supplied heat warms a rigid, sealed porous material. The temperature rise and fluid expansion give independent heat and pressure references.",
+  "result": "The 10 K pulse gives 154.799 kPa. Sealed pressure and fixed-capacity heat match their references to round-off; general open-system energy remains unqualified.",
+  "scope": "Selected ordinary-explicit 2D unit cell; 40 K/s for 0.25 s, then a hold to 1 s. Solid thermal expansion is zero. (a) sealed pressure against temperature; (b) stored and supplied heat. PT lag and the drained energy control are retained in the tables.",
+  "meaning": "Thirty-one cases cover 2D/3D, native/HDF5 and timestep controls; eight thermal restarts are exact. PT has a first-order pending-pressure lag during heating. The drained retained-fluid ledger has a persistent 10,450 J deficit (0.03446% of supplied heat), so the sealed comparison does not qualify thermal-plume energy.",
+  "metric": 5.687747430133111e-14,
+  "metric_label": "sealed reference error / reference scale",
+  "spacing_m": 0.5,
+  "evidence": {
+    "qualification": "runs/thermal-cell-20261108/qualification.json",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "selected": "native2d/explicit-fixed",
+    "selected_metrics": {
+      "method": "explicit",
+      "boundary": "fixed",
+      "dimension": 2,
+      "frames": 101,
+      "nodes": 9,
+      "maximum_errors": {
+        "temperature": 5.684341886080802e-14,
+        "heat": 5.687747430133111e-14,
+        "water": 4.3368086899420177e-16,
+        "pressure_discrete_reference": 5.677924491465091e-14,
+        "stress": 7.520429790019988e-16
+      },
+      "final_pressure_Pa": 154798.76160989839,
+      "final_pressure_error_over_reference": 5.6621374255882984e-14,
+      "heating_pressure_error_at_point2_s": 5.67323965583455e-14,
+      "fixed_capacity_heat_error": 5.687747430133111e-14,
+      "retained_enthalpy_residual_J": null,
+      "retained_enthalpy_relative_error": null,
+      "drained_defect_reference_J": null,
+      "full_open_energy_qualified": false
+    },
+    "cases": 31,
+    "saved_frames": 5431,
+    "full_open_energy_qualified": false,
+    "exact_restart_payloads": 5560
+  }
+}

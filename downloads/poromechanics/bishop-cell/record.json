@@ -1,0 +1,361 @@
+{
+  "problem": "A sealed, partly saturated soil cell is compressed slowly. Without drainage, the pore pressure follows the strain through the Bishop rate equation; the stabilised fixed-stress coupling used with the PT solver must recover it as the step shrinks, also where the Bishop pressure Se p decreases with suction.",
+  "result": "Largest pressure error at 320 steps: 1.43% (moderate suction) and 0.64% (strong suction) in 2D; the error halves with each halving of the step. Without the Bishop correction of the fixed-stress source the error stayed at 78.89% and 67.62%.",
+  "scope": "Uniaxial compression to a vertical strain of $--1\\times10^{-3}$ over 1000 s, K = G = 10 kPa, Gardner law; 2D and 3D, 10 to 320 PT steps; 3D at 160 steps: 3.82% and 1.71%. The explicit strain form is exact to 3e-09. A restart halfway reproduces the uninterrupted run exactly; a restart with a quarter of the step stays on the exact path. (a, b) pressure along the strain path; (c) step convergence.",
+  "meaning": "This checks the transient Bishop coupling of the PT scheme: the fixed-stress source corrected by $L(\\chi E-D)$, with the increments the mechanics consumed. It does not test flow, which the column checks cover, or large strain.",
+  "metric": 0.006419686829962262,
+  "metric_label": "pressure error / change",
+  "spacing_m": 0.5,
+  "evidence": {
+    "executable_sha256": "6b19b29b4486d57f25ce35300c94aa47319af84efbdb4cdd6e202a64d858c869",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "cases_2d": [
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.3943689563138899,
+        "final_strain": -0.001,
+        "final_pressure": -4977.569407035511,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.2245482564310721,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -4971.279803760171,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.11445790316698891,
+        "final_strain": -0.0010000000000000005,
+        "final_pressure": -4967.2024171580015,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.05725989084696714,
+        "final_strain": -0.0009999999999999992,
+        "final_pressure": -4965.083989864514,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.028632459251920452,
+        "final_strain": -0.0010000000000000005,
+        "final_pressure": -4964.02372343263,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 320,
+        "max_error_over_change": 0.014316857289732908,
+        "final_strain": -0.000999999999999998,
+        "final_pressure": -4963.493520359318,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "explicit",
+        "steps": 0,
+        "max_error_over_change": 2.550368799178098e-09,
+        "final_strain": -0.0010000007691127293,
+        "final_pressure": -4962.963242401816,
+        "final_ref": -4962.963242307359
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.2014015567031243,
+        "final_strain": -0.001,
+        "final_pressure": -1997.042239005284,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.1026339024388073,
+        "final_strain": -0.001,
+        "final_pressure": -1996.6764342409815,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.05134698746866291,
+        "final_strain": -0.0010000000000000002,
+        "final_pressure": -1996.4864834116113,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.025676496757265257,
+        "final_strain": -0.001,
+        "final_pressure": -1996.3914078742387,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.012838998532794485,
+        "final_strain": -0.0010000000000000005,
+        "final_pressure": -1996.343861761625,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 320,
+        "max_error_over_change": 0.006419686829962262,
+        "final_strain": -0.0010000000000000018,
+        "final_pressure": -1996.320086621657,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "explicit",
+        "steps": 0,
+        "max_error_over_change": 1.8748220034944677e-09,
+        "final_strain": -0.0010000007692302377,
+        "final_pressure": -1996.2963072502882,
+        "final_ref": -1996.2963072433445
+      }
+    ],
+    "cases_3d": [
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.4765622296206457,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -4980.613577041629,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.2905543626979917,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -4973.7244540440015,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.15229019431437274,
+        "final_strain": -0.0010000000000000002,
+        "final_pressure": -4968.603601480516,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.0763357192088776,
+        "final_strain": -0.0009999999999999996,
+        "final_pressure": -4965.790496153957,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.03817208039990331,
+        "final_strain": -0.0009999999999999996,
+        "final_pressure": -4964.377039797827,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.26150697691183045,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -1997.264850843507,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.13658732994099598,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -1996.802187207752,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.06844480247896781,
+        "final_strain": -0.0010000000000000002,
+        "final_pressure": -1996.549808416508,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.03422707175042834,
+        "final_strain": -0.0009999999999999992,
+        "final_pressure": -1996.4230765525456,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.017114671353110837,
+        "final_strain": -0.0009999999999999996,
+        "final_pressure": -1996.359697527898,
+        "final_ref": -1996.2963100923346
+      }
+    ],
+    "before": [
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.7925667450460715,
+        "final_strain": -0.001,
+        "final_pressure": -4992.317350707699,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.7906775102333088,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -4992.24737962953,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.7897325785051683,
+        "final_strain": -0.0010000000000000002,
+        "final_pressure": -4992.212382448995,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.789260034027946,
+        "final_strain": -0.0009999999999999992,
+        "final_pressure": -4992.194880947154,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.7890237421314393,
+        "final_strain": -0.0010000000000000005,
+        "final_pressure": -4992.186129468169,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "moderate",
+        "mode": "PT",
+        "steps": 320,
+        "max_error_over_change": 0.788905591268436,
+        "final_strain": -0.0009999999999999992,
+        "final_pressure": -4992.181753546651,
+        "final_ref": -4962.963270792779
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 10,
+        "max_error_over_change": 0.6758820471204969,
+        "final_strain": -0.0009999999999999998,
+        "final_pressure": -1998.799567609027,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 20,
+        "max_error_over_change": 0.6760695562313466,
+        "final_strain": -0.001,
+        "final_pressure": -1998.8002620846285,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 40,
+        "max_error_over_change": 0.6761633264106889,
+        "final_strain": -0.001,
+        "final_pressure": -1998.8006093802953,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 80,
+        "max_error_over_change": 0.6762102154069227,
+        "final_strain": -0.0009999999999999996,
+        "final_pressure": -1998.8007830425975,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 160,
+        "max_error_over_change": 0.6762336608814653,
+        "final_strain": -0.0010000000000000002,
+        "final_pressure": -1998.800869877365,
+        "final_ref": -1996.2963100923346
+      },
+      {
+        "state": "strong",
+        "mode": "PT",
+        "steps": 320,
+        "max_error_over_change": 0.6762453838629505,
+        "final_strain": -0.001,
+        "final_pressure": -1998.8009132956531,
+        "final_ref": -1996.2963100923346
+      }
+    ],
+    "restart": {
+      "moderate": {
+        "same_step_identical_payloads": 37,
+        "same_step_different_payloads": 0,
+        "fresh_time": 1000.0,
+        "fresh_error_over_change": 0.11445790316698891,
+        "finer_time": 937.5,
+        "finer_error_over_change": 0.031014288984039462
+      },
+      "strong": {
+        "same_step_identical_payloads": 37,
+        "same_step_different_payloads": 0,
+        "fresh_time": 1000.0,
+        "fresh_error_over_change": 0.05134698746866291,
+        "finer_time": 937.5,
+        "finer_error_over_change": 0.013824456798463284
+      }
+    }
+  }
+}

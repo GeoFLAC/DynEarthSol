@@ -1,0 +1,52 @@
+{
+  "problem": "A porous cell deforms at a prescribed pure-shear rate. Plastic work in aging rate-and-state plasticity heats the cell and expands the sealed fluid.",
+  "result": "At Δt = 0.0002 s, temperature and pressure differ from the continuum reference by at most 0.124% and 0.161% of their final reference rises. Both errors converge at first order. Heat plus pending energy matches accepted plastic work to round-off.",
+  "scope": "Prescribed spin-free deformation, fixed mesh and heat capacity, unit heat fraction, no heat loss or fluid flux. Constant effective confinement: total normal stress reacts to pore pressure. This does not test thermal fault weakening at fixed total normal traction, a propagating rupture, or a complete earthquake cycle.",
+  "meaning": "This checks plastic earthquake heating, including evolving EP-RSF strength, without introducing inertia or a rupture-front error. The plotted temperature and pressure are the physical fields; the pending numerical reservoirs are accounted for separately.",
+  "metric": 0.0016074335431204478,
+  "metric_label": "pressure error",
+  "spacing_m": 1.0,
+  "evidence": {
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "build": "build.json",
+    "qualification": "qualification.json",
+    "convergence": [
+      {
+        "steps": 250,
+        "dt": 0.0008,
+        "temperature_max_relative": 0.0049926810317744855,
+        "pressure_max_relative": 0.006445404727858557,
+        "stress_max_relative": 0.0011843970176579506,
+        "temperature_final": 1.3739383115192823,
+        "temperature_reference_final": 1.3808323670864953,
+        "pressure_final": 566276.014251867,
+        "pressure_reference_final": 569949.5699043695,
+        "fluid_budget_max_m3": 3.034760231334548e-20
+      },
+      {
+        "steps": 500,
+        "dt": 0.0004,
+        "temperature_max_relative": 0.002491243121874747,
+        "pressure_max_relative": 0.0032176062244860843,
+        "stress_max_relative": 0.0005849777207157431,
+        "temperature_final": 1.3773923779495476,
+        "temperature_reference_final": 1.380832367086514,
+        "pressure_final": 568115.6966206097,
+        "pressure_reference_final": 569949.5699043772,
+        "fluid_budget_max_m3": 6.168120391685417e-20
+      },
+      {
+        "steps": 1000,
+        "dt": 0.0002,
+        "temperature_max_relative": 0.0012442516522223434,
+        "pressure_max_relative": 0.0016074335431204478,
+        "stress_max_relative": 0.00029075175076742784,
+        "temperature_final": 1.3791142641323404,
+        "temperature_reference_final": 1.38083236708653,
+        "pressure_final": 569033.4138478325,
+        "pressure_reference_final": 569949.5699043839,
+        "fluid_budget_max_m3": 4.296706973845447e-20
+      }
+    ]
+  }
+}

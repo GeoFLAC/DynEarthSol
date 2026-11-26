@@ -1,0 +1,231 @@
+{
+  "problem": "The standard slope-stability problem of geotechnical practice: how far can the strength of a homogeneous embankment be reduced before it slides? Strength reduction answers it with a deforming model that finds its own mechanism; limit-equilibrium methods of slices answer it on a trial slip circle.",
+  "result": "On the 0.25 m mesh the slope comes to rest at F = 1.35 and keeps sliding at F = 1.36: FS = 1.355 ± 0.005, against 1.369 from Bishop’s simplified method (-1.0%). The midpoints fall by 0.020 and 0.010 as the mesh halves, toward about 1.345 (-1.7%), slightly below a circular mechanism as expected. The mechanism passes through the toe, as Bishop’s critical circle does.",
+  "scope": "2D plane strain, dry, $c=10$ kPa, $\\phi=20^\\circ$, $\\psi=0$, $E=100$ MPa, $\\nu=0.3$. Gravity by two elastic PT steps; each trial then runs explicitly (no PT) for 2000 s of mass-scaled time (inertial scaling $10^{5}$, DES's default damping 0.8) on the fixed original mesh; it is coming to rest when its peak speed over the last frames is below that three quarters through the run, and sliding otherwise. Brackets by mesh: 1 m: 1.38–1.39; 0.5 m: 1.36–1.37; 0.25 m: 1.35–1.36. Displacement at rest on the finest mesh: F = 1: 4.5 mm, F = 1.2: 7.5 mm, F = 1.3: 9.7 mm, F = 1.33: 11.6 mm, F = 1.34: 12.6 mm, F = 1.35: 50.9 mm. Bishop's circle: centre (23.4, 12.6) m, radius 22.9 m; converged in the number of slices. Under elastic gravity ($K_0=0.43$) the deep foundation yields slightly at $F=1$; it does not take part in the mechanism. (a) mechanism; (b) displacement in time; (c) displacement by $F$.",
+  "meaning": "This checks Mohr–Coulomb plasticity and explicit quasi-static equilibrium in the problem slope engineers solve every day: the mechanism is found, not assumed, and its factor of safety agrees with limit equilibrium. The hydromechanical slope cases build on it.",
+  "metric": 0.009949941676259288,
+  "metric_label": "FS vs Bishop",
+  "spacing_m": 0.25,
+  "evidence": {
+    "executable_sha256": "d26cc84f43d8a0cbd06017160e47add950f012ff885db1c8ecbbd46b79b262ff",
+    "reproduction_revision": "3774df00ba1708a4f70a836d2073f845653aac64",
+    "fs_bishop": 1.3686176659533338,
+    "circle": [
+      23.414173307461724,
+      12.637358609619668,
+      22.89337424283901
+    ],
+    "brackets": [
+      [
+        1.38,
+        1.39
+      ],
+      [
+        1.36,
+        1.37
+      ],
+      [
+        1.35,
+        1.36
+      ]
+    ],
+    "extrapolated": 1.3449999999999989,
+    "cases": [
+      {
+        "spacing_m": 1.0,
+        "trials": [
+          {
+            "factor": 1.0,
+            "at_rest": true,
+            "max_displacement": 0.0032589395460987953
+          },
+          {
+            "factor": 1.2,
+            "at_rest": true,
+            "max_displacement": 0.007446222650621911
+          },
+          {
+            "factor": 1.3,
+            "at_rest": true,
+            "max_displacement": 0.01000580368625488
+          },
+          {
+            "factor": 1.33,
+            "at_rest": true,
+            "max_displacement": 0.011282074836281217
+          },
+          {
+            "factor": 1.34,
+            "at_rest": true,
+            "max_displacement": 0.011887288211709835
+          },
+          {
+            "factor": 1.35,
+            "at_rest": true,
+            "max_displacement": 0.012664222100081992
+          },
+          {
+            "factor": 1.36,
+            "at_rest": true,
+            "max_displacement": 0.013593835600174655
+          },
+          {
+            "factor": 1.37,
+            "at_rest": true,
+            "max_displacement": 0.014913297501052636
+          },
+          {
+            "factor": 1.38,
+            "at_rest": true,
+            "max_displacement": 0.020642895129130093
+          },
+          {
+            "factor": 1.39,
+            "at_rest": false,
+            "max_displacement": 0.15764954181159568
+          },
+          {
+            "factor": 1.4,
+            "at_rest": false,
+            "max_displacement": 0.42208607374145374
+          },
+          {
+            "factor": 1.45,
+            "at_rest": false,
+            "max_displacement": 1.8891991962851946
+          }
+        ]
+      },
+      {
+        "spacing_m": 0.5,
+        "trials": [
+          {
+            "factor": 1.0,
+            "at_rest": true,
+            "max_displacement": 0.0033209128199766604
+          },
+          {
+            "factor": 1.2,
+            "at_rest": true,
+            "max_displacement": 0.00734529015453544
+          },
+          {
+            "factor": 1.3,
+            "at_rest": true,
+            "max_displacement": 0.01012117764321855
+          },
+          {
+            "factor": 1.33,
+            "at_rest": true,
+            "max_displacement": 0.011597567724558252
+          },
+          {
+            "factor": 1.34,
+            "at_rest": true,
+            "max_displacement": 0.01232119463385357
+          },
+          {
+            "factor": 1.35,
+            "at_rest": true,
+            "max_displacement": 0.013452166844728419
+          },
+          {
+            "factor": 1.36,
+            "at_rest": true,
+            "max_displacement": 0.021588753162864394
+          },
+          {
+            "factor": 1.37,
+            "at_rest": false,
+            "max_displacement": 0.17171356821548409
+          },
+          {
+            "factor": 1.38,
+            "at_rest": false,
+            "max_displacement": 0.40189615151498337
+          },
+          {
+            "factor": 1.39,
+            "at_rest": false,
+            "max_displacement": 0.6813237108383974
+          },
+          {
+            "factor": 1.4,
+            "at_rest": false,
+            "max_displacement": 0.9743654758866201
+          },
+          {
+            "factor": 1.45,
+            "at_rest": false,
+            "max_displacement": 2.3933813955260876
+          }
+        ]
+      },
+      {
+        "spacing_m": 0.25,
+        "trials": [
+          {
+            "factor": 1.0,
+            "at_rest": true,
+            "max_displacement": 0.004493080973151074
+          },
+          {
+            "factor": 1.2,
+            "at_rest": true,
+            "max_displacement": 0.007468495037361396
+          },
+          {
+            "factor": 1.3,
+            "at_rest": true,
+            "max_displacement": 0.009732122334088315
+          },
+          {
+            "factor": 1.33,
+            "at_rest": true,
+            "max_displacement": 0.011593351837626482
+          },
+          {
+            "factor": 1.34,
+            "at_rest": true,
+            "max_displacement": 0.01259360096100869
+          },
+          {
+            "factor": 1.35,
+            "at_rest": true,
+            "max_displacement": 0.050901294146482645
+          },
+          {
+            "factor": 1.36,
+            "at_rest": false,
+            "max_displacement": 0.2579708276747335
+          },
+          {
+            "factor": 1.37,
+            "at_rest": false,
+            "max_displacement": 0.4701444909564074
+          },
+          {
+            "factor": 1.38,
+            "at_rest": false,
+            "max_displacement": 0.7751767945729136
+          },
+          {
+            "factor": 1.39,
+            "at_rest": false,
+            "max_displacement": 1.0919952125248111
+          },
+          {
+            "factor": 1.4,
+            "at_rest": false,
+            "max_displacement": 1.3853471131429582
+          },
+          {
+            "factor": 1.45,
+            "at_rest": false,
+            "max_displacement": 2.747947694455853
+          }
+        ]
+      }
+    ]
+  }
+}
