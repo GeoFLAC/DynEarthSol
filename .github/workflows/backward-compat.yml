@@ -1,0 +1,172 @@
+name: Backward compatibility
+
+permissions:
+  contents: read
+
+# Earlier builds' output must stay usable: DES is built at each of the last five PR merges
+# to master (a choice: it keeps a run at five or six jobs) and runs
+# tests/backward-compat/compat-2d.cfg; the current tools and DES convert its frames, convert
+# its last checkpoint and restart from it (tests/backward-compat/check_backward_compat.py).
+# A merge whose Makefile still has the hdf5 and usemmg knobs is built twice, default and
+# hdf5=1 usemmg=1. The newest merge that has them stays in the list after it leaves the
+# five, with also hdf5=1 usemmg=0 and hdf5=0 usemmg=1, so that des-binary output and output
+# without MMG stay covered. One job builds one merge, all its builds in one tree.
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: list the earlier builds
+        id: list
+        env:
+          # the merges before the one under test: on a push to master, HEAD is that merge
+          BASE: ${{ github.event_name == 'push' && 'HEAD^1' || 'origin/master' }}
+        run: |
+          set -eu
+          knobs() {
+            mk=$(git show "$1:Makefile")
+            echo "$mk" | grep -q '^hdf5 *=' && echo "$mk" | grep -q '^usemmg *='
+          }
+          merges=$(git log "$BASE" --first-parent --merges --format=%H -5)
+          fixed=$(for c in $(git log "$BASE" --first-parent --merges --format=%H); do
+                    if knobs "$c"; then echo "$c"; break; fi; done)
+          [ -n "$fixed" ] || { echo "no merge on $BASE has the hdf5 and usemmg knobs" >&2; exit 1; }
+          entries=
+          for c in $(printf '%s\n' $merges $fixed | awk '!seen[$0]++'); do
+            pr=$(git log -1 --format=%s "$c" | grep -oE '#[0-9]+' | head -1 | tr -d '#')
+            name=${pr:+pr$pr}
+            name=${name:-$(git rev-parse --short "$c")}
+            # hNmM = hdf5=N usemmg=M; in this order each build flips one knob of the last
+            builds=default
+            if [ "$c" = "$fixed" ]; then builds="default h0m1 h1m1 h1m0"
+            elif knobs "$c"; then builds="default h1m1"; fi
+            entries="$entries{\"sha\":\"$c\",\"name\":\"$name\",\"builds\":\"$builds\"},"
+          done
+          echo "matrix={\"include\":[${entries%,}]}" | tee -a "$GITHUB_OUTPUT"
+
+  old-output:
+    needs: window
+    # a fixed image: the old merges' code must keep building when ubuntu-latest moves on
+    runs-on: ubuntu-26.04
+    name: output of ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.window.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: check out the merge beside the current tree
+        run: git worktree add --detach old ${{ matrix.sha }}
+
+      - name: install HDF5 and cmake (for MMG)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhdf5-serial-dev make pkg-config cmake
+
+      - name: cache key
+        id: key
+        # the runner image is in the key: the executables link the image's shared libraries
+        run: |
+          builds="${{ matrix.builds }}"
+          echo "key=compat-exe-$ImageOS-$ImageVersion-${{ matrix.sha }}-${builds// /-}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: exe
+          key: ${{ steps.key.outputs.key }}
+
+      - name: build each variant in the one tree
+        if: steps.cache.outputs.cache-hit != 'true'
+        # no make clean between the builds: the Makefile's flag stamps recompile only what a
+        # changed hdf5 or usemmg reaches
+        run: |
+          set -eu
+          mkdir -p exe
+          for b in ${{ matrix.builds }}; do
+            case $b in
+              default) flags= ;;
+              *) flags="hdf5=${b:1:1} usemmg=${b:3:1}" ;;
+            esac
+            echo "::group::build $b ($flags)"
+            make -C old -j"$(nproc)" ndims=2 opt=2 openmp=1 $flags
+            echo "::endgroup::"
+            cp old/dynearthsol2d exe/dynearthsol2d.$b
+          done
+
+      - name: run compat-2d.cfg with each build
+        env:
+          OMP_NUM_THREADS: 2
+        run: |
+          set -eu
+          for b in ${{ matrix.builds }}; do
+            d=out/${{ matrix.name }}-$b
+            mkdir -p $d
+            (cd $d && ../../exe/dynearthsol2d.$b ../../tests/backward-compat/compat-2d.cfg)
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compat-${{ matrix.name }}
+          path: out
+          retention-days: 3
+          if-no-files-found: error
+
+  check:
+    needs: old-output
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: install Python dependencies
+        run: python -m pip install --upgrade pip numpy scipy h5py
+
+      - name: install HDF5 and cmake (for MMG)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libhdf5-serial-dev make pkg-config cmake
+
+      - name: make 2d
+        run: make -j"$(nproc)" ndims=2 opt=2 openmp=1
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: old
+          pattern: compat-*
+          merge-multiple: true
+
+      - name: convert and restart each earlier build's output
+        env:
+          OMP_NUM_THREADS: 2
+        run: |
+          status=0
+          for d in old/*/; do
+            d=${d%/}
+            echo "== ${d#old/}"
+            python tests/backward-compat/check_backward_compat.py "$d" ./dynearthsol2d \
+                -w "$RUNNER_TEMP/${d#old/}" || status=1
+          done
+          exit $status
