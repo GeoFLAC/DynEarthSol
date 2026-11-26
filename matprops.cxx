@@ -624,6 +624,7 @@ void MatProps::rsf_strength_piece(int e, double pls, double slip_rate, double st
     if (frozen_history) {
         // The stored coefficient, as in plastic_weakening_rsf.
         piece.rsf = 2;
+        piece.rsf_terms[0] = piece.rsf_terms[1] = 0;
         piece.friction = std::atan(dyn_fric_coeff) / DEG2RAD;
         piece.dfriction = 0;
     }
