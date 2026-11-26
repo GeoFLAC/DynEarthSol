@@ -245,6 +245,33 @@ inline double element_se(const MatProps &mat, const int_vec &markers, double p, 
     return se / total;
 }
 
+// Element means of the nodal saturation S and effective saturation Se
+// (Bishop's chi), and of the relative permeability kr: one averaging rule for
+// the body force, the Darcy flux, the pressure step and the output.
+#pragma acc routine seq
+inline double element_mean_saturation(const MatProps &mat, const int_vec &markers,
+                                      ConstConnAccessor conn, const double_vec &p,
+                                      double *se_mean = nullptr)
+{
+    double s = 0, se = 0;
+    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        double sat;
+        se += element_se(mat, markers, p[conn[j]], &sat);
+        s += sat;
+    }
+    if (se_mean) *se_mean = se / NODES_PER_ELEM;
+    return s / NODES_PER_ELEM;
+}
+
+#pragma acc routine seq
+inline double element_mean_kr(const MatProps &mat, const int_vec &markers,
+                              ConstConnAccessor conn, const double_vec &p)
+{
+    double kr = 0;
+    for (int j = 0; j < NODES_PER_ELEM; ++j) kr += element_kr(mat, markers, p[conn[j]]);
+    return kr / NODES_PER_ELEM;
+}
+
 struct ElementPressure {
     double raw, bishop, strength;
 };

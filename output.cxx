@@ -215,17 +215,9 @@ void Output::_write(const Variables& var, bool disable_averaging)
         for (int e = 0; e < var.nelem; ++e) {
             ConstConnAccessor conn = (*var.connectivity)[e];
             const int_vec &markers = (*var.elemmarkers)[e];
-            double s = 0, se = 0, kr = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                const double p = (*var.ppressure)[conn[j]];
-                double sat;
-                se += element_se(*var.mat, markers, p, &sat);
-                s += sat;
-                kr += element_kr(*var.mat, markers, p);
-            }
-            s /= NODES_PER_ELEM;
-            se /= NODES_PER_ELEM;
-            kr /= NODES_PER_ELEM;
+            double se;
+            const double s = element_mean_saturation(*var.mat, markers, conn, *var.ppressure, &se);
+            const double kr = element_mean_kr(*var.mat, markers, conn, *var.ppressure);
             saturation[e] = s;
             effective_saturation[e] = se;
             relperm[e] = kr;

@@ -796,16 +796,9 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             if (param.control.gravity != 0) {
                 // Unsaturated pores carry only S of their water weight.
                 double sat = 1;
-                if (param.control.has_hydraulic_diffusion && var.mat->has_retention) {
-                    sat = 0;
-                    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                        double s;
-                        element_se(*var.mat, (*var.elemmarkers)[e],
-                                   (*var.ppressure)[(*var.connectivity)[e][j]], &s);
-                        sat += s;
-                    }
-                    sat /= NODES_PER_ELEM;
-                }
+                if (param.control.has_hydraulic_diffusion && var.mat->has_retention)
+                    sat = element_mean_saturation(*var.mat, (*var.elemmarkers)[e],
+                                                  (*var.connectivity)[e], *var.ppressure);
                 const double density = param.control.has_hydraulic_diffusion
                     ? hydraulic_bulk_density(param,var,e,sat) : var.mat->rho(e);
                 buoy = density * param.control.gravity / NODES_PER_ELEM;

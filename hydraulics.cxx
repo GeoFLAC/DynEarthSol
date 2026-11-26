@@ -176,12 +176,8 @@ inline void hydraulic_flux(const Param &param, const Variables &var, int e,
             for (int j = 0; j < NODES_PER_ELEM; ++j) drive[d] += g[d][j]*(*var.ppressure)[conn[j]];
         }
     } else hydraulic_drive(param, var, *var.ppressure, e, g, drive);
-    if (var.mat->has_retention) {
-        double kr = 0;
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            kr += element_kr(*var.mat, (*var.elemmarkers)[e], (*var.ppressure)[conn[j]]);
-        mobility *= kr/NODES_PER_ELEM;
-    }
+    if (var.mat->has_retention)
+        mobility *= element_mean_kr(*var.mat, (*var.elemmarkers)[e], conn, *var.ppressure);
     for (int d = 0; d < NDIMS; ++d)
         for (int k = 0; k < NDIMS; ++k)
             q[d] -= mobility*var.mat->perm_tensor[d][k]*drive[k];
@@ -600,14 +596,9 @@ static void pressure_step(const Param &param, const Variables &var,
         if (has_retention) {
             // kr is the mean of the nodal values; it is exactly 1 when saturated.
             const int_vec &markers = (*var.elemmarkers)[e];
-            double kr = 0, se = 0;
             int total = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                kr += element_kr(*var.mat, markers, ppressure[conn[j]]);
-                se += element_se(*var.mat, markers, ppressure[conn[j]]);
-            }
-            mobility *= kr / NODES_PER_ELEM;
-            chi = se / NODES_PER_ELEM;
+            mobility *= element_mean_kr(*var.mat, markers, conn, ppressure);
+            element_mean_saturation(*var.mat, markers, conn, ppressure, &chi);
             for (int m = 0; m < var.mat->nmat; ++m) total += markers[m];
             tr[pore_slot] = (*var.volume)[e] * var.mat->phi(e) / (NODES_PER_ELEM * total);
         }
