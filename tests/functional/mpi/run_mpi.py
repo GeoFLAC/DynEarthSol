@@ -4,7 +4,8 @@
 Pass an executable built on the parent commit as --serial for regression testing.
 All generated configs, logs, snapshots and results.json stay under --workdir (a new
 temporary directory by default). No existing run or reference is overwritten.
-Both executables must use HDF5 output; full physical datasets are checked exactly.
+Both executables must use HDF5 output; full physical datasets are checked exactly,
+except the sums over nodes in NODE_SUMS, which the ranks add in another order.
 """
 import argparse
 import configparser
@@ -23,6 +24,14 @@ import time
 ROOT = Path(__file__).resolve().parents[3]
 # Output fields the current executables write that a reference from an earlier commit may lack.
 ADDED_FIELDS = {"dv surface acc facets"}
+# Sums over the nodes of a frame, which MPI adds in another order. Each order of n
+# terms is within (n - 1) eps/2 of their summed sizes from the exact sum (Higham,
+# Accuracy and Stability of Numerical Algorithms, 2nd ed., sec. 4.2), so two orders
+# differ by at most (n - 1) eps times that size. A frame does not store the terms, so
+# the larger of the reference's largest entry and the volume the case's sources move
+# in a step (source_rate times dt) stands in for it: sources of opposite rate cancel
+# in every entry. Every other dataset, the fields included, must still match exactly.
+NODE_SUMS = {"fluid balance"}
 
 
 def command_text(command):
@@ -69,7 +78,9 @@ def execute(command, directory, env, logname="run.log", expected_failure=False, 
 
 
 def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save", finite=True,
-                          group="VTKHDF"):
+                          group="VTKHDF", source_rate=0.0):
+    # source_rate: the summed absolute rates of the fluid sources, in the units of the
+    # fluid balance per second (m^2/s in 2D, m^3/s in 3D).
     import h5py
     import numpy as np
 
@@ -88,26 +99,39 @@ def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save
                  if path in left or path.split("/")[-1] not in ADDED_FIELDS}
         if not left or left.keys() != right.keys():
             raise RuntimeError(f"Physical HDF5 dataset sets differ in frame {frame}")
+        rounded = {}
         for path in left:
             a, b = left[path][()], right[path][()]
             if a.shape != b.shape or a.dtype != b.dtype:
                 raise RuntimeError(f"Shape or dtype differs: frame {frame}, {path}")
             if finite and a.dtype.kind in "fc" and (not np.isfinite(a).all() or not np.isfinite(b).all()):
                 raise RuntimeError(f"Non-finite physical data: frame {frame}, {path}")
-            if a.tobytes() != b.tobytes():
+            if a.tobytes() == b.tobytes():
+                continue
+            parent = left[path].parent
+            if path.split("/")[-1] not in NODE_SUMS or "NumberOfPoints" not in parent:
                 raise RuntimeError(f"Physical data differ: frame {frame}, {path}")
-        report = dict(frame=frame, bit_exact=True, datasets=sorted(left))
+            nodes = int(parent["NumberOfPoints"][0])
+            difference = float(np.max(np.abs(a - b)))
+            size = max(float(np.max(np.abs(a))), source_rate * float(parent["dt_sec"][0]))
+            tolerance = (nodes - 1) * float(np.finfo(a.dtype).eps) * size
+            if not difference <= tolerance:
+                raise RuntimeError(f"Node sum differs by {difference:.3g} > {tolerance:.3g}: "
+                                   f"frame {frame}, {path}")
+            rounded[path] = dict(difference=difference, tolerance=tolerance)
+        report = dict(frame=frame, bit_exact=not rounded, datasets=sorted(left), rounded=rounded)
         (current / f"full-compare-{kind}-{frame}.json").write_text(json.dumps(report, indent=2) + "\n")
+        return not rounded
 
 
-def compare(reference, current, frame, env):
+def compare(reference, current, frame, env, source_rate=0.0):
     # The standard comparator checks invariants and selected coordinates; also check
     # complete vectors/tensors, connectivity, material fields, force and marker records.
-    compare_physical_hdf5(reference, current, frame)
+    exact = compare_physical_hdf5(reference, current, frame, source_rate=source_rate)
     log, _ = execute([sys.executable, str(ROOT / "benchmarks-cores/compare.py"),
                       str(reference / "result"), str(current / "result"), str(frame)],
                      current, env, f"compare-{frame}.log")
-    return "Status: BIT-EXACT" in log
+    return exact and "Status: BIT-EXACT" in log
 
 
 def metrics(log, elapsed):
@@ -261,7 +285,7 @@ def main():
         current,timing=run(label+"-mpi2",cfg,executables["mpi" if ndims==2 else "mpi3d"],2)
         exact=all([compare(reference,current,frame,env) for frame in range(1,5)])
         results["checks"].append(dict(case=label,ranks=2,bit_exact=exact,timing=timing))
-        print(f"{label}: bit-exact",flush=True)
+        print(f"{label}: {'bit-exact' if exact else 'within rounding of the node sums'}",flush=True)
 
     # A well on a moving mesh pushed from one side: in the first steps only some ranks'
     # nodes move, yet every rank must assemble the well weights again.
@@ -308,6 +332,18 @@ def main():
             raise RuntimeError(f"{label}: expected one unmapped-point report and DES exit 51")
     results["checks"].append(dict(case="outside-points", ranks=2, passed=True))
     print("Points outside the mesh stop the run on two ranks as in serial: passed", flush=True)
+
+    # The same points inside the mesh: every balance entry cancels to rounding, which
+    # the ranks leave in another order.
+    cfg["injection"]["points_x"] = "[375, 825]"
+    rates = [float(r) for r in cfg["injection"]["rate"].strip("[]").split(",")]
+    reference, _ = run("cancelling-points-parent", cfg, executables["serial"])
+    current, timing = run("cancelling-points-mpi2", cfg, executables["mpi"], 2)
+    exact = all([compare(reference, current, frame, env, sum(map(abs, rates)))
+                 for frame in range(1, 6)])
+    results["checks"].append(dict(case="cancelling-points", ranks=2, bit_exact=exact, timing=timing))
+    print(f"cancelling-points: {'bit-exact' if exact else 'within rounding of the node sums'}",
+          flush=True)
 
     for moving in (False, True):
         case = "remesh" if moving else "fixed"
