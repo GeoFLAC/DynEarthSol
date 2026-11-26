@@ -31,6 +31,9 @@ files, -u or -hdf adds the calculated fields.
     2vtk.py -hdf -g model       frames linked under this model's name
                                 (-hdf -g -copy: copies under it instead)
 
+Des-binary frames (model.save.NNNNNN, without an extension): 2vtk-legacy.py
+converts them; 2vtk-legacy.py -h lists its options.
+
 options:
     -a          save data in ASCII format (default: binary)
     -c          work in the current directory: the files, links and .series

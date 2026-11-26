@@ -62,8 +62,8 @@ The requirements in detail:
 * The config-file parser, [CLI11](https://github.com/CLIUtils/CLI11) 2.7.2, is
   vendored as a single header in `third_party/CLI11/`; there is nothing to
   install for it.
-* The Python tools (`2vtk.py`, `Dynearthsol.py`) need Python 3 with NumPy and
-  SciPy, plus h5py to read vtkhdf output.
+* The Python tools (`2vtk.py`, `2vtk-legacy.py`, `Dynearthsol.py`) need Python 3
+  with NumPy and SciPy, plus h5py to read vtkhdf output.
 * **macOS users**: Apple clang has no built-in OpenMP, so the runtime has to
   come from somewhere; `brew install libomp` is the whole answer for most
   people. See [OpenMP on macOS](#llvm) for the search order, the overrides, and
@@ -439,6 +439,8 @@ small examples and expected results for CPU MPI and multiple GPUs.
   [ParaView](https://www.paraview.org/download/) opens directly; `2vtk.py -u` adds
   the derived fields to it in place. Plain VTK files open in ParaView or
   [VisIt](https://visit-dav.github.io/visit-website/).
+* Des-binary frames (`modelname.save.NNNNNN`, without an extension) convert with
+  `2vtk-legacy.py modelname`; `2vtk-legacy.py -h` lists its options.
 
 # Contributing and bug reports
 

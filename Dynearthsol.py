@@ -80,6 +80,10 @@ class Dynearthsol:
         except KeyError as e:
             raise IOError('{0}; no {1} fallback found'.format(e, info))
         if not rows:
+            import glob
+            if glob.glob(self.modelname + '.save.[0-9][0-9][0-9][0-9][0-9][0-9]'):
+                raise IOError('{0}.save.NNNNNN are des-binary frames, which '
+                              '2vtk-legacy.py converts'.format(self.modelname))
             raise IOError('neither {0}.save.* frame files nor {0}.info '
                           'found'.format(self.modelname))
         self.frames = [r['frame'] for r in rows]
@@ -94,8 +98,12 @@ class Dynearthsol:
 
     def read_header(self, frame):
         self._header_frame = frame
+        fn = self.get_fn(frame)
+        if not os.path.isfile(fn) and os.path.isfile(fn[:-len('.vtkhdf')]):
+            raise IOError('{0} is a des-binary frame, which 2vtk-legacy.py '
+                          'converts'.format(fn[:-len('.vtkhdf')]))
         import h5py
-        with h5py.File(self.get_fn(frame), 'r') as f:
+        with h5py.File(fn, 'r') as f:
             self.ndims = f.attrs['ndims']
             self.revision = f.attrs['revision']
 
