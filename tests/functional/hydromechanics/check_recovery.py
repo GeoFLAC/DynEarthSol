@@ -2,8 +2,8 @@
 """Finite-grain plastic pore dilation, compaction and recovery.
 
 Prescribed affine material paths isolate constitutive history from mechanical
-equilibrium. The source ledger is the current tangent Biot model; this test
-does not qualify finite-density mass or retained-fluid energy conservation.
+equilibrium. The source ledger uses the tangent Biot model; this test
+does not cover finite-density mass or retained-fluid energy conservation.
 """
 import argparse
 import copy

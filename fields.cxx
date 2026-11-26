@@ -70,26 +70,10 @@ void allocate_variables(const Param &param, Variables& var)
         var.plstrain_remesh = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
-        // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
         var.dyn_fric_coeff = new double_vec(e);
         var.state_variable = new double_vec(e);
 
-//         // these fields are from Denis' code
-//         var.MAX_shear = new double_vec(e);
-//         var.MAX_shear_0 = new double_vec(e);
-//         var.CL = new double_vec(e);
-//         var.dl_min = new double_vec(e);
-//         var.maxv = new double_vec(e);
-//         var.strain_energy = new double_vec(e);
-//         var.kinetic_energy = new double_vec(e);
-// #ifdef RS
-//         var.state1 = new double_vec(e);
-//         var.slip_velocity = new double_vec(e);
-//         var.friction_coefficient = new double_vec(e);
-//         var.RS_shear = new double_vec(e);
-//         var.Failure_mode = new double_vec(e);
-// #endif
     }
 
     var.ntmp = new double_vec(n);
@@ -482,7 +466,7 @@ static void temperature_step(const Param &param, const Variables &var,
                 else {
                     double tdot = 0;
 
-                    // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                    // Sum the element rows through the node's support patch (element, local index).
                     const int npatch = var.support.size(n);
                     const int* patch = var.support.patch(n);
                     const int* lpatch = var.support.local(n);

@@ -2,7 +2,7 @@
 """Check PT initialization and exact binary/HDF5 restart with a short PT config.
 
 Usage: pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY [--restart-frame N] [--steps N]
-The output directory retains configs, logs and results for independent review.
+The output directory keeps the configs, logs and results.
 Use --require-remesh with a config that triggers mesh quality control to check
 continuation across an actual mesh change, not just checkpoint serialization.
 """

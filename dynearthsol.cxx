@@ -696,7 +696,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             }
         }
         if (param.control.has_PT) {
-            // Optional save diagnostic, not a new checkpoint requirement.
+            // Optional save diagnostic; a restart does not require it.
             if (bin_save.has_array("PT residual force")) {
                 bin_save.read_array(*var.force_residual, "PT residual force");
                 var.PT_force_residual_valid = true;
@@ -706,8 +706,8 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
                 bin_chkpt.read_scalar(complete, "initial equilibrium done");
                 var.initial_equilibrium_done = complete != 0;
             } else {
-                // Legacy output is written before adjustment at step zero and
-                // after the accepted physical step at positive step counts.
+                // A checkpoint without this flag is written before adjustment at
+                // step zero and after the accepted physical step at positive steps.
                 var.initial_equilibrium_done = var.steps > 0;
             }
         }
@@ -855,9 +855,9 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 
     create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    // PT checkpoints carry the accepted velocity. The legacy boundary map can
-    // change it (notably on oblique boundaries); the next PT solve imposes its
-    // own constraints at the next physical time.
+    // PT checkpoints carry the accepted velocity. apply_vbcs() can change it
+    // (notably on oblique boundaries); the next PT solve imposes its own
+    // constraints at the next physical time.
     if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
@@ -912,7 +912,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
         dt_controls_changed = saved != current;
     } else {
-        // The old PT clock identifies PT checkpoints without saved dt controls.
+        // A "PT output start time" entry marks a PT checkpoint without saved dt controls.
         dt_controls_changed = (!param.control.has_PT && bin_chkpt.has_array("PT output start time")) ||
             (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
     }

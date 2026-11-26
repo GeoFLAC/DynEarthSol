@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Replay and qualify the closed-column physical-inertia wave study.
 
-Refinement data stay in the evidence record. The guided review selects one
-finest-grid case only. No material, phase or amplitude fit is performed.
+The report keeps every refinement case and selects one finest-grid case.
+No material, phase or amplitude fit is performed.
 """
 
 import argparse

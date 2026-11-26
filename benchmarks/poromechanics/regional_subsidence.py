@@ -11,8 +11,8 @@ model (averaged_aquifer_reference.py, generalised Bear-Corapcioglu) gives.
 Its finite-domain solution (fixed outer pressure and displacement, which
 brings in the uniform areal strain h(t) of the closed basin) is superposed
 over the pumping schedule, on the circle of the same area as the square.
-The infinite-domain line well misses h(t) and departs by up to ~20% in
-the rest seasons.
+The infinite-domain line well lacks h(t), which matters most in the rest
+seasons.
 
 Subsidence is B times the vertical strain of the slab; the observation wells
 and the compared band stay inside the diffusion front of the far sides.
@@ -75,8 +75,7 @@ def config(h, steps):
     # Structured: the unstructured mesher fails on a slab 60 times wider than thick.
     cfg['mesh'] = dict(meshing_option='1', meshing_elem_shape='1', xlength=repr(L), ylength=repr(L),
                        zlength=repr(B), resolution=repr(h), remeshing_option='0')
-    # Adaptive dynamic relaxation, as in the qualified slab study; the accelerated scheme
-    # stalls near 1e-2 of the initial residual on a 5 km domain.
+    # Adaptive dynamic relaxation: the accelerated scheme stalls on a domain this wide.
     cfg['control'].update(gravity='0', has_PT='true', PT_option='1', PT_max_iter='100000',
                           PT_relative_tolerance='1e-7', PT_absolute_tolerance='1e-6',
                           is_quasi_static='true', inertial_scaling='1e11',

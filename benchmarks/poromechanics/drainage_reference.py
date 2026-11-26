@@ -90,7 +90,7 @@ class Drainage:
             M = storage(p)
             # Node 0 is fixed: solve for the free nodes with the coupling to node 0 dropped (its rate is 0).
             # Gravity couples each layer only to layers above it: M is upper
-            # triangular. Use that structure without changing the rate equation.
+            # triangular, so a triangular solve gives the rates.
             return solve_triangular(M[free, free]*w[free, None], div[free])
 
         y0 = p0[free].copy()

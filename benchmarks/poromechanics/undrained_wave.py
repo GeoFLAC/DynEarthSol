@@ -208,8 +208,8 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         actual = scan_frames(str(folder/'automatic'))[1]['time']
         np.testing.assert_allclose(actual, expected, rtol=2e-14, atol=0)
         assert actual < .8*.5*height/math.sqrt(bulk/2650)
-        # Emulate an old step-zero checkpoint: no ordering marker and an
-        # obsolete next-step dt. Conversion must select the new wave limit.
+        # A step-zero checkpoint without the ordering marker and with a stale
+        # next-step dt: the restart must select the undrained wave limit.
         (folder/'legacy-seed.save.000000').write_bytes((folder/'seed.save.000000').read_bytes())
         checkpoint = bytearray((folder/'seed.chkpt.000000').read_bytes())
         entries = dict(line.split(b'\t') for line in bytes(checkpoint[:4096]).split(b'\0',1)[0].splitlines()[1:])

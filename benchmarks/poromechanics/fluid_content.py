@@ -144,7 +144,7 @@ def analyze(folder, method):
     volume = np.abs(np.linalg.det(vertices))/math.factorial(dim)
     grad = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
     area = volume.sum()/REF.height
-    # A true exterior facet, rather than a guessed element band, measures drain flux.
+    # Drain flux is measured through the element facets that lie on the drain (z = 0).
     top = np.isclose(x[conn, -1], 0).sum(axis=1) == dim
     facet_area = np.zeros(len(conn))
     for e in np.flatnonzero(top):

@@ -45,8 +45,8 @@ def storage_growth_rate(Ra, hydraulic_ratio, conductivity, capacity, H, L,
 
     The linear pressure/heat equations give lambda_mode^2 + A*lambda_mode
     + B=0, A=(D+1)*K2-Ra, B=D*(K2^2-Ra*a2). The incompressible growth
-    rate follows as D tends to infinity. This exact finite-D reference lets
-    a scaled-storage test retain explicit pressure subcycling economically.
+    rate follows as D tends to infinity. This exact finite-D reference serves
+    tests that scale the storage to keep explicit pressure subcycling affordable.
     """
     if hydraulic_ratio<=0:raise ValueError('Pressure diffusivity must be positive')
     a2,K2=mode_numbers(H,L,m,n,transverse,width_y)

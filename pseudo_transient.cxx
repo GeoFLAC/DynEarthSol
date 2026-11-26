@@ -145,7 +145,7 @@ struct PTWorkspace {
 // nonlinear response. Estimate a low mode with a Rayleigh quotient along
 // the latest increment, F_prev - F = K dv. Momentum is dropped when it opposes
 // the current force (kinetic damping; gradient restart, O'Donoghue & Candes 2015).
-// Only the route to equilibrium changes; acceptance uses the physical residual.
+// It shapes only the route to equilibrium; acceptance uses the physical residual.
 void update_adaptive_dr(const Variables& var, PTWorkspace& w, int iteration, double& lowest)
 {
     const int nn = mpi_node_end(var);
@@ -400,7 +400,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             for (int n=0; n<nn; ++n)
                 for (int d=0; d<NDIMS; ++d) (*var.force_residual)[n][d] = w.undamped[n][d];
             var.PT_force_residual_valid = true;
-            // Preserve the legacy damped force field, but only once per solve.
+            // var.force holds the accepted state's force, damped once per solve.
             apply_damping(param, var, *var.force);
             apply_platen_force(param, var, *var.force);
             #pragma acc wait
@@ -458,8 +458,8 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
                 w.lagged_stress[e][d] += w.stress_fraction[e]*((*var.stress)[e][d]-w.lagged_stress[e][d]);
                 (*var.stress)[e][d] = w.lagged_stress[e][d];
             }
-        // Existing assembly supplies exactly the same physical loads to the
-        // lagged solver stress. Artificial damping is excluded from the update.
+        // update_force assembles the physical loads on the lagged solver stress;
+        // artificial damping is excluded from the update.
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result, &w.undamped, displacement_dt, false);
         project_free_vectors(var, w.constraints, w.undamped);
 #ifndef ACC

@@ -148,7 +148,7 @@ if __name__ == '__main__':
     fr, fp = crank_nicolson(b, t)
     err = np.max(np.abs(b.pressure(fr[1:-1:20], t) - fp[1:-1:20]))/b.pw
     assert err < 2e-4, err
-    # The finite-annulus coupling matters at this accuracy: the uncoupled pressure differs.
+    # Pressure shift due to the finite-annulus coupling, against the same case with c_J = c_p = 0.
     coupled = b.pressure(r, t); b_unc = Borehole(radius=1.0, outer=20.0, bulk=2e8, shear=1e8, biot=1.0,
                                                  storage_modulus=1e9, mobility=1e-9, wall_pressure=1e6)
     b_unc.c_J = b_unc.c_p = 0.0

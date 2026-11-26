@@ -2,7 +2,8 @@
 """Verify evolving porosity/permeability and exact hydraulic restart/remeshing.
 
 Usage: check_poroperm.py EXECUTABLE OUTPUT_DIRECTORY
-Reuses the existing DES hydraulic PT fixtures and restart comparator.
+Runs the hydraulic PT fixture pt_remesh_restart.cfg through the restart
+comparator pt_initial_checkpoint.py.
 """
 
 import argparse

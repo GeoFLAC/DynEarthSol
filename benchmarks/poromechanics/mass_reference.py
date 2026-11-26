@@ -2,9 +2,8 @@
 """Independent saturated finite-grain mass and sensible-heat cell references.
 
 These references describe a constant-compressibility fluid and the Eulerian
-Biot porosity law, with tension-positive logarithmic bulk strain. They do not
-establish that DES implements the finite-density balance. Pressure work and
-thermoelastic caloric effects are outside this sensible-heat model.
+Biot porosity law, with tension-positive logarithmic bulk strain. Pressure
+work and thermoelastic caloric effects are outside this sensible-heat model.
 """
 from dataclasses import dataclass
 import json

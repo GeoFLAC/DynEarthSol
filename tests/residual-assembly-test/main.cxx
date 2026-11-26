@@ -1,7 +1,10 @@
-// B0 focused test: undamped force exposure in update_force.
-// Modes: -DBASE (5-arg API) / -DB0 (6-arg API with force_undamped output).
+// Focused tests of real DES routines: force assembly in update_force and its
+// undamped output, PT velocity constraints and residual norm, material trials and
+// Mohr-Coulomb returns, the 3x3 eigensolver, and hydraulic, thermal and
+// point-source updates.
+// Modes: -DBASE (5-arg update_force) / -DB0 (6-arg, with the force_undamped output).
 // Mesh: two elements sharing node 0, identical constant stress -> cancellation at node 0.
-// Cases: cancellation, Neumann traction, damping exclusion, body force.
+// Force cases: cancellation, Neumann traction, damping exclusion, body force.
 
 #include <algorithm>
 #include <cmath>
@@ -172,8 +175,8 @@ static void run_update_force(Fixture& m) {
     update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result);
 #else
     update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result, &m.force_undamped);
-    // The optional output cannot change either existing output. Reevaluate the
-    // identical assembly with the default null argument and compare exact bits.
+    // Supplying force_undamped must not change force or force_residual: reevaluate
+    // the same assembly with the default null argument and compare exact bits.
     std::vector<double> force_before, residual_before;
     for (int n=0; n<m.var.nnode; ++n)
         for (int d=0; d<NDIMS; ++d) {
@@ -207,10 +210,10 @@ static void test_cancellation() {
 
     run_update_force(*m);
 
-    // Measurement only (legacy defect record): force_residual at the shared node
-    // is overwritten per incident element, so it equals the last element's term,
-    // not the assembled sum. With identical stress in both elements it is nonzero
-    // while the true assembled internal force is exactly 0.
+    // BASE records force_residual at the shared node, which each incident element
+    // overwrites: it equals the last element's term, not the assembled sum, so
+    // with identical stress in both elements it is nonzero while the true
+    // assembled internal force is exactly 0.
 #ifdef BASE
     {
         std::printf("  [measure] legacy force_residual@shared = (%.17g", m->force_residual[0][0]);
@@ -1193,13 +1196,6 @@ static void test_mohr_coulomb_returns() {
 #endif
 }
 
-// Properties of any accepted return from a principal trial with no plastic
-// history, checked against the law at the stored history: inside the shear
-// surface and tensile cap and on one of them, principal order kept, history
-// equal to the measure of the plastic strain implied by isotropic compliance,
-// and no change from a second, unloaded update. With start_angles (option 0
-// with friction or dilation weakening and constant cohesion) the strength is
-// the one at the initial history instead, and a second update may yield again.
 // Whether plastic is a nonnegative combination of the flows of the surfaces
 // active at result: shear faces (low, high) with flow -e_low + Npsi*e_high,
 // and tensile caps with flow e_k. In principal space three flows suffice.
@@ -1260,6 +1256,13 @@ static bool in_active_flow_cone(const double result[3], const double plastic[3],
     return false;
 }
 
+// Properties of any accepted return from a principal trial with no plastic
+// history, checked against the law at the stored history: inside the shear
+// surface and tensile cap and on one of them, principal order kept, history
+// equal to the measure of the plastic strain implied by isotropic compliance,
+// and no change from a second, unloaded update. With start_angles (option 0
+// with friction or dilation weakening and constant cohesion) the strength is
+// the one at the initial history instead, and a second update may yield again.
 static void check_law_return(MaterialFixture& f, const char* name, const double trial[3],
                              double minimum_history, double initial_history,
                              bool start_angles) {

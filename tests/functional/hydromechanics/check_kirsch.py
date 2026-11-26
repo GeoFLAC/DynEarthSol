@@ -3,8 +3,8 @@
 
 A quarter annulus has symmetry cuts, a free inner wall and prescribed outer
 normal pressure. Compare its stress with the finite-annulus solution and
-state the separate infinite-domain Kirsch truncation error. This is the
-elastic first step of the tunnel ladder, not the plastic/poroelastic case.
+state the separate infinite-domain Kirsch truncation error. It covers the
+elastic case only, not the plastic or poroelastic tunnel.
 """
 
 import argparse

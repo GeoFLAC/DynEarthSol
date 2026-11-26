@@ -132,7 +132,7 @@ static void compute_slip_rate2(ConstTensorAccessor s, double& vx, double& vz, do
      *  - vx, vz: Velocity components
      * 
      * Output:
-     *  - slip: The scalar magnitude of the slip vector (computed by projection)
+     *  - slip_rate: The scalar magnitude of the slip vector (computed by projection)
      */
 
     // Compute center and radius of Mohr circle
@@ -161,7 +161,6 @@ static void compute_slip_rate2(ConstTensorAccessor s, double& vx, double& vz, do
     shear_dir[0] = cos(theta_shear + M_PI_4); // Shear direction X-component
     shear_dir[1] = sin(theta_shear + M_PI_4); // Shear direction Z-component
 
-    // slip magnitude
     slip_rate = std::abs(vx * shear_dir[0] + vz * shear_dir[1]);
 }
 
@@ -207,7 +206,6 @@ static void compute_slip_rate3(ConstTensorAccessor s, double vx, double vy, doub
     double slip_magnitude_1 = vx * shear_dir_1[0] + vy * shear_dir_1[1] + vz * shear_dir_1[2];
     double slip_magnitude_2 = vx * shear_dir_2[0] + vy * shear_dir_2[1] + vz * shear_dir_2[2];
 
-    // Compute final slip magnitude
     slip_rate = std::sqrt(slip_magnitude_1 * slip_magnitude_1 + slip_magnitude_2 * slip_magnitude_2);
 }
 
@@ -1080,8 +1078,8 @@ struct ReturnPoint {
 };
 
 // The fixed-strength returns and parts of strength ranges the search of one element's return
-// may evaluate: a bound on its work, many times what returns take on the strength laws of the
-// tests and examples. Past it the return is rejected (reject_budget), not taken as found.
+// may evaluate: a bound on its work. Past it the return is rejected (reject_budget), not taken
+// as found.
 static constexpr int return_budget = 4096;
 
 #pragma acc routine seq
@@ -2110,7 +2108,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                      needs_projected_velocity, start_angles, shear_heating) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) \
         reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne,shear_heating) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: CPU and GPU results are differet because of using 3x3 in elasto_plastic
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne,shear_heating) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: the 3x3 eigensolver in elasto_plastic rounds differently on the device
     for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         int rejection = 0;
@@ -2369,7 +2367,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
 
-                // calculate the shear direction in maximum shear stress
+                // slip rate of the friction law (rsf_slip_rate_projection_option)
                 double slip_rate;
                 
 #ifdef THREED
@@ -2407,10 +2405,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 if (failure_mode < 0) rejection = -failure_mode;
                 plstrain[e] += depls;
                 delta_plstrain[e] = depls;
-                // The iterative return used the friction of the stored
-                // history; store that coefficient. The state was already
-                // advanced this step, and frozen initial-equilibrium friction
-                // stays as stored. Option 0 used the stored coefficient.
+                // The iterative return uses the friction of the stored
+                // history; store that coefficient. The state is advanced
+                // earlier in this step, and frozen initial-equilibrium friction
+                // stays as stored. Option 0 returns with the stored coefficient.
                 if (depls > 0 && !initial_equilibrium && !start_angles)
                     var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
                                                      state_variable[e], dyn_fric_coeff[e],
@@ -2435,7 +2433,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                         plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
                 double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
-                 // calculate the shear direction in maximum shear stress
+                // slip rate of the friction law (rsf_slip_rate_projection_option)
                 double slip_rate;
                 
 #ifdef THREED
@@ -2492,10 +2490,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     if (failure_mode < 0) rejection = -failure_mode;
                     plstrain[e] += depls;
                     delta_plstrain[e] = depls;
-                    // The iterative return used the friction of the stored
-                    // history; store that coefficient. The state was already
-                    // advanced this step, and frozen initial-equilibrium friction
-                    // stays as stored. Option 0 used the stored coefficient.
+                    // The iterative return uses the friction of the stored
+                    // history; store that coefficient. The state is advanced
+                    // earlier in this step, and frozen initial-equilibrium friction
+                    // stays as stored. Option 0 returns with the stored coefficient.
                     if (depls > 0 && !initial_equilibrium && !start_angles)
                         var.mat->rsf_friction_from_state(e, plstrain[e], slip_rate,
                                                          state_variable[e], dyn_fric_coeff[e],

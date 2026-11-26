@@ -377,7 +377,7 @@ struct BC {
     int stress_bc_z0;
     int stress_bc_z1;
 
-    // hyrdaulic bouncdary
+    // hydraulic boundary conditions
     int hbc_x0;
     int hbc_x1;
     int hbc_y0;
@@ -575,8 +575,6 @@ struct Mat {
     double_vec characteristic_velocity;
     double_vec characteristic_distance;
     int state_var_model;
-    // double_vec static_friction_coefficient;
-
 };
 
 struct Time {
@@ -955,16 +953,6 @@ struct Variables {
     double compensation_pressure;
     double bottom_temperature;
 
-// #ifdef ATS
-//     double vmax, hmin, dt_elastic, dt_min, vmax_shear_zone, CL_min;
-// #endif    
-//     double a0, b0, a1, b1, max_pls, number_plf, seismic_eff, S_E, K_E;
-
-//     double_vec *MAX_shear, *CL, *dl_min, *maxv, *strain_energy, *kinetic_energy, *MAX_shear_0;
-// #ifdef RS
-//     double_vec *state1, *slip_velocity, *friction_coefficient, *RS_shear, *Failure_mode, avg_shear_stress, avg_vm, slip_area;
-// #endif
-
     // These 5 arrays are allocated by external library
     array_t *coord = nullptr;
     conn_t *connectivity = nullptr;
@@ -1030,7 +1018,7 @@ struct Variables {
     double_vec *refined_elem_size_n = nullptr;
     double_vec *radiogenic_source = nullptr;
 
-    // For hyraulic proceses
+    // For hydraulic processes
     double_vec *ppressure = nullptr; // pore pressure
     double_vec *dppressure = nullptr; // delta pore pressure
     double_vec *matrix_pressure = nullptr; // immobile reservoir pressure per element
@@ -1075,14 +1063,12 @@ struct Variables {
     double_vec *etmp = nullptr;
     int_vec *etmp_int = nullptr;
 
-    // tensor_t *stress_old;
-
     MatProps *mat = nullptr;
 
     std::vector<MarkerSet*> markersets;
     int hydrous_marker_index;
 
-    int_vec2D *elemmarkers = nullptr; // for marksersets[0] (mattype markers)
+    int_vec2D *elemmarkers = nullptr; // for markersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers = nullptr; // for markersets[hydrous_marker_index] (hydrous markers)
 
     bool initial_equilibrium_done = false;

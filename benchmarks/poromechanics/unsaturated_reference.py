@@ -8,7 +8,7 @@ Contents:
   content F(p) = phi*S(p) + s*p that the explicit update conserves, and the
   pointwise pressure for a given content increment;
 - ``bishop_pressure``: the equivalent pore pressure chi*p for the mechanics;
-- ``Column``: a 1D vertical prototype of the planned DES update (lumped P1
+- ``Column``: a 1D vertical model of the explicit DES update (lumped P1
   storage, element mobility, conservative content update, local inversion);
 - ``srivastava_yeh``: exact transient infiltration for the Gardner model
   (Srivastava and Yeh, 1991, Water Resour. Res. 27(5), 753-762);
@@ -110,7 +110,7 @@ def content(ret, phi, s, p):
     """Fluid volume per bulk volume, F(p) = phi*S(p) + s*p.
 
     s is the saturated fixed-stress storage (1/Pa). For p >= ret.p_sat this is
-    phi + s*p, so the saturated update is unchanged.
+    phi + s*p, the saturated content.
     """
     return phi * ret.sat(p) + s * np.asarray(p, float)
 
@@ -124,7 +124,7 @@ def advance_content(ret, phi, s, p, dm, iterations=100):
     """Pointwise pressure p1 with F(p1) - F(p) = dm, to round-off.
 
     The increment form keeps the saturated update exact: when p and the trial
-    p + dm/s are both saturated, the result is that trial, as in the existing
+    p + dm/s are both saturated, the result is that trial, as in the saturated
     DES update. Otherwise a safeguarded Newton iteration keeps a bracket on
     g(x) = phi*(S(x) - S(p)) + s*(x - p) - dm, which increases with x. Since S
     is monotone, x = p + dm/s and x = p bracket the root. With s = 0 the
@@ -175,7 +175,7 @@ def bishop_pressure(ret, p):
 
 
 class Column:
-    """Vertical 1D prototype of the planned explicit DES unsaturated update.
+    """Vertical 1D model of the explicit DES unsaturated update.
 
     Nodes z[0] < ... < z[-1] with lumped volumes V_i (unit area). Element
     mobility is (k/mu) times the arithmetic mean of the nodal kr. Bottom
@@ -212,7 +212,7 @@ class Column:
         """Largest dt for which every free node's update is a convex combination.
 
         'saturated' uses kr <= 1 and dF/dp >= s, so it holds for any state and
-        equals 0.5*h^2/D of the existing DES bound on a uniform mesh.
+        equals the saturated DES bound 0.5*h^2/D on a uniform mesh.
         'local' uses the current kr and slope and needs the chord check below.
         """
         if mode == 'saturated':

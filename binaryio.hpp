@@ -130,8 +130,8 @@ public:
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len, int dest_N = -1);
 
     // Cell association cannot be inferred from length when nnode == nelem.
-    // Reuse the array writer with an explicit dataset group; root aliases
-    // and the numerical layout remain those of write_array.
+    // Writes through write_array under the CellData group, so root aliases
+    // and the numerical layout are those of write_array.
     template <typename Array>
     void write_cell_array(const Array& A, const char *name, hsize_t len)
     {

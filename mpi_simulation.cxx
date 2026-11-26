@@ -1253,8 +1253,8 @@ struct MpiSimulation::Impl {
             if (rank == 0) std::swap(master->volume, master->volume_old);
             break;
         case MpiOp::SurfaceIdle:
-            // Even without erosion, the original surface path corrects stress
-            // for the volume change since the preceding coordinate update.
+            // Even without erosion, surface_processes() corrects stress for the
+            // volume change since the preceding coordinate update.
             correct_surface();
             var.surfinfo.max_surf_vel = 0;
             break;
@@ -1292,7 +1292,6 @@ struct MpiSimulation::Impl {
                 // update_mesh() reads the restored side walls' new tops on root's mesh.
                 if (param.mesh.remeshing_option == 13) gather_strip_coordinates();
             }
-            // Each rank corrects its own surface elements.
             correct_surface();
             break;
         case MpiOp::Surface: {

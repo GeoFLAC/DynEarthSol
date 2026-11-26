@@ -117,7 +117,7 @@ int main(int argc,char** argv) {
     MPI_Comm_free(&local);
     for(int extent:{67,32771})for(int columns:{1,NDIMS,NSTR,NODES_PER_ELEM*NDIMS}) {
         std::vector<Peer*> peers;std::vector<MpiPeerBuffer> buffers;std::vector<MPI_Request> requests(2*size);
-        // One rank still exercises kernels, using a self transfer.
+        // A single rank exercises the kernels with a self transfer.
         for(int other=0;other<size;++other)if(size==1 || other!=rank)peers.push_back(new Peer(rank,other,columns,extent));
         for(int iteration=0;iteration<3;++iteration) {
             buffers.clear();

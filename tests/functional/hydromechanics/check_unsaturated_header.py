@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check the C++ retention header (unsaturated.hpp) against the Python
-reference: constitutive values, inverse, Bishop pressure, the bit-exact
-saturated fast path, and the nodal content update for single- and
+reference: constitutive values, inverse, Bishop pressure, the saturated fast
+path (exactly the linear update), and the nodal content update for single- and
 mixed-material patches. Compiles a small driver with g++, warnings as errors.
 """
 

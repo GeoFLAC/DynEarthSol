@@ -69,9 +69,9 @@ void apply_temperature_bcs(const Param &param, const Variables &var, double_vec 
 #pragma acc routine seq
 bool prescribed_temperature(const Param &param, const Variables &var, int n, double &value);
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);
-// Optional caller-owned nnode-sized output includes physical loads but excludes
-// artificial damping. It must not alias force, force_residual or assembly inputs.
-// damp_force=false skips artificial damping; existing callers retain damped force.
+// force_undamped optionally receives a caller-owned nnode-sized copy of the force with
+// the physical loads but without artificial damping. It must not alias force,
+// force_residual or assembly inputs. damp_force=false skips artificial damping.
 // node_force_magnitude optionally receives, at each node, the sum of the
 // absolute element force contributions, before boundary assembly reuses tmp_result.
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,

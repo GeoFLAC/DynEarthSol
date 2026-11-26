@@ -14,7 +14,7 @@ Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY
   1e5, with and without global velocity scaling) matches the PT result. The
   transport does not depend on how mechanics reaches equilibrium.
 - restart: exact checkpoint continuation of a partly unsaturated column, on a
-  fixed and on a remeshed mesh, with the existing restart comparator.
+  fixed and on a remeshed mesh, with the pt_initial_checkpoint.py comparator.
 """
 import json
 import os
@@ -71,7 +71,7 @@ def run(exe, cfg, case):
 
 # A node's content is rounded at ~eps times its pore volume on each update, with
 # random sign. Relative to one step's inflow, that floor grows with nodes and
-# substeps: 9e-12 in 2D and 1.1e-9 in 3D at 2.5 cm.
+# substeps, so it is largest for the 2.5 cm columns in 3D.
 BALANCE_TOL = 1e-8
 
 
@@ -90,7 +90,7 @@ def transient(exe, out, ndims):
     ret = dict(retention_model='[3]', retention_alpha=f'[{ALPHA_HEAD / GAMMA!r}]',
                residual_saturation='[0]')
     sy = dict(length=1.0, alpha=ALPHA_HEAD, ks=KS, dtheta=0.4, qa=0.0, qb=0.9 * KS)
-    # Retain the measured temporal resolution while refining the spatial mesh.
+    # The step stays fixed while the spatial mesh is refined.
     # This is an isothermal flow check, so unused heat diffusion is disabled.
     dt = 60.0 if ndims == 2 else 30.0
     rows = []
@@ -138,9 +138,8 @@ def steady(exe, out, ndims):
 
     In 2D the error must fall with resolution: at second order for van
     Genuchten and at about first order for Brooks-Corey, whose air-entry kink
-    limits it. In 3D the retained short steps at 2.5 cm would
-    make 2e6 s of explicit run too long. There, one 5 cm run must stay within
-    6% of the profile range (2D at 5 cm: 4.2% and 3.0%).
+    limits it. In 3D the short steps at 2.5 cm would make 2e6 s of explicit
+    run too long, so one 5 cm run must stay within 6% of the profile range.
     """
     laws = {'van_genuchten': (Retention('van_genuchten', 1 / 2e3, 2.0, 0.1), 3.0,
                               dict(retention_model='[1]', retention_alpha='[5e-4]',
@@ -152,7 +151,7 @@ def steady(exe, out, ndims):
     for name, (ret, rate, options) in laws.items():
         rows[name] = []
         # A compressible fluid shortens the explicit run; it changes no steady
-        # profile. Keep the physical step from the measured reference sequence.
+        # profile.
         dt = 300.0 if ndims == 2 else 120.0
         for res in ((0.05, 0.025) if ndims == 2 else (0.05,)):
             cfg = column(ndims, res, 2e6, dt, retention=options, flux=0.5 * KS,

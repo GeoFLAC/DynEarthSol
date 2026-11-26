@@ -1698,14 +1698,12 @@ double compute_dt(const Param& param, Variables& var,
     const double rsf_dtheta_max = uses_rsf_state_step_limit ?
         param.control.rsf_dtheta_max : 0.0;
 
-    // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
     // double_vec velocity_y_element(var.nelem, 0.0);
     // double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
     // double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
     // Global max velocity for elements
-    // double global_max_vem = std::max(std::max(var.max_vbc_val, 0.0), 1E-20);
-    double global_max_vem = 0.0;  // 
+    double global_max_vem = 0.0;
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
     int nan_elem_count = 0;
 
@@ -1724,7 +1722,7 @@ double compute_dt(const Param& param, Variables& var,
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
 
-        // calculate maxium velocity in the element
+        // Mean of the element's nodal velocities
         ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
         double weight = 1.0 / NODES_PER_ELEM; 
 
@@ -1742,20 +1740,18 @@ double compute_dt(const Param& param, Variables& var,
 //         velocity_z_element[e] = vz_element;
 // #endif
 
-        // min height of this element
+        // Magnitude of the element-mean velocity
 #ifdef THREED
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element + vz_element*vz_element);
 #else
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element);
 #endif
 
-        // Find global max velocity
         global_max_vem = std::max(global_max_vem, max_vem);
         // max() silently drops NaN, deflating vmax and inflating the velocity-based dt
         // limits -- count NaN here so a blow-up fails fast instead of spewing frames.
         nan_elem_count += (max_vem != max_vem);
 
-        // std::cout<< "Element: " << e << " max_vem: " << global_max_vem << std::scientific << std::setprecision(5) << std::endl;
 
         ConstArrayAccessor a = (*var.coord)[n0];
         ConstArrayAccessor b = (*var.coord)[n1];
@@ -1802,7 +1798,6 @@ double compute_dt(const Param& param, Variables& var,
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
         
-        // Compute dt_hydro_diffusion (hydraulic)
         if (param.control.has_hydraulic_diffusion)
             if (var.mat->hydro_diff_max > 0) {
                 dt_hydro_diffusion = std::min(dt_hydro_diffusion,
@@ -1906,14 +1901,13 @@ double compute_dt(const Param& param, Variables& var,
             dt_hydro_wave = std::max(dt_hydro_wave, hydro_wave_floor);
     }
 
-    // Calculate dt_advection and dt_elastic 
     if(param.control.use_global_velocity_scaling)
     {
         dt_advection = 0.5 * minl / global_max_vem;
         dt_elastic = (param.control.is_quasi_static) ?
         0.5 * minl / (global_max_vem * param.control.inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
-        dt_elastic = std::max(dt_elastic, global_dt_min); // Ensure dt_elastic is not smaller than global_dt_min
+        dt_elastic = std::max(dt_elastic, global_dt_min);
     }
     else
     {
@@ -1923,11 +1917,10 @@ double compute_dt(const Param& param, Variables& var,
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
     }
 
-    // Combine dt calculations and incorporate dt_hydro_diffusion
+    // The step is the smallest of the limits, times dt_fraction.
     double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
                           dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, dt_thermal_advection}) *
                 param.control.dt_fraction;
-    // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
     if (param.debug.dt && mpi_reports(var)) {
         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
                   << dt_rsf << " " << dt_diffusion << " "
@@ -2195,8 +2188,8 @@ void compute_pt_factors(const Param& param, const Variables& var,
         const double theta = param.control.PT_Re*param.control.PT_CFL*h/((ratio+2)*length);
         bad |= !(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta));
         effective_viscosity[e] = effective;
-        // Retain the same material/mesh checks for both options; ADR only
-        // consumes effective viscosity and supplies no legacy-factor arrays.
+        // Both options run the checks above; ADR uses only the effective
+        // viscosity, so height and stress_fraction serve the other option.
         if (!adaptive) {
             height[e] = h;
             stress_fraction[e] = theta/(1+theta);

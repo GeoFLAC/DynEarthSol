@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Refine the thin-slab pumping comparison of pumping_slab.py on structured meshes.
 
-pumping_slab.py meshes the slab with unstructured tetrahedra, whose size hardly
-follows mesh.resolution here (1698 and 1839 nodes at 20 m and 10 m). This
-driver keeps its configuration, comparison and figure, and only selects the
-structured element shape (mesh.meshing_elem_shape = 1), which does refine.
-The remaining difference from the averaged (generalised Bear-Corapcioglu)
-model is then the slab-model error O((B/r)^2), not the mesh.
+pumping_slab.py meshes the slab with unstructured tetrahedra, whose size does
+not follow mesh.resolution in this thin slab. This driver keeps its
+configuration, comparison and figure, and only selects the structured element
+shape (mesh.meshing_elem_shape = 1), which refines with mesh.resolution, so
+the mesh error can be separated from the slab-model error O((B/r)^2) relative
+to the averaged (generalised Bear-Corapcioglu) model.
 
     slab_refinement.py EXECUTABLE OUTPUT [--resolutions 20 10 5]
 """

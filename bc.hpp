@@ -6,7 +6,7 @@ double find_max_vbc(const BC &bc);
 void create_boundary_normals(const Variables &var, array_t &bnormals,
                              double_vec& edge_vec, int* edge_slot);
 // Homogeneous/normalized modes are used to construct the corrected PT subspace.
-// Default calls retain the legacy boundary map.
+// With the defaults the configured boundary velocities are applied.
 void apply_vbcs(const Param &param, const Variables &var, array_t &vel,
                 bool homogeneous = false, bool normalized = false);
 

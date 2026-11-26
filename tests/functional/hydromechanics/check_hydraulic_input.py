@@ -61,7 +61,7 @@ def main():
             ('mat', {'retention_model': '[2]', 'retention_n': '[0]'}),
             ('mat', {'retention_model': '[3]', 'residual_saturation': '[1]'}),
             ('mat', {'retention_model': '[1]', 'porosity': '[0]'}),
-            # Valid laws in combinations whose content balance is not yet accounted.
+            # Valid laws in combinations whose content balance is not implemented.
             ('mat', {'retention_model': '[1]', 'retention_n': '[1.6]', 'porosity_model': '1'}),
             ('mat', {'retention_model': '[3]', 'matrix_storage': '[1e-9]', 'matrix_exchange': '[1e-6]'}),
         ]

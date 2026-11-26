@@ -114,8 +114,8 @@ def main():
                     for suffix in ('save', 'chkpt'):
                         a = fields(baseline / f'fresh.{suffix}.{frame:06d}')
                         b = fields(folder / f'fresh.{suffix}.{frame:06d}')
-                        # Retentive output adds four diagnostics even on a wet branch.
-                        # Every common physical payload must still be bit-exact.
+                        # A retentive law adds four diagnostics even on a wet branch;
+                        # every other field must equal the saturated baseline byte for byte.
                         diagnostics = {'saturation', 'effective saturation',
                                        'relative permeability', 'bulk density'}
                         def field_name(key):

@@ -104,18 +104,18 @@ public:
     void plastic_props(int e, double pls,
                        double& amc, double& anphi, double& anpsi,
                        double& hardn, double& ten_max) const;
-    // One linear piece of an element's weakening law, starting at plastic
-    // strain pls: the cohesion and the friction and dilation angles at pls,
-    // their change per unit plastic strain, and the plastic strain where the
-    // piece ends (the next pls0 or pls1 of the element's materials, or the
-    // largest double). A rate-and-state piece also keeps this step's rate and
-    // state terms, which stay fixed along it.
     // Factors of the strength that depend only on the friction and dilation
     // angles, so that a strength with fixed angles needs no trigonometry.
     struct AngleFactors {
         double anphi, anpsi, sqrt_anphi, tan_phi;
         bool zero_friction;
     };
+    // One linear piece of an element's weakening law, starting at plastic
+    // strain pls: the cohesion and the friction and dilation angles at pls,
+    // their change per unit plastic strain, and the plastic strain where the
+    // piece ends (the next pls0 or pls1 of the element's materials, or the
+    // largest double). A rate-and-state piece also keeps this step's rate and
+    // state terms, which stay fixed along it.
     struct StrengthPiece {
         double pls, end;
         double cohesion, friction, dilation;

@@ -125,7 +125,7 @@ inline double hydraulic_storage(const MatProps &mat, int e)
 
 // Coupled explicit steps use the current strain increment before evaluating
 // stress, including when the mechanical mass is scaled. PT and the reduced
-// quasistatic flow model retain the fixed-stress split and pending increment.
+// quasistatic flow model use the fixed-stress split and pending increment.
 #pragma acc routine seq
 inline bool hydraulic_explicit_coupling(const Param &param)
 {
@@ -376,7 +376,7 @@ private:
 };
 
 // One exact-overlap transfer for fluid inventories and pending shear energy.
-// The linear model retains its storage-weighted correction; finite-density
+// The linear model applies a storage-weighted correction; finite-density
 // mass and sensible energy use global constraints and explicit boundary flows.
 class ContentRemap {
 public:

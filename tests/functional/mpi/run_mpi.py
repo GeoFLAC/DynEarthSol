@@ -355,7 +355,7 @@ def main():
             current, timing = run(f"{case}-mpi{ranks}-omp{threads}", cfg, executables["mpi"],
                                   ranks, threads)
             exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
-            # The checkpoints MPI writes match the serial ones in every dataset.
+            # Check that the checkpoints MPI writes match the serial ones in every dataset.
             for frame in range(5):
                 compare_physical_hdf5(reference, current, frame, kind="chkpt", group="/")
             if moving and ranks > 1 and timing["ownership_reports"] < 2*ranks:

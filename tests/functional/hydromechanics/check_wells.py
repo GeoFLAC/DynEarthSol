@@ -6,7 +6,7 @@ In a sealed domain the explicit pressure update conserves fluid exactly:
     sum_n hmass_n (p_n - p0_n) + sum_e alpha V_e (s_e - s0_e) / K_b = -pumped volume,
 where s is the recorded mean total stress. A centred well and a well on a
 domain edge, which several elements share, follow a schedule that pumps, shuts
-in and injects, with events between time steps. The output directory is new.
+in and injects, with events between time steps. OUTPUT_DIRECTORY must not exist.
 """
 
 import json

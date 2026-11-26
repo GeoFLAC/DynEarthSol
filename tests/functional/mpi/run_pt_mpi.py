@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Run the upstream PT analytical/restart checks on serial and compact MPI meshes.
+"""Run the PT analytical/restart checks on serial and compact MPI meshes.
 
 All process commands, logs, configs and field comparisons are retained. Serial
 and MPI builds must enable HDF5 (and MMG for --cases mmg-remesh). Comparisons use
 an explicit tolerance because ADR scalar reductions can change floating-point
-summation order; exactness is measured separately and is never assumed.
+summation order; the report also records whether every dataset matches exactly.
 """
 import argparse
 import configparser
@@ -58,8 +58,7 @@ def compare_outputs(reference, current, rtol, atol):
                     assert np.isfinite(value).all() and np.isfinite(other).all(), (filename, name)
                     scale = float(np.max(np.abs(value), initial=0))
                     # The projected residual is a cancellation of loaded nodal
-                    # forces. Compare it in force units; independent upstream
-                    # tests still require its RMS to meet the requested tolerance.
+                    # forces, so compare it on the scale of the nodal force.
                     if name.split('/')[-1] == 'PT residual force' and 'force' in a:
                         scale = max(scale, float(np.max(np.abs(a['force']), initial=0)))
                     if name.split('/')[-1] == 'pending pore pressure increment':
@@ -126,7 +125,7 @@ def main():
                     cfg['control']['PT_option'] = str(option)
                     if 'remesh' in case:
                         # MMG-adapted meshes need more relaxation passes than
-                        # the original non-MMG fixture; keep its tolerances.
+                        # the fixture sets for its non-MMG mesh; keep its tolerances.
                         cfg['control']['PT_max_iter'] = '50000'
                     if case == 'running-remesh':
                         cfg['control']['PT_use_running_scale'] = 'yes'

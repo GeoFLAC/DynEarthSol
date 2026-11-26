@@ -99,7 +99,7 @@ class Constitutive(unittest.TestCase):
 
 class Inversion(unittest.TestCase):
     def test_saturated_branch_is_the_existing_update(self):
-        """Saturated nodes take p + dm/s exactly, as the current DES update."""
+        """Saturated nodes take p + dm/s exactly, as the linear DES update does."""
         rng = np.random.default_rng(3)
         for ret in LAWS:
             p = rng.uniform(1e5, 1e6, 500)
@@ -192,7 +192,7 @@ class ExplicitColumn(unittest.TestCase):
                 self.assertGreater(errors[0] / errors[1], ratio)
 
     def test_saturated_column_is_linear_diffusion(self):
-        """All-saturated nodes reproduce the existing linear explicit update."""
+        """All-saturated nodes reproduce the linear explicit update."""
         ret = LAWS[0]
         z = np.linspace(0, 10.0, 21)
         col = Column(z, ret, phi=PHI, storage=1e-9, perm=1e-13)
@@ -208,7 +208,7 @@ class ExplicitColumn(unittest.TestCase):
         self.assertAlmostEqual(dt, 0.5 * h * h * 1e-3 * 1e-9 / 1e-13, delta=1e-12 * dt)
 
     def test_saturated_bound_holds_for_dry_infiltration(self):
-        """The existing saturated timestep needs no change when nodes desaturate."""
+        """The saturated timestep bound holds when nodes desaturate during dry infiltration."""
         ret = LAWS[0]
         perm = 1e-12
         z = np.linspace(0, 2.0, 21)

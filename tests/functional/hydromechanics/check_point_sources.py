@@ -110,10 +110,9 @@ def restart(exe,folder,cfg,env):
                 base=key.rsplit('/',1)[-1].lstrip('@').removesuffix('.layout')
                 if base in ('walltime_sec','provenance') or '/provenance/' in key:continue
                 if base=='reference_frame_time' and a[key]!=b[key]:
-                    # The existing non-PT output scheduler rebases its clock at
-                    # restart. Record its ulp-level regrouping difference; do
-                    # not confuse that unresolved lifecycle issue with exact
-                    # equality of physical state and actual saved times.
+                    # The non-PT output scheduler rebases its clock at restart, so
+                    # reference_frame_time may differ by rounding: it is compared
+                    # to 4 eps and recorded; every other field must match exactly.
                     before,after=struct.unpack('d',a[key])[0],struct.unpack('d',b[key])[0]
                     np.testing.assert_allclose(before,after,rtol=4*np.finfo(float).eps,atol=0)
                     clock_rounding.append(dict(file=p.name,fresh=before,resumed=after))

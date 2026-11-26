@@ -4,7 +4,7 @@
 An imposed top velocity compresses a laterally confined unit column. A
 mesh-volume integral of strain and pressure, plus the PT pending increment,
 must stay zero. The same integral also supplies an independent mean-pressure
-recurrence. A last-step pressure residual cannot substitute for these checks.
+recurrence.
 """
 
 import argparse

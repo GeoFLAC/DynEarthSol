@@ -268,7 +268,7 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
                 : delta*current[d]; // parallel normals: later boundary wins
         return;
     }
-    // Preserve the original edge map exactly for non-PT callers.
+    // Otherwise keep only the velocity component along the precomputed edge.
     const int slot = var.edge_slot[ic*nbdrytypes + ib];
     if (slot < 0) return;
     const double* edge = &var.edge_vec[slot*NDIMS];
@@ -976,13 +976,11 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
-    // Check if there is a stress BC applied on this boundary
     if (var.stress_bc_types[i] == 0) continue;
 
     const auto& bdry = *(var.bfacets[i]);
     const int bound = static_cast<int>(bdry.size());
 
-    // Loop over all boundary facets
     for (int n = 0; n < bound; ++n) {
         int e = bdry[n].first;      // This facet belongs to element e
         int f = bdry[n].second;     // This facet is the f-th facet of element e
@@ -1007,45 +1005,44 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         // 3D case: Apply stress based on boundary type (x0, x1, y0, y1, z0, z1)
         switch (var.stress_bc_types[i]) {
             case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
+                traction[0] = var.stress_bc_values[i];
                 break;
             case 2: // Traction in the y-direction
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value
+                traction[1] = var.stress_bc_values[i];
                 break;
             case 3: // Traction in the z-direction
-                traction[2] = var.stress_bc_values[i]; // Set z-direction traction value
+                traction[2] = var.stress_bc_values[i];
                 break;
             case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
                 for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
                 break;
             default:
-                continue; // Skip if no valid stress BC type
+                continue;
         }
 #else
         // 2D case: Apply stress based on boundary type (x0, x1, z0, z1)
         switch (var.stress_bc_types[i]) {
             case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
+                traction[0] = var.stress_bc_values[i];
                 break;
             case 3: // Traction in the z-direction (mapped to y in 2D)
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value in 2D
+                traction[1] = var.stress_bc_values[i];
                 break;
             case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
                 for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
                 break;
             default:
-                continue; // Skip if no valid stress BC type
+                continue;
         }
 #endif
 
         // Apply the traction to the boundary facet nodes
         for (int j = 0; j < NODES_PER_FACET; ++j) {
-            int nn = conn[NODE_OF_FACET[f][j]];  // Get global node index for this facet
+            int nn = conn[NODE_OF_FACET[f][j]];
             ArrayAccessor force_node = force[nn];      // Pointer to the force array for this node
 
-            // Distribute the traction (stress) to the nodes on the facet
+            // Each facet node takes an equal share of the facet force.
             for (int d = 0; d < NDIMS; ++d) {
-                // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
                 force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
             }
         }
@@ -2068,7 +2065,7 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 void build_velocity_constraints(const Param& param, const Variables& var,
                                 VelocityConstraints& constraints, bool homogeneous)
 {
-    // F(v)=Jv+b is the existing ordered BC map. Its admissible velocities solve
+    // F(v)=Jv+b is the ordered BC map of apply_vbcs. Its admissible velocities solve
     // (I-J)v=b. Homogeneous calls give J without subtracting prescribed velocities,
     // avoiding cancellation when a load is large relative to a perturbation.
     #pragma acc wait

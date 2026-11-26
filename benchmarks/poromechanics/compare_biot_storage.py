@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Run parent/corrected DES binaries against the same finite-grain Biot column.
+"""Run a parent and the current DES build on the same finite-grain Biot column.
 
-Output includes input files, raw DES saves, logs, hashes, CSV histories and
-PNG/SVG/PDF figures. --plot-only reuses the recorded inputs and provenance.
+Output includes input files, raw DES saves, logs, hashes, CSV histories and a
+JSON summary. --plot-only reuses the recorded inputs and provenance.
 """
 
 import argparse

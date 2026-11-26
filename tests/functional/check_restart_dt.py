@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check changed restart controls against independent timestep/mass identities.
 
-The tiny elastic cell tests exact unchanged continuation and the first
-explicit interval after changing mechanical method, inertia, scaling or
-fixed dt. Older executables can supply legacy PT checkpoints.
+The tiny elastic cell tests exact continuation with unchanged controls and the
+first explicit interval after changing mechanical method, inertia, scaling or
+fixed dt. --legacy-executable adds restarts from the PT checkpoints it writes.
 """
 
 import argparse

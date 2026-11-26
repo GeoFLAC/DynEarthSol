@@ -3,7 +3,7 @@
 
 This strict comparator is for behavior-preserving refactors. It excludes
 runtime/provenance records, but permits no numerical tolerance or missing file.
-The same binary/HDF5 reader is used by the existing PT restart checks.
+It reads binary and HDF5 output with the reader of the PT restart checks.
 """
 
 import argparse

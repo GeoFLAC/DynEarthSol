@@ -199,7 +199,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   connectivity(*var.connectivity),
   temperature(*var.temperature),
   stress(*var.stress),
-//   stress_old(*var.stress_old),
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
   log_table(*var.log_table),
@@ -277,7 +276,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     evolution_b = p.mat.evolution_b;
     characteristic_velocity = p.mat.characteristic_velocity;
     characteristic_distance = p.mat.characteristic_distance;
-    // static_friction_coefficient = p.mat.static_friction_coefficient;
 
     // Material-only terms of the creep law, in the association visc() evaluates them in
     // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only

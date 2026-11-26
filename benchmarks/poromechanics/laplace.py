@@ -19,7 +19,7 @@ def stehfest_weights(n=14):
 
 
 def stehfest(transform, t, n=14):
-    """Invert a smooth, non-oscillating transform, retaining term order."""
+    """Invert a smooth, non-oscillating Laplace transform at time t with n Stehfest terms."""
     total = 0.0
     for k, weight in enumerate(stehfest_weights(n), 1):
         total += weight*transform(k*math.log(2)/t)

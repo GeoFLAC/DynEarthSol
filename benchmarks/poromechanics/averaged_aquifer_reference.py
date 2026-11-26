@@ -7,7 +7,7 @@ This generalises the regional subsidence model of Bear and Corapcioglu
   with incompressible grains, and fluid compressibility kept throughout;
 - an exact Laplace-domain solution for a finite well radius and a finite
   outer radius, for which the integration function g(t) of their eq. (92)
-  is no longer zero.
+  is not zero.
 
 Their closed forms are the limit of ``line_well`` with alpha=1,
 K_f=K_s=inf and no well radius; ``bear_corapcioglu_1981b`` evaluates the

@@ -87,7 +87,7 @@ def main():
         before = read_histories(folder)
         run_config(exe, restart_cfg, folder, 'restart', threads=1, expected_error=error)
         assert read_histories(folder) == before, name
-    # Position-only checkpoints retain their documented relocation fallback.
+    # A position-only checkpoint uses the documented relocation fallback.
     legacy = output/'legacy-position-only'
     clone_baseline(baseline, legacy)
     change(checkpoint(legacy), 'monitor point elements', rename='monitor other elements')

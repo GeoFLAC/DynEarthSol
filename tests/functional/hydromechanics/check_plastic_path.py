@@ -3,7 +3,7 @@
 
 All four nodes have prescribed velocities. Thus no free mechanical residual
 or mesh resolution can obscure the constitutive update. Large and refined
-increments are reported separately; a small-increment pass does not qualify
+increments are reported separately, since a small increment does not exercise
 the large-increment return or the spatial tunnel problem.
 """
 

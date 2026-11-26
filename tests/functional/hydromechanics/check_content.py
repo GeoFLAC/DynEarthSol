@@ -4,7 +4,8 @@
 All accepted steps must be saved. Fixed geometry, fixed porosity, no
 retention, no thermal source and no wells are required. The initial pending
 PT increment comes from the run or its source checkpoint; it is not assumed
-zero at a nonzero restart. --measure retains a failing parent diagnostic.
+zero at a nonzero restart. --measure reports the content defect without
+failing on it.
 """
 import argparse
 import json

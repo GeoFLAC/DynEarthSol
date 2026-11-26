@@ -16,8 +16,9 @@
 
 namespace {
 
-// Keep the owning element: density at a shared boundary node can differ
-// between adjoining materials. Only the facet geometry is common.
+// Calls apply for each flux-boundary facet with the element that owns it:
+// density at a shared boundary node can differ between adjoining materials;
+// only the facet geometry is common.
 template <class Apply>
 void flux_facets(const Variables &var, Apply apply)
 {
@@ -90,8 +91,8 @@ inline bool has_bishop_correction(const Param &param, const Variables &var)
 }
 
 // A plastic return breaks the elastic relation between mean stress and
-// volume change. Read the accepted projected strain, retaining the same
-// fixed-stress pressure buffer and its pending raw increment.
+// volume change. The source then reads the accepted projected strain and keeps
+// the fixed-stress pressure buffer with its pending raw increment.
 inline bool has_plastic_source(const Param &param)
 {
     return param.control.has_poroelastic_pressure_feedback &&
@@ -528,7 +529,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
 
     // Hydrostatic condition for pressure calculation
     const double rho_fluid = param.mat.fluid_rho0[param.mat.mattype_ref];
-    double gravity = param.control.gravity; // Gravitational acceleration
+    double gravity = param.control.gravity;
     double loading = param.ic.excess_pore_pressure;
     const double bulk = var.mat->bulkm(0);
     const double shear = var.mat->shearm(0);
@@ -649,7 +650,6 @@ static void pressure_step(const Param &param, const Variables &var,
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    // Initialize diff_max_local for reduction
     double diff_max_local = 0, source = 0, exchanged = 0;
     const bool has_retention = var.mat->has_retention;
     const bool strain_form = hydraulic_strain_form(param);
@@ -668,15 +668,14 @@ static void pressure_step(const Param &param, const Variables &var,
         double current_mean_stress = trace(stress[e])/NDIMS;
         double mean_stress_change = current_mean_stress - old_mean_stress[e];
 
-        // Retrieve hydraulic properties for the element
         double perm_e = var.mat->perm(e);                // Intrinsic permeability
         double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
         double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
         double bulk_comp = hydraulic_mean_stress_compliance(*var.mat, e);
 
 
-        // Pressure-form Darcy mobility remains well-defined when gravity is zero.
-        // This is algebraically equivalent to the former head-form expression:
+        // Darcy mobility k/mu in pressure form, well-defined when gravity is zero;
+        // it is algebraically equivalent to the head form
         //   (k * gamma_w / mu) * grad(p / gamma_w + z).
         double mobility = perm_e / mu_e;
         // Bishop chi_e: the mean of the element's nodal Se, the same chi as in the
@@ -693,7 +692,6 @@ static void pressure_step(const Param &param, const Variables &var,
         }
         const double kv_pressure = mobility * (*var.volume)[e];
 
-        // Compute element diffusivity and update max using reduction
         const double diff_e = hydraulic_diffusivity(param, *var.mat, e);
         diff_max_local = std::max(diff_max_local, diff_e);
 
@@ -706,7 +704,8 @@ static void pressure_step(const Param &param, const Variables &var,
             pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM / var.dt;
         if (chi != 1) pe *= chi;
         // Bishop fixed-stress correction L*(chi*E - D), frozen for the physical step
-        // (pressure_increments). Skip exact zero to retain saturated arithmetic.
+        // (pressure_increments). An exact zero is skipped, so a saturated element
+        // adds no term.
         if (plastic_source) {
             // The strain source already includes the plastic volume change;
             // only the previous raw pressure increment belongs to the buffer.
@@ -868,7 +867,6 @@ static void pressure_step(const Param &param, const Variables &var,
         const double value[] = {stored, source, wells, boundary, stored + source + wells - boundary};
         for (int i = 0; i < 5; ++i) (*var.fluid_balance)[i] += value[i];
     }
-    // Update global hydro_diff_max after the loop
     var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();

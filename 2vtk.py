@@ -318,7 +318,7 @@ def process_single_frame(args):
         try:
             convert_field(des, frame, 'PT residual force', fvtu)
         except KeyError:
-            # Optional in legacy, unsolved and post-remesh frames. The parent
+            # Absent from older, unsolved and post-remesh frames. The parent
             # reports this once across all workers and selected frame ranges.
             pt_residual_missing = True
         

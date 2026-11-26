@@ -1621,8 +1621,8 @@ static void check_mpi_support(const Param& p)
         }
     }
     // Saturated pore pressure, wells, fluid point sources, hydraulic boundaries,
-    // anisotropic permeability and matrix exchange run distributed. These
-    // coupled models still advance fields that only the serial kernels update.
+    // anisotropic permeability and matrix exchange run distributed. The
+    // coupled models below advance fields that only the serial kernels update.
     const auto any_positive = [](const double_vec& v) {
         return std::any_of(v.begin(), v.end(), [](double x) { return x > 0; });
     };
@@ -2813,8 +2813,8 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
             if (active && !p.control.has_hydraulic_diffusion)
                 die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 requires has_hydraulic_diffusion=true.");
-            // Each of these changes the pore volume or exchanges fluid outside
-            // the unsaturated content balance, which is not accounted yet.
+            // Each of these changes the pore volume or exchanges fluid in ways the
+            // unsaturated content balance does not account for.
             const bool exchange = std::any_of(p.mat.matrix_exchange.begin(), p.mat.matrix_exchange.end(),
                                               [](double h) { return h > 0; });
             if (active && (p.mat.porosity_model || p.mat.permeability_model ||

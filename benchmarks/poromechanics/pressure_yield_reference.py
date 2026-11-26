@@ -2,7 +2,7 @@
 """Pressure-driven Mohr-Coulomb yielding of a laterally confined layer.
 
 A saturated layer 0 <= d <= H (d depth below the top) carries the DES
-legacy initial stress, isotropic and lithostatic, with hydrostatic pore
+initial stress, isotropic and lithostatic, with hydrostatic pore
 pressure, and a drained surcharge q on its top. Under uniaxial strain both
 horizontal stresses stay equal, kappa = nu/(1 - nu) times the vertical
 increment, so the effective stresses (tension positive) are

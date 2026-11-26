@@ -3,7 +3,7 @@
 
 The layer of benchmarks/poromechanics/pressure_yield_reference.py: 2 m
 high, laterally confined, fixed base, top loaded by a surcharge q, saturated
-with its water table at the top and the DES legacy isotropic initial stress.
+with its water table at the top and the isotropic DES initial stress.
 The pore pressure at the top rises linearly to 95% of the pressure at which
 the yielded top would reach the Mohr-Coulomb apex (beyond it no equilibrium
 exists: the layer would lift off); the base is sealed and the permeability
