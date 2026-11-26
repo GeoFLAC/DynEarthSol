@@ -235,6 +235,15 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 #endif
 }
 
+void barycentric_point(const Variables &var, int e, const double *w, double x[NDIMS])
+{
+    ConstConnAccessor conn = (*var.connectivity)[e];
+    for (int d = 0; d < NDIMS; ++d) {
+        x[d] = 0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) x[d] += w[k] * (*var.coord)[conn[k]][d];
+    }
+}
+
 void compute_volume(const Variables &var,
                     double_vec &volume)
 {
@@ -1964,7 +1973,6 @@ void compute_mass(const Param &param, const Variables &var,
 
     refresh_hydraulic_diffusivity(param, var);
     var.mat->thermal_step_limit = 0;
-    assemble_well_source(param, var);
 
 #ifndef ACC
 #ifdef GPP1X

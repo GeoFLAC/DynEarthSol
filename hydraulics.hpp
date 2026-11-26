@@ -334,9 +334,14 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
 #pragma acc routine seq
 void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
                             const double *const gradient[NDIMS] = nullptr);
+// Fix the well screens in the material of the whole mesh (var.well_pieces): the
+// configured vertical screens, or, after a remesh, the previous pieces from the
+// positions of their ends (2*NDIMS per piece, see well_screen_positions).
+void place_well_screens(const Param &param, Variables &var, const double_vec *ends = nullptr);
+void well_screen_positions(const Variables &var, double_vec &ends);
 // Nodal well extraction at schedule ratio 1, var.fluid_source: each screen's
-// rate integrated exactly against the linear shape functions. Mesh-derived,
-// so it is rebuilt with the mass and needs no checkpoint.
+// rate integrated exactly against the linear shape functions along its pieces.
+// The pieces move with the mesh, so it changes only when they are placed.
 void assemble_well_source(const Param &param, const Variables &var);
 // Advance only accepted physical strain and pressure increments; etmp is scratch.
 void update_porosity(const Variables &var);

@@ -1,13 +1,13 @@
 #include <algorithm>
 #include <cmath>
-#include <cstdint>
-#include <cstring>
 #include <limits>
 #include <sstream>
 
 #include "point_sources.hpp"
+#include "hydraulics.hpp"
 #include "mpi_simulation.hpp"
 #include "fields.hpp"
+#include "geometry.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -110,25 +110,69 @@ void point_position(const Injection &injection, int p, double q[NDIMS])
     die(code, text.c_str());
 }
 
-} // namespace
-
-std::uint64_t mesh_fingerprint(const Variables &var)
+// Current positions of the material points that owners hold.
+void owner_positions(const Variables &var, const PointSourceOwners &owners, double_vec &positions)
 {
-    // FNV-1a over 64-bit words: the coordinates, the mesh size and the remesh count.
-    std::uint64_t h = 1469598103934665603ull;
-    const auto mix = [&h](std::uint64_t word) { h ^= word; h *= 1099511628211ull; };
-    mix(std::uint64_t(var.nnode)); mix(std::uint64_t(var.nelem)); mix(std::uint64_t(var.nremesh));
-    const double *x = var.coord->data();
-    for (std::size_t i = 0; i < std::size_t(var.nnode) * NDIMS; ++i) {
-        std::uint64_t word;
-        std::memcpy(&word, x + i, sizeof word);
-        mix(word);
-    }
-    return h | 1;
+    positions.resize(owners.element.size()*NDIMS);
+    for (std::size_t p = 0; p < owners.element.size(); ++p)
+        barycentric_point(var, owners.element[p], &owners.weight[p*NODES_PER_ELEM], &positions[p*NDIMS]);
 }
 
-void deposit_point_sources(const Injection &injection, const Variables &var,
-                           double start, double stop, PointSourceSink sink, void *context,
+} // namespace
+
+void place_point_sources(const Injection &injection, const Variables &var,
+                         PointSourceOwners &owners, const double_vec *positions)
+{
+    owners.element.clear();
+    owners.weight.clear();
+    if (!injection.enabled) return;
+    owners.element.assign(injection.num_points, -1);
+    owners.weight.assign(std::size_t(injection.num_points)*NODES_PER_ELEM, 0.0);
+    for (int p = 0; p < injection.num_points; ++p) {
+        double q[NDIMS];
+        if (positions) std::copy_n(&(*positions)[p*NDIMS], NDIMS, q);
+        else point_position(injection, p, q);
+        for (int d = 0; d < NDIMS; ++d) {
+            if (!std::isfinite(q[d]))
+                point_source_error(EXIT_RUNTIME_NAN, p, q, var, "has a non-finite coordinate");
+        }
+        for (int e = 0; e < var.nelem; ++e) {
+            double weights[NODES_PER_ELEM];
+            if (!compute_point_shape_weights(var, e, q, weights)) continue;
+            // Shared faces can have several candidates. Element order is
+            // stable, so selecting the first maps the requested rate once.
+            owners.element[p] = e;
+            std::copy_n(weights, NODES_PER_ELEM, &owners.weight[p*NODES_PER_ELEM]);
+            break;
+        }
+        if (owners.element[p] < 0)
+            point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
+                               "could not be mapped into the current mesh");
+    }
+}
+
+SourcePositions source_positions(const Variables &var)
+{
+    #pragma acc wait
+    SourcePositions at;
+    owner_positions(var, var.fluid_points, at.fluid);
+    owner_positions(var, var.heat_points, at.heat);
+    well_screen_positions(var, at.wells);
+    return at;
+}
+
+void place_sources(const Param &param, Variables &var, const SourcePositions *at)
+{
+    #pragma acc wait
+    place_point_sources(param.injection, var, var.fluid_points, at ? &at->fluid : nullptr);
+    place_point_sources(param.heat_injection, var, var.heat_points, at ? &at->heat : nullptr);
+    place_well_screens(param, var, at ? &at->wells : nullptr);
+    assemble_well_source(param, var);
+}
+
+void deposit_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                           const Variables &var, double start, double stop,
+                           PointSourceSink sink, void *context,
                            const double_vec *scale, bool peak_rate)
 {
     // The previous substep can still be reading this derived source array.
@@ -139,67 +183,13 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
         die(EXIT_RUNTIME_NAN,
             "Point-source integration interval must be finite and positive.");
     }
-
-    // The owners belong to this mesh and these point positions.
-    std::uint64_t mesh = mesh_fingerprint(var);
-    for (const double_vec *v : {&injection.points_x, &injection.points_y, &injection.points_z})
-        for (double x : *v) {
-            std::uint64_t word;
-            std::memcpy(&word, &x, sizeof word);
-            mesh = (mesh ^ word) * 1099511628211ull;
-        }
-    mesh |= 1;
-    PointSourceOwners &owners = var.point_owners[&injection];
-    // The owner changes only with the mesh: find it once per mesh. All ranks
-    // search again when any rank's mesh changed, for the check over the ranks.
-    if (mpi_any(var, owners.mesh != mesh)) {
-        owners.element.assign(injection.num_points, -1);
-        owners.weight.assign(std::size_t(injection.num_points)*NODES_PER_ELEM, 0.0);
-        int_vec placed(injection.num_points, 0);
-        for (int p = 0; p < injection.num_points; ++p) {
-            double q[NDIMS];
-            point_position(injection, p, q);
-            for (int d = 0; d < NDIMS; ++d) {
-                if (!std::isfinite(q[d])) {
-                    point_source_error(EXIT_RUNTIME_NAN, p, q, var,
-                                       "has a non-finite coordinate");
-                }
-            }
-            for (int e = 0; e < var.nelem; ++e) {
-                double weights[NODES_PER_ELEM];
-                if (!compute_point_shape_weights(var, e, q, weights)) continue;
-
-                // Shared faces can have several candidates. Element order is
-                // stable, so selecting the first maps the requested rate once and
-                // makes ownership deterministic across thread counts.
-                owners.element[p] = e;
-                for (int i = 0; i < NODES_PER_ELEM; ++i)
-                    owners.weight[p*NODES_PER_ELEM+i] = weights[i];
-                placed[p] = 1;
-                break;
-            }
-        }
-#ifdef USEMPI
-        // A compute rank holds part of the mesh: a point outside it can lie on
-        // another rank. Rates that cancel hide a lost point from the totals
-        // that assemble_point_sources checks, so each point is checked here.
-        if (var.mpi && var.mpi->in_kernel())
-            var.mpi->maximum(placed.data(), injection.num_points);
-#endif
-        for (int p = 0; p < injection.num_points; ++p) {
-            if (placed[p]) continue;
-            double q[NDIMS];
-            point_position(injection, p, q);
-            if (mpi_reports(var))
-                point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
-                                   "could not be mapped into the current mesh");
-            die_together(EXIT_RUNTIME_LOOKUP);
-        }
-        owners.mesh = mesh;
-    }
+    if (owners.element.size() != std::size_t(injection.num_points))
+        die(EXIT_INTERNAL_ASSERT, "Point sources were not placed in the mesh.");
 
     for (int p = 0; p < injection.num_points; ++p) {
-        const int mapped_element = owners.element[p];
+        // The owner is an element of the whole mesh; a compute rank holds it
+        // as an owned or ghost element, or not at all.
+        const int mapped_element = mpi_local_element(var, owners.element[p]);
         const double *mapped_weights = &owners.weight[p*NODES_PER_ELEM];
         if (mapped_element < 0) continue;  // on another rank
         double q[NDIMS];
@@ -252,10 +242,10 @@ void add_point_source(int point, int node, double rate, void *context)
 }
 } // namespace
 
-void assemble_point_sources(const Injection &injection, const Variables &var,
-                           double start, double stop, double_vec &source,
-                           const double_vec *scale, bool peak_rate,
-                           double_vec *weighted, const double_vec *point_weight)
+void assemble_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                            const Variables &var, double start, double stop, double_vec &source,
+                            const double_vec *scale, bool peak_rate,
+                            double_vec *weighted, const double_vec *point_weight)
 {
     #pragma acc wait
     if ((weighted == nullptr) != (point_weight == nullptr) || weighted == &source ||
@@ -268,7 +258,7 @@ void assemble_point_sources(const Injection &injection, const Variables &var,
     if (source.size() != static_cast<std::size_t>(var.nnode))
         die(EXIT_INTERNAL_ASSERT,"Point-source vector size does not match the current mesh node count.");
     PointSourceAssembly assembly{source,weighted,point_weight};
-    deposit_point_sources(injection,var,start,stop,add_point_source,&assembly,scale,peak_rate);
+    deposit_point_sources(injection,owners,var,start,stop,add_point_source,&assembly,scale,peak_rate);
     for (int field = 0; field < (weighted ? 2 : 1); ++field) {
         long double assembled_total = 0, requested_total = 0, absolute_rate_total = 0;
         std::size_t active_contributions = 0;

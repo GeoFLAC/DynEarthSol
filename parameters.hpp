@@ -1,7 +1,6 @@
 #ifndef DYNEARTHSOL3D_PARAMETERS_HPP
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
-#include <cstdint>
 #include <map>
 #include <limits>
 #include <string>
@@ -893,12 +892,23 @@ struct SurfaceInfo {
 class MatProps;
 class MarkerSet;
 class VirtualTopology;
-// The element holding each point source and its shape weights there, found
-// on the mesh that mesh_fingerprint() identifies.
+// Point sources fixed in the material, as monitor points are: the element of the
+// whole mesh that holds each point and its barycentric weights there. They move
+// with the mesh and are placed again by their positions after a remesh.
 struct PointSourceOwners {
-    std::uint64_t mesh = 0;
-    int_vec element;      // -1: not in this (rank's) mesh
+    int_vec element;      // per point
     double_vec weight;    // NODES_PER_ELEM per point
+};
+
+// Well screens fixed in the material: the screen in pieces, each a straight
+// segment in one element of the whole mesh, in order from bottom to top. The
+// barycentric coordinates of its ends, and their mean over it, which weights its
+// nodal source, stay fixed while the mesh moves. length is its share of the
+// configured screen length.
+struct WellPieces {
+    int_vec well, element;
+    double_vec start, end, mean;  // NODES_PER_ELEM per piece
+    double_vec length;
 };
 
 struct Variables {
@@ -1039,8 +1049,8 @@ struct Variables {
     double_vec *energy_balance = nullptr; // sensible energy change, sources, carried heat, boundary reactions, error
     double fluid_reference_temperature = 0; // EOS reference, preserved when temperature boundaries change
     double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
-    mutable std::uint64_t fluid_source_mesh = 0; // mesh_fingerprint() fluid_source was assembled on
-    mutable std::map<const Injection*, PointSourceOwners> point_owners; // per point-source set
+    PointSourceOwners fluid_points, heat_points; // [injection] and [heat_injection]
+    WellPieces well_pieces;
     double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 
     // For rate-and-state friction

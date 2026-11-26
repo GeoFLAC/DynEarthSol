@@ -26,6 +26,7 @@
 #include "markerset.hpp"
 #include "mesh.hpp"
 #include "monitor.hpp"
+#include "point_sources.hpp"
 #include "mpi_simulation.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
@@ -257,6 +258,7 @@ void init(const Param& param, Variables& var)
     // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
     // update_mesh() ungated before the loop.
     initialize_fluid_content(param,var);
+    place_sources(param, var);  // in the material, from their configured places
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
 #ifdef USEMMG
@@ -274,6 +276,69 @@ void init(const Param& param, Variables& var)
 #endif
 }
 
+
+// Sources fixed in the material continue where the checkpoint left them. A set
+// the checkpoint lacks, or that the configuration changed, starts at its
+// configured place, as a changed monitor point set does.
+template <class Input>
+static void restore_sources(const Param &param, Variables &var, Input &bin)
+{
+    const auto points = [&](const std::string &name, const Injection &injection,
+                            PointSourceOwners &owners) {
+        int count = 0;
+        if (bin.has_array((name + " point count").c_str()))
+            bin.read_scalar(count, name + " point count");
+        if (!injection.enabled || count != injection.num_points) {
+            place_point_sources(injection, var, owners);
+            return;
+        }
+        owners.element.resize(count);
+        owners.weight.resize(std::size_t(count)*NODES_PER_ELEM);
+        bin.read_array(owners.element, (name + " point elements").c_str());
+        bin.read_array(owners.weight, (name + " point weights").c_str());
+        for (int p = 0; p < count; ++p)
+            if (owners.element[p] < 0 || owners.element[p] >= var.nelem)
+                die(EXIT_IO_RESTART, "Invalid point-source element in the checkpoint.");
+        for (double w : owners.weight)
+            if (!std::isfinite(w)) die(EXIT_IO_RESTART, "Invalid point-source weight in the checkpoint.");
+    };
+    points("fluid", param.injection, var.fluid_points);
+    points("heat", param.heat_injection, var.heat_points);
+
+    const BC &bc = param.bc;
+    int count = 0;
+    if (param.control.has_hydraulic_diffusion && bc.num_wells > 0 && bin.has_array("well piece count"))
+        bin.read_scalar(count, "well piece count");
+    WellPieces &pieces = var.well_pieces;
+    bool same = count > 0;
+    if (same) {
+        pieces.well.resize(count);
+        pieces.element.resize(count);
+        pieces.length.resize(count);
+        for (double_vec *v : {&pieces.start, &pieces.end, &pieces.mean})
+            v->resize(std::size_t(count)*NODES_PER_ELEM);
+        bin.read_array(pieces.well, "well piece wells");
+        bin.read_array(pieces.element, "well piece elements");
+        bin.read_array(pieces.start, "well piece starts");
+        bin.read_array(pieces.end, "well piece ends");
+        bin.read_array(pieces.mean, "well piece means");
+        bin.read_array(pieces.length, "well piece lengths");
+        double_vec length(bc.num_wells, 0.0);
+        for (int k = 0; k < count; ++k) {
+            if (pieces.element[k] < 0 || pieces.element[k] >= var.nelem ||
+                !std::isfinite(pieces.length[k]))
+                die(EXIT_IO_RESTART, "Invalid well piece in the checkpoint.");
+            if (pieces.well[k] < 0 || pieces.well[k] >= bc.num_wells) same = false;
+            else length[pieces.well[k]] += pieces.length[k];
+        }
+        for (int w = 0; same && w < bc.num_wells; ++w) {
+            const double screen = bc.well_z_top[w] - bc.well_z_bottom[w];
+            same = std::fabs(length[w] - screen) <= 1e-9 * screen;
+        }
+    }
+    if (!same) place_well_screens(param, var);
+    assemble_well_source(param, var);
+}
 
 void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 {
@@ -784,6 +849,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         if (hydraulic_order_changed && !initial)
             die(EXIT_IO_RESTART, "Hydraulic step ordering differs from this checkpoint; use its matching solver/formulation.");
     }
+    restore_sources(param, var, bin_chkpt);
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 

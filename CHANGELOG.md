@@ -105,7 +105,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Scheduled fluid and heat point sources support signed rates or total
   amounts, exact partial-step schedules, mesh-aware distribution and
   independent volume/heat balance checks. Existing wells retain their
-  extraction-positive convention.
+  extraction-positive convention. Point sources and well screens move with
+  the material, as monitor points do, through remeshing and restarts.
 - Optional groundwater heat advection uses Darcy flux and mixed solid/fluid
   heat capacity, with prescribed thermal boundaries and stable substeps even
   for a fixed outer timestep. A schematic and analytical Ogata–Banks comparison

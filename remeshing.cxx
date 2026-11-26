@@ -21,6 +21,7 @@
 #include "fields.hpp"
 #include "geometry.hpp"
 #include "hydraulics.hpp"
+#include "point_sources.hpp"
 #include "matprops.hpp"
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
@@ -6042,6 +6043,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePush(__FUNCTION__);
 #endif
     int64_t time_tmp = get_nanoseconds();
+    // Where the sources sit in the material, to place them again on the new mesh.
+    const SourcePositions sources = source_positions(var);
 
     if (var.fluid_pressure_consumed) {
         #pragma acc wait
@@ -6341,6 +6344,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     var.plstrain_remesh = new double_vec(*var.plstrain);
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+    place_sources(param, var, &sources);
 
     double_vec surface_area(var.surfinfo.etop);
 

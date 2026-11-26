@@ -299,7 +299,7 @@ static void assemble_inflow(const Param &param, const Variables &var, double sta
             source.total_amount[p] : source.rate[p];
         injecting[p] = strength > 0 ? 1.0 : 0.0;
     }
-    assemble_point_sources(source, var, start, stop, *var.inflow_rate, &injecting, peak_rate,
+    assemble_point_sources(source, var.fluid_points, var, start, stop, *var.inflow_rate, &injecting, peak_rate,
                            var.inflow_heat, &source.temperature);
 }
 
@@ -374,7 +374,7 @@ static void temperature_step(const Param &param, const Variables &var,
     const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
     const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
     if (param.heat_injection.enabled) {
-        assemble_point_sources(param.heat_injection,var,time-dt,time,*var.heat_source);
+        assemble_point_sources(param.heat_injection,var.heat_points,var,time-dt,time,*var.heat_source);
         for (int n=0; n<var.nnode; ++n) {
             double prescribed = 0;
             if ((*var.heat_source)[n] != 0 &&

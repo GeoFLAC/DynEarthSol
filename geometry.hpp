@@ -12,6 +12,8 @@ double compute_facet_measure(ConstArrayIndirectAccessor coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);
+// The point of element e with barycentric coordinates w (NODES_PER_ELEM).
+void barycentric_point(const Variables &var, int e, const double *w, double x[NDIMS]);
 
 // Integral of old shape j times new shape i over their simplex intersection.
 // Host-only geometry; includes partial overlap without normalizing lost volume.

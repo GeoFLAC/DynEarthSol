@@ -566,6 +566,25 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_aux_array(monitor.elements, "monitor point elements", monitor.elements.size());
         bin.write_aux_array(monitor.weights, "monitor point weights", monitor.weights.size());
     }
+    // Sources fixed in the material: where a restart continues them.
+    for (const auto &set : {std::make_pair(std::string("fluid"), &var.fluid_points),
+                            std::make_pair(std::string("heat"), &var.heat_points)}) {
+        const PointSourceOwners &owners = *set.second;
+        if (owners.element.empty()) continue;
+        bin.write_scalar(int(owners.element.size()), (set.first + " point count").c_str());
+        bin.write_aux_array(owners.element, (set.first + " point elements").c_str(), owners.element.size());
+        bin.write_aux_array(owners.weight, (set.first + " point weights").c_str(), owners.weight.size());
+    }
+    const WellPieces &pieces = var.well_pieces;
+    if (!pieces.element.empty()) {
+        bin.write_scalar(int(pieces.element.size()), "well piece count");
+        bin.write_aux_array(pieces.well, "well piece wells", pieces.well.size());
+        bin.write_aux_array(pieces.element, "well piece elements", pieces.element.size());
+        bin.write_aux_array(pieces.start, "well piece starts", pieces.start.size());
+        bin.write_aux_array(pieces.end, "well piece ends", pieces.end.size());
+        bin.write_aux_array(pieces.mean, "well piece means", pieces.mean.size());
+        bin.write_aux_array(pieces.length, "well piece lengths", pieces.length.size());
+    }
     if (var.matrix_pressure)
         bin.write_array(*var.matrix_pressure, "matrix pressure", var.matrix_pressure->size());
     if (param.control.has_hydraulic_diffusion && var.fluid_balance)

@@ -287,8 +287,8 @@ def main():
         results["checks"].append(dict(case=label,ranks=2,bit_exact=exact,timing=timing))
         print(f"{label}: {'bit-exact' if exact else 'within rounding of the node sums'}",flush=True)
 
-    # A well on a moving mesh pushed from one side: in the first steps only some ranks'
-    # nodes move, yet every rank must assemble the well weights again.
+    # A well on a mesh pushed from one side, which moves some ranks' nodes and not others:
+    # the screen moves with the material on every rank as in serial.
     cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
     cfg.optionxform = str
     cfg.read(ROOT / "benchmarks/poromechanics/1d-consolidation-des2d_traction.cfg")
@@ -311,7 +311,7 @@ def main():
     print(f"moving-well: {'bit-exact' if exact else 'within rounding of the node sums'}", flush=True)
 
     # Fluid points outside a .poly mesh, with opposite rates that cancel in every total,
-    # stop the run as in serial: each point must lie on some rank.
+    # stop the run once with the serial report and exit code.
     (work / "box.poly").write_text("4 2 0 0\n0 0 0\n1 0 -100\n2 1200 -100\n3 1200 0\n"
                                    "4 1\n0 0 1 1\n1 1 2 16\n2 2 3 2\n3 3 0 32\n0\n"
                                    "1\n0 600 -50 0 0\n")

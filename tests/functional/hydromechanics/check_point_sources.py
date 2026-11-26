@@ -3,11 +3,14 @@
 
 The analytical references are integrated fluid volume and sensible heat,
 not a fitted spatial point-source profile. Fixed-mesh restart must preserve
-every saved/checkpoint physical payload. A forced-remesh test checks source
-remapping and continuation separately from conservative remesh transfer.
+every saved/checkpoint physical payload. A lifted column remeshed at every
+step checks that point sources and a well screen move with the material, as
+monitor points do, and continue exactly on restart.
 """
 
 import argparse
+import ast
+import csv
 import json
 import math
 import os
@@ -121,6 +124,76 @@ def restart(exe,folder,cfg,env):
     return dict(exact_physical_payloads=count,legacy_output_clock_rounding=clock_rounding)
 
 
+def checkpoint_arrays(path,names):
+    """Named arrays of a checkpoint, native or HDF5."""
+    data=fields(path);found={}
+    for name in names:
+        key=next(k for k in data if not k.startswith('@') and k.split('/')[-1]==name)
+        layout=data.get('@'+key+'.layout')
+        kind=ast.literal_eval(layout.decode())[1] if layout else ('<i4' if name.endswith(('elements','wells')) else '<f8')
+        found[name]=np.frombuffer(data[key],dtype=np.dtype(kind))
+    return found
+
+
+def material(exe,out,dim,env):
+    """Sources are fixed in the material, as monitor points are. A column lifted
+    rigidly and remeshed at every step carries a point source and a well screen;
+    the positions their checkpoints give must follow the monitor points that
+    start with them, the screen must keep its whole rate, and a restart must
+    continue them exactly."""
+    lift,dt,steps,point_rate,well_rate=1.,.1,4,1e-10,3e-10
+    point,bottom,top=[.4,.4,-5],[.6,.6,-6.5],[.6,.6,-3.5]
+    cfg=read_config(ROOT/'tests/functional/pt_remesh_restart.cfg')
+    cfg['sim']['has_output_during_remeshing']='no'
+    cfg['control'].update(fixed_dt=str(dt),has_thermal_diffusion='true',gravity='0',PT_absolute_tolerance='1e-8')
+    cfg['bc'].update(vbc_val_z0=str(lift),num_wells='1',well_x=f'[{bottom[0]}]',well_y=f'[{bottom[1]}]',
+                     well_z_bottom=f'[{bottom[2]}]',well_z_top=f'[{top[2]}]',well_rate=f'[{well_rate}]')
+    for group,rate in (('injection',f'[{point_rate}]'),('heat_injection','[100]')):
+        cfg[group]=dict(enabled='true',num_points='1',points_x=f'[{point[0]}]',points_y=f'[{point[1]}]',
+                        points_z=f'[{point[2]}]',rate=rate,rate_model='constant_rate')
+    starts=[point,bottom,top]
+    cfg['monitor']=dict(enabled='true',step_interval='1',num_points='3',point_type='particle',
+                        points_x=json.dumps([q[0] for q in starts]),points_y=json.dumps([q[1] for q in starts]),
+                        points_z=json.dumps([q[2] for q in starts]))
+    if dim==2:
+        for section in ('injection','heat_injection','monitor'):del cfg[section]['points_y']
+        del cfg['bc']['well_y']
+    with (out/'remesh.cfg').open('w') as f:cfg.write(f)
+    run_solver([sys.executable,str(ROOT/'tests/functional/pt_initial_checkpoint.py'),str(exe),str(out/'remesh.cfg'),
+                str(out/'remesh'),'--steps',str(steps),'--restart-frame','1','--require-remesh'],
+               log=out/'remesh.log',env=env,check=True,timeout=240)
+    folder=out/'remesh';model=Dynearthsol(str(folder/'fresh'));nodes=dim+1
+    axes=('x','y','z') if dim==3 else ('x','z')
+    tracked={}
+    for i in range(3):
+        with (folder/f'monitor_point_{i}.csv').open() as stream:
+            for row in csv.DictReader(stream):
+                if int(row['row'])==0:
+                    tracked[i,int(row['step'])]=np.array([float(row['query_'+a]) for a in axes])
+    names=['fluid point elements','fluid point weights','heat point elements','heat point weights',
+           'well piece elements','well piece starts','well piece ends']
+    gap=0.
+    for frame in model.frames:
+        x=model.read_field(frame,'coordinate');conn=model.read_field(frame,'connectivity')
+        a=checkpoint_arrays(folder/f'fresh.chkpt.{frame:06d}',names)
+        where=lambda element,weights:weights[:nodes]@x[conn[element]]
+        found=[where(a['fluid point elements'][0],a['fluid point weights']),
+               where(a['heat point elements'][0],a['heat point weights']),
+               where(a['well piece elements'][0],a['well piece starts'][:nodes]),
+               where(a['well piece elements'][-1],a['well piece ends'][-nodes:])]
+        for source,monitor in zip(found,(0,0,1,2)):
+            gap=max(gap,float(np.max(np.abs(source-tracked[monitor,frame]))))
+        if frame:
+            b=model.read_field(frame,'fluid balance')
+            np.testing.assert_allclose(b[2],(well_rate-point_rate)*dt,rtol=1e-9,atol=0)
+    assert gap<=1e-9,('Sources left the material their monitor points follow',gap)
+    start=np.array([point[0],point[2]] if dim==2 else point)
+    moved=float(np.max(np.abs(found[0]-start)))
+    assert moved>=.5*lift*dt*steps,('The source did not move with the lifted column',moved)
+    return dict(actual_mesh_change=True,all_continuation_payloads_exact=True,
+                max_source_monitor_gap_m=gap,point_displacement_m=moved)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable',type=Path);parser.add_argument('output',type=Path)
@@ -193,16 +266,7 @@ def main():
         else:cfg['bc'].update(tbc_x0='1',tbc_val_x0='300')
         run(exe,out/(source+'-fixed-node'),cfg,env,51)
         result['checks'][source+'-fixed-node']=True
-    # Remeshing changes shape weights; the source is located on the current
-    # mesh after each change. This checks continuation, not remap conservation.
-    cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
-    cfg['control'].update(fixed_dt='.1',has_thermal_diffusion='true',gravity='0',PT_absolute_tolerance='1e-8')
-    for group,rate in (('injection','[1e-10]'),('heat_injection','[100]')):
-        cfg[group]=dict(enabled='true',num_points='1',points_x='[0.4]',points_z='[-5]',rate=rate,rate_model='constant_rate')
-        if dim==3:cfg[group]['points_y']='[0.4]'
-    with (out/'remesh.cfg').open('w') as f:cfg.write(f)
-    run_solver([sys.executable, str(ROOT / 'tests/functional/pt_initial_checkpoint.py'), str(exe), str(out / 'remesh.cfg'), str(out / 'remesh'), '--steps', '4', '--restart-frame', '1', '--require-remesh'], log=out / 'remesh.log', env=env, check=True, timeout=240)
-    result['checks']['remesh']=dict(actual_mesh_change=True,all_continuation_payloads_exact=True)
+    result['checks']['remesh']=material(exe,out,dim,env)
     assert digest(exe)==result['executable_sha256']
     (out/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
     print(f'PASS: {len(result["checks"])} point-source cases in {dim}D')

@@ -3,14 +3,28 @@
 
 #include "parameters.hpp"
 
+// Where the point sources and well-screen piece ends sit in the material, taken
+// on the whole mesh before a remesh: NDIMS per point, 2*NDIMS per piece.
+struct SourcePositions {
+    double_vec fluid, heat, wells;
+};
+SourcePositions source_positions(const Variables &var);
+// Fix the point sources and well screens in the material of the whole mesh: at
+// their configured places, or at the positions taken before a remesh. Then
+// assemble the well source on it.
+void place_sources(const Param &param, Variables &var, const SourcePositions *at = nullptr);
+// The element of the whole mesh holding each point of one set and its barycentric
+// weights there: at the configured coordinates, or at positions (NDIMS per point).
+void place_point_sources(const Injection &injection, const Variables &var,
+                         PointSourceOwners &owners, const double_vec *positions = nullptr);
+
 // Visit each current-mesh contribution once. The rate has volume/time units
 // for fluid sources and energy/time units for heat sources; the receiver owns
-// conversion to physical inventories. No point locator is duplicated there.
+// conversion to physical inventories.
 using PointSourceSink = void (*)(int point, int node, double rate, void *context);
-// Changes whenever the node coordinates or the mesh change; never 0.
-std::uint64_t mesh_fingerprint(const Variables &var);
-void deposit_point_sources(const Injection &injection, const Variables &var,
-                           double start, double stop, PointSourceSink sink, void *context,
+void deposit_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                           const Variables &var, double start, double stop,
+                           PointSourceSink sink, void *context,
                            const double_vec *scale = nullptr, bool peak_rate = false);
 
 // Mean source rate over an accepted (possibly subcycled) interval. Positive
@@ -20,8 +34,8 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
 // contribution by point_weight; both output totals are checked.
 // peak_rate bounds the active rate over the interval instead of averaging it;
 // use it only for a timestep bound, never for an integrated source amount.
-void assemble_point_sources(const Injection &injection, const Variables &var,
-                           double start, double stop, double_vec &source,
+void assemble_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                            const Variables &var, double start, double stop, double_vec &source,
                             const double_vec *scale = nullptr, bool peak_rate = false,
                             double_vec *weighted = nullptr, const double_vec *point_weight = nullptr);
 

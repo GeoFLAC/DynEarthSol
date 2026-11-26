@@ -43,8 +43,9 @@ public:
     PTResult pt_result() const;
     int owned_nodes() const;
     int owned_elements() const;
-    // The whole mesh's number of one of this rank's elements.
+    // The whole mesh's number of one of this rank's elements, and back (-1: not on this rank).
     int global_element(int element) const;
+    int local_element(int global) const;
     int global_nodes() const;
     void exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);
     void begin_exchange(MpiEntity, std::initializer_list<std::pair<double*,int>>);
@@ -108,6 +109,13 @@ inline int mpi_element_end(const Variables& var) {
     if (var.mpi && var.mpi->in_kernel()) return var.mpi->owned_elements();
 #endif
     return var.nelem;
+}
+// This rank's element of an element of the whole mesh; -1 if the rank does not hold it.
+inline int mpi_local_element(const Variables& var, int global) {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) return var.mpi->local_element(global);
+#endif
+    return global;
 }
 inline int mpi_node_end(const Variables& var) {
 #ifdef USEMPI

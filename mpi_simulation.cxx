@@ -252,6 +252,11 @@ void metadata(MpiState& state, Variables& var) {
     state.value(var.surfinfo.max_surf_vel);
     // Fluid volume balance of the last accepted step; every rank holds the reduced sums.
     ARCHIVE(fluid_balance);
+    // Sources fixed in the material, in elements of the whole mesh; each rank finds its own.
+    for (PointSourceOwners* owners : {&var.fluid_points, &var.heat_points}) {
+        state.value(owners->element);
+        state.value(owners->weight);
+    }
 #undef ARCHIVE
 }
 
@@ -375,6 +380,8 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     COPY(vbc_vertical_ratio_x0);
     COPY(vbc_vertical_ratio_x1);
     COPY(surfinfo.max_surf_vel);
+    COPY(fluid_points);
+    COPY(heat_points);
 #undef COPY
     var.nnode = partition.nodes.size();
     var.nelem = partition.elements.size();
@@ -1597,6 +1604,17 @@ int MpiSimulation::owned_elements() const {
 
 int MpiSimulation::global_element(int element) const {
     return impl_->part.elements[element];
+}
+
+int MpiSimulation::local_element(int global) const {
+    // Owned rows, then ghost rows, each in global order.
+    const int_vec& rows = impl_->part.elements;
+    const auto owned = rows.begin() + impl_->part.owned_elements;
+    for (auto range : {std::make_pair(rows.begin(), owned), std::make_pair(owned, rows.end())}) {
+        const auto at = std::lower_bound(range.first, range.second, global);
+        if (at != range.second && *at == global) return int(at - rows.begin());
+    }
+    return -1;
 }
 
 int MpiSimulation::global_nodes() const {

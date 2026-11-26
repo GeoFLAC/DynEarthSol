@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <iostream>
 #include <limits>
 #include <vector>
@@ -242,102 +241,194 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
     var.mat->hydro_step_limit = 0;
 }
 
-void assemble_well_source(const Param &param, const Variables &var)
-{
-    const BC &bc = param.bc;
-    if (bc.num_wells == 0) return;
-    // The weights depend only on the mesh: compute_mass can run several times
-    // a step, or every step on a fixed mesh, without the mesh changing. All
-    // ranks reassemble when any rank's mesh changed: the screen check sums over them.
-    #pragma acc wait
-    const std::uint64_t mesh = mesh_fingerprint(var);
-    if (!mpi_any(var, mesh != var.fluid_source_mesh)) return;
-    var.fluid_source_mesh = mesh;
+namespace {
 
-    double_vec &source = *var.fluid_source;
-    std::fill(source.begin(), source.end(), 0.0);
-    const int owned_nodes = mpi_node_end(var);
-#ifdef USEMPI
-    const bool partial = var.mpi && var.mpi->in_kernel();
-#else
-    const bool partial = false;
-#endif
+// The pieces of the segment a + t d, t0 <= t <= t1, in the elements of the whole
+// mesh, appended to pieces in order of t, each part counted once. Along a piece
+// the barycentric coordinates are affine in t, N_i = l0 + dl t; scale converts a
+// span of t to the length a piece records. Returns the length covered.
+double clip_segment(const Variables &var, const double a[NDIMS], const double d[NDIMS],
+                    double t0, double t1, double scale, int well, WellPieces &pieces)
+{
     // Barycentric tolerance, so that screens on element faces or edges are kept.
     const double tol = 1e-10;
-    struct Piece { int e; double z0, z1, l0[NODES_PER_ELEM], dl[NODES_PER_ELEM]; };
+    struct Piece { int e; double t0, t1, l0[NODES_PER_ELEM], dl[NODES_PER_ELEM]; };
+    std::vector<Piece> found;
+    // Elements away from the segment's bounding box cannot hold any of it; the
+    // margin is far wider than the barycentric tolerance below.
+    double lower[NDIMS], upper[NDIMS];
+    for (int i = 0; i < NDIMS; ++i) {
+        lower[i] = std::min(a[i] + d[i] * t0, a[i] + d[i] * t1);
+        upper[i] = std::max(a[i] + d[i] * t0, a[i] + d[i] * t1);
+    }
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        double low[NDIMS], high[NDIMS], size = 0;
+        for (int i = 0; i < NDIMS; ++i) low[i] = high[i] = (*var.coord)[conn[0]][i];
+        for (int k = 1; k < NODES_PER_ELEM; ++k)
+            for (int i = 0; i < NDIMS; ++i) {
+                low[i] = std::min(low[i], (*var.coord)[conn[k]][i]);
+                high[i] = std::max(high[i], (*var.coord)[conn[k]][i]);
+            }
+        for (int i = 0; i < NDIMS; ++i) size = std::max(size, high[i] - low[i]);
+        bool apart = false;
+        for (int i = 0; i < NDIMS; ++i)
+            apart = apart || high[i] + 1e-6 * size < lower[i] || upper[i] < low[i] - 1e-6 * size;
+        if (apart) continue;
+        ConstArrayAccessor v0 = (*var.coord)[conn[0]];
+        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
+#ifdef THREED
+        double shpdy[NODES_PER_ELEM];
+        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+#else
+        get_local_shape_fn(var, e, shpdx, shpdz);
+#endif
+        Piece pc = {e, t0, t1, {}, {}};
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            double l0 = (i == 0) + shpdx[i] * (a[0] - v0[0]) + shpdz[i] * (a[NDIMS-1] - v0[NDIMS-1]);
+            double dl = shpdx[i] * d[0] + shpdz[i] * d[NDIMS-1];
+#ifdef THREED
+            l0 += shpdy[i] * (a[1] - v0[1]);
+            dl += shpdy[i] * d[1];
+#endif
+            pc.l0[i] = l0;
+            pc.dl[i] = dl;
+            // Keep t with l0 + dl*t >= -tol.
+            if (dl > 0) pc.t0 = std::max(pc.t0, (-tol - l0) / dl);
+            else if (dl < 0) pc.t1 = std::min(pc.t1, (-tol - l0) / dl);
+            else if (l0 < -tol) pc.t1 = pc.t0 - 1;
+        }
+        if (pc.t1 > pc.t0) found.push_back(pc);
+    }
 
+    // A segment along a shared face or edge lies in several elements, whose
+    // nodal weights agree there: count each part of it once.
+    std::vector<double> cuts = {t0, t1};
+    for (const Piece &pc : found) {
+        cuts.push_back(pc.t0);
+        cuts.push_back(pc.t1);
+    }
+    std::sort(cuts.begin(), cuts.end());
+    double covered = 0;
+    for (std::size_t k = 0; k + 1 < cuts.size(); ++k) {
+        const double lo = cuts[k], hi = cuts[k+1], mid = 0.5 * (lo + hi);
+        if (hi <= lo) continue;
+        for (const Piece &pc : found) {
+            if (pc.t0 > mid || mid > pc.t1) continue;
+            pieces.well.push_back(well);
+            pieces.element.push_back(pc.e);
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                pieces.start.push_back(pc.l0[i] + pc.dl[i] * lo);
+                pieces.end.push_back(pc.l0[i] + pc.dl[i] * hi);
+                pieces.mean.push_back(pc.l0[i] + pc.dl[i] * mid);
+            }
+            pieces.length.push_back((hi - lo) * scale);
+            covered += hi - lo;
+            break;
+        }
+    }
+    return covered * scale;
+}
+
+// Consecutive pieces in one element become one, so that the count stays that of
+// the elements crossed: the chord between the outer ends stands for the material
+// line inside the element. Lengths add, and the mean coordinates, weighted by
+// length, keep each node's share.
+void merge_pieces(WellPieces &pieces)
+{
+    WellPieces merged;
+    for (std::size_t k = 0; k < pieces.element.size(); ++k) {
+        const std::size_t n = merged.element.size();
+        const double *mean = &pieces.mean[k*NODES_PER_ELEM], length = pieces.length[k];
+        if (n && merged.well[n-1] == pieces.well[k] && merged.element[n-1] == pieces.element[k]) {
+            const double total = merged.length[n-1] + length;
+            for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                double &m = merged.mean[(n-1)*NODES_PER_ELEM+i];
+                m = (m * merged.length[n-1] + mean[i] * length) / total;
+                merged.end[(n-1)*NODES_PER_ELEM+i] = pieces.end[k*NODES_PER_ELEM+i];
+            }
+            merged.length[n-1] = total;
+            continue;
+        }
+        merged.well.push_back(pieces.well[k]);
+        merged.element.push_back(pieces.element[k]);
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            merged.start.push_back(pieces.start[k*NODES_PER_ELEM+i]);
+            merged.end.push_back(pieces.end[k*NODES_PER_ELEM+i]);
+            merged.mean.push_back(mean[i]);
+        }
+        merged.length.push_back(length);
+    }
+    pieces = merged;
+}
+
+} // namespace
+
+void well_screen_positions(const Variables &var, double_vec &ends)
+{
+    const WellPieces &pieces = var.well_pieces;
+    ends.resize(pieces.element.size()*2*NDIMS);
+    for (std::size_t k = 0; k < pieces.element.size(); ++k) {
+        barycentric_point(var, pieces.element[k], &pieces.start[k*NODES_PER_ELEM], &ends[(2*k)*NDIMS]);
+        barycentric_point(var, pieces.element[k], &pieces.end[k*NODES_PER_ELEM], &ends[(2*k+1)*NDIMS]);
+    }
+}
+
+void place_well_screens(const Param &param, Variables &var, const double_vec *ends)
+{
+    const BC &bc = param.bc;
+    WellPieces placed;
+    if (!param.control.has_hydraulic_diffusion || bc.num_wells == 0) {
+        var.well_pieces = placed;
+        return;
+    }
+    const WellPieces &previous = var.well_pieces;
     for (int w = 0; w < bc.num_wells; ++w) {
         const double zb = bc.well_z_bottom[w], zt = bc.well_z_top[w];
-        double p[NDIMS] = {bc.well_x[w]};
-#ifdef THREED
-        p[1] = bc.well_y[w];
-#endif
-        // Clip the screen to each element. Along it the barycentric coordinates
-        // are affine in z, N_i = l0 + dl*z, from the linear shape-function gradients.
-        std::vector<Piece> pieces;
-        for (int e = 0; e < var.nelem; ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[e];
-            ConstArrayAccessor v0 = (*var.coord)[conn[0]];
-            double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-#ifdef THREED
-            double shpdy[NODES_PER_ELEM];
-            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
-#else
-            get_local_shape_fn(var, e, shpdx, shpdz);
-#endif
-            Piece pc = {e, zb, zt, {}, {}};
-            for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                double l0 = (i == 0) + shpdx[i] * (p[0] - v0[0]) - shpdz[i] * v0[NDIMS-1];
-#ifdef THREED
-                l0 += shpdy[i] * (p[1] - v0[1]);
-#endif
-                const double dl = shpdz[i];
-                pc.l0[i] = l0;
-                pc.dl[i] = dl;
-                // Keep z with l0 + dl*z >= -tol.
-                if (dl > 0) pc.z0 = std::max(pc.z0, (-tol - l0) / dl);
-                else if (dl < 0) pc.z1 = std::min(pc.z1, (-tol - l0) / dl);
-                else if (l0 < -tol) pc.z1 = pc.z0 - 1;
-            }
-            if (pc.z1 > pc.z0) pieces.push_back(pc);
-        }
-
-        // A screen along a shared face or edge lies in several elements, whose
-        // nodal weights agree there: count each part of the screen once.
-        std::vector<double> cuts = {zb, zt};
-        for (const Piece &pc : pieces) {
-            cuts.push_back(pc.z0);
-            cuts.push_back(pc.z1);
-        }
-        std::sort(cuts.begin(), cuts.end());
-        // A rank sees the screen only within its elements. Its owned nodes'
-        // weights, summed over the ranks, cover each part of the screen once.
         double covered = 0;
-        for (std::size_t k = 0; k + 1 < cuts.size(); ++k) {
-            const double lo = cuts[k], hi = cuts[k+1], mid = 0.5 * (lo + hi);
-            if (hi <= lo) continue;
-            for (const Piece &pc : pieces) {
-                if (pc.z0 > mid || mid > pc.z1) continue;
-                ConstConnAccessor conn = (*var.connectivity)[pc.e];
-                const double q = bc.well_rate[w] * (hi - lo) / (zt - zb);
-                double owned = 0;
-                for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                    const double weight = pc.l0[i] + pc.dl[i] * mid;
-                    source[conn[i]] += q * weight;
-                    if (conn[i] < owned_nodes) owned += weight;
-                }
-                covered += partial ? (hi - lo) * owned : hi - lo;
-                break;
+        if (!ends) {
+            // The configured vertical screen, with z for t.
+            double a[NDIMS] = {bc.well_x[w]}, d[NDIMS] = {0};
+#ifdef THREED
+            a[1] = bc.well_y[w];
+#endif
+            d[NDIMS-1] = 1;
+            covered = clip_segment(var, a, d, zb, zt, 1, w, placed);
+        } else {
+            // Each piece of the previous mesh, straight between its two ends,
+            // keeps its length in the material.
+            for (std::size_t k = 0; k < previous.element.size(); ++k) {
+                if (previous.well[k] != w) continue;
+                const double *a = &(*ends)[(2*k)*NDIMS], *b = &(*ends)[(2*k+1)*NDIMS];
+                double d[NDIMS];
+                for (int i = 0; i < NDIMS; ++i) d[i] = b[i] - a[i];
+                covered += clip_segment(var, a, d, 0, 1, previous.length[k], w, placed);
             }
         }
-#ifdef USEMPI
-        if (partial) covered = var.mpi->sum(covered);
-#endif
         if (covered < (1 - 1e-9) * (zt - zb)) {
-            if (mpi_reports(var))
-                std::cerr << "Error: the screen of well " << w << " is not entirely inside the mesh.\n";
-            die_together(EXIT_CONFIG_VALUE);
+            std::cerr << "Error: the screen of well " << w << " is not entirely inside the mesh.\n";
+            die(EXIT_CONFIG_VALUE);
         }
+    }
+    if (ends) merge_pieces(placed);
+    var.well_pieces = placed;
+}
+
+void assemble_well_source(const Param &param, const Variables &var)
+{
+    if (!param.control.has_hydraulic_diffusion || param.bc.num_wells == 0) return;
+    #pragma acc wait
+    const BC &bc = param.bc;
+    const WellPieces &pieces = var.well_pieces;
+    double_vec &source = *var.fluid_source;
+    std::fill(source.begin(), source.end(), 0.0);
+    // The screen's rate, spread uniformly over its configured length.
+    for (std::size_t k = 0; k < pieces.element.size(); ++k) {
+        const int w = pieces.well[k];
+        const double q = bc.well_rate[w] * pieces.length[k] / (bc.well_z_top[w] - bc.well_z_bottom[w]);
+        ConstConnAccessor conn = (*var.connectivity)[pieces.element[k]];
+        for (int i = 0; i < NODES_PER_ELEM; ++i)
+            source[conn[i]] += q * pieces.mean[k*NODES_PER_ELEM+i];
     }
 }
 
@@ -686,7 +777,7 @@ static void pressure_step(const Param &param, const Variables &var,
     const bool has_wells = param.bc.num_wells > 0;
     const bool has_points = param.injection.enabled;
     if (has_points) {
-        assemble_point_sources(param.injection,var,time-dt,time,*var.fluid_point_source);
+        assemble_point_sources(param.injection,var.fluid_points,var,time-dt,time,*var.fluid_point_source);
         for (int n=0;n<mpi_ne;++n)
             if ((*var.fluid_point_source)[n] != 0 &&
                 (pressure_boundary(n,var) >= 0 || !((*var.hmass)[n]>0 && std::isfinite((*var.hmass)[n]))))
@@ -1280,7 +1371,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
         std::fill(source_heat.begin(),source_heat.end(),0.0);
         if (points) {
             FluidSource source{param,var,source_rate,source_heat,true};
-            deposit_point_sources(param.injection,var,time,end,fluid_point_source,&source,nullptr,true);
+            deposit_point_sources(param.injection,var.fluid_points,var,time,end,fluid_point_source,&source,nullptr,true);
         }
         double limit = deformation > .05 ? interval*.05/deformation : interval;
         for (int n = 0; n < var.nnode; ++n) {
@@ -1344,12 +1435,12 @@ void HydraulicStep::advance(const Param &param, Variables &var)
             std::fill(source_heat.begin(),source_heat.end(),0.0);
             if (points) {
                 FluidSource source{param,var,source_rate,source_heat,false};
-                deposit_point_sources(param.injection,var,time,stop,fluid_point_source,&source);
+                deposit_point_sources(param.injection,var.fluid_points,var,time,stop,fluid_point_source,&source);
             }
             std::fill(heat_source.begin(),heat_source.end(),0.0);
             if (thermal) {
                 if (param.heat_injection.enabled)
-                    assemble_point_sources(param.heat_injection,var,time,stop,heat_source);
+                    assemble_point_sources(param.heat_injection,var.heat_points,var,time,stop,heat_source);
                 for (int n = 0; n < var.nnode; ++n) {
                     double power = 0, volume = 0;
                     const int *patch = var.support.patch(n);

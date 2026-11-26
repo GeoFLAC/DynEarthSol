@@ -2507,57 +2507,59 @@ static void test_point_sources() {
     source.rate={5,-2,7};source.total_amount={3,-1.4,2.8};
     source.start_time={.2,.5,.3};source.end_time={.8,1.2,.7};
     double_vec rate(m->var.nnode,0),integrated(m->var.nnode,0);
-    assemble_point_sources(source,m->var,0,1,rate);
+    PointSourceOwners owners;
+    place_point_sources(source,m->var,owners);
+    assemble_point_sources(source,owners,m->var,0,1,rate);
     for(int n=0;n<m->var.nnode;++n) {
         const double expected=n==0 ? 2*c+2.8 : n<=NDIMS ? 3*c : -c;
         check("point barycentric rates and shared-node ownership",rate[n],expected);
     }
     const double_vec inflow={1,0,1}, temperature={300,0,400};
-    assemble_point_sources(source,m->var,0,1,rate,&inflow,true);
+    assemble_point_sources(source,owners,m->var,0,1,rate,&inflow,true);
     for(int n=0;n<m->var.nnode;++n)
         check("active inlet rate bounds partial source windows",rate[n],
               n==0 ? 5*c+7 : n<=NDIMS ? 5*c : 0);
-    assemble_point_sources(source,m->var,0,1,rate,&temperature,true);
+    assemble_point_sources(source,owners,m->var,0,1,rate,&temperature,true);
     for(int n=0;n<m->var.nnode;++n)
         check("temperature-weighted active inlet rate",rate[n],
               n==0 ? 1500*c+2800 : n<=NDIMS ? 1500*c : 0);
     source.temperature={300,273,400};
     double_vec heat(m->var.nnode,0),separate_rate(m->var.nnode,0),separate_heat(m->var.nnode,0);
     for (bool peak : {false,true}) {
-        assemble_point_sources(source,m->var,0,1,separate_rate,&inflow,peak);
-        assemble_point_sources(source,m->var,0,1,separate_heat,&temperature,peak);
-        assemble_point_sources(source,m->var,0,1,rate,&inflow,peak,&heat,&source.temperature);
+        assemble_point_sources(source,owners,m->var,0,1,separate_rate,&inflow,peak);
+        assemble_point_sources(source,owners,m->var,0,1,separate_heat,&temperature,peak);
+        assemble_point_sources(source,owners,m->var,0,1,rate,&inflow,peak,&heat,&source.temperature);
         for(int n=0;n<m->var.nnode;++n) {
             check("shared point map preserves inlet volume",rate[n],separate_rate[n]);
             check("shared point map preserves weighted inlet",heat[n],separate_heat[n]);
         }
     }
-    assemble_point_sources(source,m->var,.81,1.4,rate,&inflow,true);
+    assemble_point_sources(source,owners,m->var,.81,1.4,rate,&inflow,true);
     for(double v:rate) check("inactive inlets do not constrain heat steps",v,0);
     const double breaks[]={0,.13,.47,.81,1.4};
     for(int i=0;i<4;++i) {
-        assemble_point_sources(source,m->var,breaks[i],breaks[i+1],rate);
+        assemble_point_sources(source,owners,m->var,breaks[i],breaks[i+1],rate);
         for(int n=0;n<m->var.nnode;++n) integrated[n]+=rate[n]*(breaks[i+1]-breaks[i]);
     }
     double total=0;for(double v:integrated) total+=v;
     check("subintervals conserve signed scheduled amount",total,4.4);
     source.rate_model=injection_rate_total_amount;
-    assemble_point_sources(source,m->var,0,1.4,rate);
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
     for(int n=0;n<m->var.nnode;++n)
         check("rate/total-amount equivalence",rate[n]*1.4,integrated[n]);
-    assemble_point_sources(source,m->var,0,1.4,rate,&inflow,true);
+    assemble_point_sources(source,owners,m->var,0,1.4,rate,&inflow,true);
     for(int n=0;n<m->var.nnode;++n)
         check("total-amount inlet has the same active rate bound",rate[n],
               n==0 ? 5*c+7 : n<=NDIMS ? 5*c : 0);
+    // The points are fixed in the material: they move with the mesh, away from
+    // their configured coordinates.
     for(int n=0;n<m->var.nnode;++n) for(int d=0;d<NDIMS;++d) m->coord[n][d]+=10;
-    for(int i=0;i<source.num_points;++i) {
-        source.points_x[i]+=10;source.points_y[i]+=10;source.points_z[i]+=10;
-    }
-    assemble_point_sources(source,m->var,0,1.4,rate);
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
     for(int n=0;n<m->var.nnode;++n)
-        check("mapping uses current translated mesh",rate[n]*1.4,integrated[n]);
+        check("point sources move with the mesh",rate[n]*1.4,integrated[n]);
     source.enabled=false;
-    assemble_point_sources(source,m->var,0,1.4,rate);
+    place_point_sources(source,m->var,owners);
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
     for(double v:rate) check("disabled point source clears derived rates",v,0);
     delete m;
 }
