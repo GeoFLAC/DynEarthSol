@@ -496,7 +496,7 @@ void prepare_pore_recovery(const Variables &var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(|:invalid)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:invalid)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(|:invalid)
     for (int e = 0; e < var.nelem; ++e) {
         const double rate = var.mat->pore_healing_rate(e);
         const double change = (*var.pore_dilation)[e]*(-std::expm1(-var.dt*rate));
@@ -515,7 +515,7 @@ void update_porosity(const Variables &var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(|:invalid)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:invalid)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(|:invalid)
     for (int e = 0; e < var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
@@ -536,7 +536,7 @@ void update_porosity(const Variables &var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var)
 #endif
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int e = 0; e < var.nelem; ++e)
     {
         (*var.pore_strain)[e] = (*var.etmp)[e];
@@ -1416,7 +1416,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
                 firstprivate(step,cf,thermal,wells,well_ratio,dt,next_fraction,pressure_ratio) \
                 reduction(&&:accepted) if(var.nnode >= 256)
 #endif
-            #pragma acc parallel loop copyin(step[0:1]) reduction(&&:accepted) if(var.nnode >= 256)
+            #pragma acc parallel loop copyin(step[0:1]) reduction(&&:accepted) if(des_acc_offload_enabled() && var.nnode >= 256)
             for (int n = 0; n < var.nnode; ++n) {
                 const int e = var.support.patch(n)[0];
                 const double t = (*var.temperature)[n];
@@ -1580,7 +1580,7 @@ void HydraulicStep::correct_mechanics(const Param &param, Variables &var) const
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, param)
 #endif
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int e = 0; e < var.nelem; ++e) {
         const auto conn = (*var.connectivity)[e];
         double increment = 0;

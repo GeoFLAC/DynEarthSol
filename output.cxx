@@ -211,7 +211,7 @@ void Output::_write(const Variables& var, bool disable_averaging)
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, saturation, effective_saturation, relperm, density)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (int e = 0; e < var.nelem; ++e) {
             ConstConnAccessor conn = (*var.connectivity)[e];
             const int_vec &markers = (*var.elemmarkers)[e];

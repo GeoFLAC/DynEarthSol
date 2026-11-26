@@ -538,7 +538,7 @@ void accumulate_shear_heat(const Variables &var)
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) reduction(|:invalid)
 #endif
-    #pragma acc parallel loop gang vector reduction(|:invalid)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(|:invalid)
     for (int e = 0; e < var.nelem; ++e) {
         const double energy = (*var.shear_heat)[e] * var.dt * (*var.volume)[e];
         (*var.pending_heat)[e] += energy;

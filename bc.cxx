@@ -923,7 +923,7 @@ static double platen_average(const Variables& var, const array_t& field, bool we
     #pragma omp parallel for default(none) shared(var, field) firstprivate(weighted) \
         reduction(+:t,m) reduction(min:low) reduction(max:high)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:t,m) reduction(min:low) reduction(max:high)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:t,m) reduction(min:low) reduction(max:high)
     for (int n=0; n<var.nnode; ++n) {
         if (!((*var.bcflag)[n] & BOUNDZ1)) continue;
         const double mn = (*var.mass)[n];
@@ -949,7 +949,7 @@ void apply_platen_velocity(const Param& param, const Variables& var, array_t& ve
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, vel) firstprivate(v)
 #endif
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int n=0; n<var.nnode; ++n)
         if ((*var.bcflag)[n] & BOUNDZ1) vel[n][NDIMS-1] = v;
 }
@@ -961,7 +961,7 @@ void apply_platen_force(const Param& param, const Variables& var, array_t& force
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, force) firstprivate(a)
 #endif
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int n=0; n<var.nnode; ++n)
         if ((*var.bcflag)[n] & BOUNDZ1) force[n][NDIMS-1] = (*var.mass)[n] * a;
 }
