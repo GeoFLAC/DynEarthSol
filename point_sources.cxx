@@ -4,6 +4,7 @@
 #include <sstream>
 
 #include "point_sources.hpp"
+#include "mpi_simulation.hpp"
 #include "fields.hpp"
 #include "utils.hpp"
 
@@ -113,6 +114,13 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
             "Point-source integration interval must be finite and positive.");
     }
 
+    // A compute rank holds part of the mesh: a point outside it belongs to
+    // another rank, and assemble_point_sources checks the total over all ranks.
+#ifdef USEMPI
+    const bool partial = var.mpi && var.mpi->in_kernel();
+#else
+    const bool partial = false;
+#endif
     for (int p = 0; p < injection.num_points; ++p) {
         double q[NDIMS];
         q[0] = injection.points_x[p];
@@ -143,6 +151,7 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
             break;
         }
         if (mapped_element < 0) {
+            if (partial) continue;
             point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
                                "could not be mapped into the current mesh");
         }
@@ -223,17 +232,24 @@ void assemble_point_sources(const Injection &injection, const Variables &var,
             absolute_rate_total += std::abs(rate);
             if (rate != 0) active_contributions += NODES_PER_ELEM;
         }
-        for (double nodal_source : (field ? *weighted : source)) {
-            if (!std::isfinite(nodal_source)) {
+        // Owned nodes only: each node is counted once over the ranks.
+        const double_vec &nodal = field ? *weighted : source;
+        for (int n = 0; n < mpi_node_end(var); ++n) {
+            if (!std::isfinite(nodal[n])) {
                 die(EXIT_RUNTIME_NAN,
                     "Point-source assembly produced a non-finite nodal value.");
             }
-            assembled_total += static_cast<long double>(nodal_source);
+            assembled_total += static_cast<long double>(nodal[n]);
         }
+#ifdef USEMPI
+        if (var.mpi && var.mpi->in_kernel())
+            assembled_total = var.mpi->sum(static_cast<double>(assembled_total));
+#endif
         if (!source_totals_match(assembled_total, requested_total,
                                  absolute_rate_total, active_contributions)) {
-            die(EXIT_INTERNAL_ASSERT,
-                "Point-source nodal total does not equal the requested active rate.");
+            die_together(EXIT_INTERNAL_ASSERT,
+                "Point-source nodal total does not equal the requested active rate; "
+                "a point may lie outside the mesh.");
         }
     }
 }

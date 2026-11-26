@@ -12,6 +12,7 @@
 #include "matprops.hpp"
 #include "utils.hpp"
 #include "point_sources.hpp"
+#include "mpi_simulation.hpp"
 
 namespace {
 
@@ -102,11 +103,12 @@ inline bool has_plastic_source(const Param &param)
 void pressure_increments(const Variables &var, const double_vec &ppressure, const double_vec &dppressure,
                          elem_cache &work)
 {
+    const int owned = mpi_element_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, ppressure, dppressure, work)
+    #pragma omp parallel for default(none) shared(var, ppressure, dppressure, work) firstprivate(owned)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int e = 0; e < var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(owned)
+    for (int e = 0; e < owned; ++e) {
         const auto value = element_pressure<true>(var,e,ppressure,dppressure,true,false);
         work[e][pressure_d_slot] = value.raw;
         work[e][bishop_e_slot] = value.bishop;
@@ -220,11 +222,12 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
     if (!param.control.has_hydraulic_diffusion) return;
     double diffusivity = 0;
     int invalid = 0;
+    const int owned = mpi_element_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var) reduction(max:diffusivity) reduction(|:invalid)
+    #pragma omp parallel for default(none) shared(param, var) firstprivate(owned) reduction(max:diffusivity) reduction(|:invalid)
 #endif
-    #pragma acc parallel loop gang vector reduction(max:diffusivity) reduction(|:invalid)
-    for (int e = 0; e < var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(owned) reduction(max:diffusivity) reduction(|:invalid)
+    for (int e = 0; e < owned; ++e) {
         const double diff = hydraulic_diffusivity(param, *var.mat, e);
         if (!std::isfinite(diff) || diff < 0) invalid = 1;
         if (var.pore_strain) {
@@ -233,7 +236,11 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
         }
         diffusivity = std::max(diffusivity, diff);
     }
-    if (invalid) die(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties or porosity state.");
+    if (mpi_any(var, invalid))
+        die_together(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties or porosity state.");
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) diffusivity = var.mpi->maximum(diffusivity);
+#endif
     var.mat->hydro_diff_max = diffusivity;
     var.mat->hydro_step_limit = 0;
 }
@@ -245,6 +252,12 @@ void assemble_well_source(const Param &param, const Variables &var)
 
     double_vec &source = *var.fluid_source;
     std::fill(source.begin(), source.end(), 0.0);
+    const int owned_nodes = mpi_node_end(var);
+#ifdef USEMPI
+    const bool partial = var.mpi && var.mpi->in_kernel();
+#else
+    const bool partial = false;
+#endif
     // Barycentric tolerance, so that screens on element faces or edges are kept.
     const double tol = 1e-10;
     struct Piece { int e; double z0, z1, l0[NODES_PER_ELEM], dl[NODES_PER_ELEM]; };
@@ -293,6 +306,8 @@ void assemble_well_source(const Param &param, const Variables &var)
             cuts.push_back(pc.z1);
         }
         std::sort(cuts.begin(), cuts.end());
+        // A rank sees the screen only within its elements. Its owned nodes'
+        // weights, summed over the ranks, cover each part of the screen once.
         double covered = 0;
         for (std::size_t k = 0; k + 1 < cuts.size(); ++k) {
             const double lo = cuts[k], hi = cuts[k+1], mid = 0.5 * (lo + hi);
@@ -301,15 +316,23 @@ void assemble_well_source(const Param &param, const Variables &var)
                 if (pc.z0 > mid || mid > pc.z1) continue;
                 ConstConnAccessor conn = (*var.connectivity)[pc.e];
                 const double q = bc.well_rate[w] * (hi - lo) / (zt - zb);
-                for (int i = 0; i < NODES_PER_ELEM; ++i)
-                    source[conn[i]] += q * (pc.l0[i] + pc.dl[i] * mid);
-                covered += hi - lo;
+                double owned = 0;
+                for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                    const double weight = pc.l0[i] + pc.dl[i] * mid;
+                    source[conn[i]] += q * weight;
+                    if (conn[i] < owned_nodes) owned += weight;
+                }
+                covered += partial ? (hi - lo) * owned : hi - lo;
                 break;
             }
         }
+#ifdef USEMPI
+        if (partial) covered = var.mpi->sum(covered);
+#endif
         if (covered < (1 - 1e-9) * (zt - zb)) {
-            std::cerr << "Error: the screen of well " << w << " is not entirely inside the mesh.\n";
-            die(EXIT_CONFIG_VALUE);
+            if (mpi_reports(var))
+                std::cerr << "Error: the screen of well " << w << " is not entirely inside the mesh.\n";
+            die_together(EXIT_CONFIG_VALUE);
         }
     }
 }
@@ -504,16 +527,20 @@ void update_porosity(const Variables &var)
 void update_old_mean_stress(const Param& param, const Variables& var, tensor_t& stress,
                    double_vec& old_mean_stress)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::OldMeanStress, var, 0.0)) return;
+#endif
+    const int mpi_ee = mpi_element_end(var);
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
     #pragma omp parallel for default(none)                           \
-        shared(param, var, stress, old_mean_stress)
+        shared(param, var, stress, old_mean_stress) firstprivate(mpi_ee)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_ee)
+    for (int e=0; e<mpi_ee; ++e) {
         ConstTensorAccessor s = stress[e];
         old_mean_stress[e] =trace(s)/NDIMS;
     }
@@ -536,13 +563,14 @@ static void pressure_step(const Param &param, const Variables &var,
     const bool strain_form = hydraulic_strain_form(param);
     const bool plastic_source = has_plastic_source(param);
     const bool strain_source = strain_form || plastic_source;
+    const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        firstprivate(dt, has_retention, strain_form, plastic_source, strain_source) reduction(max:diff_max_local) reduction(+:source, exchanged)
+        firstprivate(dt, has_retention, strain_form, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source, exchanged)
 #endif
-        #pragma acc parallel loop gang vector firstprivate(dt, has_retention, strain_form, plastic_source, strain_source) reduction(max:diff_max_local) reduction(+:source, exchanged) async
-    for (int e = 0; e < var.nelem; e++) {
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, has_retention, strain_form, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source, exchanged) async
+    for (int e = 0; e < mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
         double current_mean_stress = trace(stress[e])/NDIMS;
@@ -653,12 +681,17 @@ static void pressure_step(const Param &param, const Variables &var,
         }
     }
 
+    // Ghost elements take their rows from the ranks that own them; the boundary
+    // flux below is added afterwards to every local facet, so each owned node
+    // receives each facet once.
+    mpi_sync(var, tmp_result, MpiEntity::Element, NODES_PER_ELEM);
+
     // Wells extract their exact schedule volume over this step [time - dt, time].
     const bool has_wells = param.bc.num_wells > 0;
     const bool has_points = param.injection.enabled;
     if (has_points) {
         assemble_point_sources(param.injection,var,time-dt,time,*var.fluid_point_source);
-        for (int n=0;n<var.nnode;++n)
+        for (int n=0;n<mpi_ne;++n)
             if ((*var.fluid_point_source)[n] != 0 &&
                 (pressure_boundary(n,var) >= 0 || !((*var.hmass)[n]>0 && std::isfinite((*var.hmass)[n]))))
                 die(EXIT_RUNTIME_LOOKUP, "A fluid point source reaches a fixed-pressure node or nonpositive hydraulic storage.");
@@ -677,7 +710,7 @@ static void pressure_step(const Param &param, const Variables &var,
     double prescribed_flux = 0;
     flux_facets(var,[&](int side, int e, int f, const int *, double area) {
         const double q = boundary_ratio * param.bc.hbc_flux[side] * area;
-        prescribed_flux += q * dt;
+        if (e < mpi_ee) prescribed_flux += q * dt;
         for (int k = 0; k < NODES_PER_FACET; ++k)
             tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
     });
@@ -686,11 +719,11 @@ static void pressure_step(const Param &param, const Variables &var,
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) \
-        firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, has_retention) \
+        firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, has_retention, mpi_ne) \
         reduction(+:stored, wells, boundary) reduction(|:invalid)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:stored, wells, boundary) reduction(|:invalid) firstprivate(has_points)
-    for (int n = 0; n < var.nnode; n++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) reduction(|:invalid) firstprivate(has_points, mpi_ne)
+    for (int n = 0; n < mpi_ne; n++) {
         tdot[n] = 0.0;
         {
             const int npatch = var.support.size(n);
@@ -734,8 +767,16 @@ static void pressure_step(const Param &param, const Variables &var,
     }
 
     #pragma acc wait
-    if (invalid)
-        die(EXIT_RUNTIME_NAN, "Unsaturated content update did not converge; check the pressure state.");
+    if (mpi_any(var, invalid))
+        die_together(EXIT_RUNTIME_NAN, "Unsaturated content update did not converge; check the pressure state.");
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double sums[] = {stored, source, wells, boundary};
+        var.mpi->sum(sums, 4);
+        stored = sums[0]; source = sums[1]; wells = sums[2]; boundary = sums[3];
+        diff_max_local = var.mpi->maximum(diff_max_local);
+    }
+#endif
     if (var.fluid_balance) {
         const double value[] = {stored, source, wells, boundary, stored + source + wells - boundary};
         for (int i = 0; i < 5; ++i) (*var.fluid_balance)[i] += value[i];
@@ -753,11 +794,12 @@ static double pressure_step_limit(const Variables &var, elem_cache &work)
     // Gershgorin bound on the lumped operator, including rotated tensors.
     // Reuse assembly scratch; no pressure or material history is copied.
     double limit = std::numeric_limits<double>::max();
+    const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, work) reduction(min:limit)
+    #pragma omp parallel for default(none) shared(var, work) firstprivate(mpi_ee) reduction(min:limit)
 #endif
-    #pragma acc parallel loop gang vector reduction(min:limit)
-    for (int e = 0; e < var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ee) reduction(min:limit)
+    for (int e = 0; e < mpi_ee; ++e) {
 #ifdef THREED
         double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
         get_local_shape_fn(var, e, dx, dy, dz);
@@ -782,17 +824,21 @@ static double pressure_step_limit(const Variables &var, elem_cache &work)
             work[e][i] = kv * row + exchange*(*var.volume)[e]/NODES_PER_ELEM;
         }
     }
+    mpi_sync(var, work, MpiEntity::Element, NODES_PER_ELEM);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, work) reduction(min:limit)
+    #pragma omp parallel for default(none) shared(var, work) firstprivate(mpi_ne) reduction(min:limit)
 #endif
-    #pragma acc parallel loop gang vector reduction(min:limit)
-    for (int n = 0; n < var.nnode; ++n) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ne) reduction(min:limit)
+    for (int n = 0; n < mpi_ne; ++n) {
         double row = 0;
         const int *patch = var.support.patch(n), *local = var.support.local(n);
         for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
         if (row > 0 && (*var.hmass)[n] > 0) limit = std::min(limit, (*var.hmass)[n] / row);
     }
     #pragma acc wait
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&limit, 1);
+#endif
     return limit;
 }
 
@@ -800,6 +846,9 @@ void update_pore_pressure(const Param &param, const Variables &var,
                          double_vec &p, double_vec &dp, double_vec &rate,
                          elem_cache &work, tensor_t &stress, double_vec &old_stress)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::PorePressure, var, 0.0)) return;
+#endif
     if (var.mat->hydro_step_limit == 0)
         var.mat->hydro_step_limit = pressure_step_limit(var, work);
     // Before the pending increment is cleared below.
@@ -814,9 +863,12 @@ void update_pore_pressure(const Param &param, const Variables &var,
     const int steps = std::max(1, int(count));
     const double dt = var.dt / steps;
     if (var.fluid_balance) std::fill(var.fluid_balance->begin(), var.fluid_balance->end(), 0.0);
-    for (int i = 0; i < steps; ++i)
+    for (int i = 0; i < steps; ++i) {
+        // Each substep reads its neighbours' ghost pressures; the dispatcher exchanges the last.
+        if (i > 0) mpi_sync(var, p, MpiEntity::Node);
         pressure_step(param, var, p, dp, rate, work, stress, old_stress,
                       dt, var.time - var.dt + (i+1)*dt);
+    }
 }
 
 

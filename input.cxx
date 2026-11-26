@@ -1620,6 +1620,39 @@ static void check_mpi_support(const Param& p)
             die(EXIT_CONFIG_VALUE);
         }
     }
+    // Saturated pore pressure, wells, fluid point sources, hydraulic boundaries,
+    // anisotropic permeability and matrix exchange run distributed. These
+    // coupled models still advance fields that only the serial kernels update.
+    const auto any_positive = [](const double_vec& v) {
+        return std::any_of(v.begin(), v.end(), [](double x) { return x > 0; });
+    };
+    const auto any_nonzero = [](const int_vec& v) {
+        return std::any_of(v.begin(), v.end(), [](int x) { return x != 0; });
+    };
+    const int stress_bc[] = {p.bc.stress_bc_x0, p.bc.stress_bc_x1, p.bc.stress_bc_y0,
+                             p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
+    struct Feature { const char* name; bool used; };
+    const Feature features[] = {
+        {"control.hydraulic_content_model = 1", p.control.hydraulic_content_model != 0},
+        {"control.has_thermal_pressurization", p.control.has_thermal_pressurization},
+        {"control.has_shear_heating", p.control.has_shear_heating},
+        {"control.has_fluid_thermal_advection", p.control.has_fluid_thermal_advection},
+        {"heat point sources", p.heat_injection.enabled},
+        {"fluid injected at a temperature", !p.injection.temperature.empty()},
+        {"mat.porosity_model", p.mat.porosity_model != 0},
+        {"mat.permeability_model", p.mat.permeability_model != 0},
+        {"mat.pore_healing_time", any_positive(p.mat.pore_healing_time)},
+        {"mat.retention_model", any_nonzero(p.mat.retention_model)},
+        {"bc.vbc_z1 = 8", p.bc.vbc_z1 == 8},
+        {"bc.stress_bc_* = 4", std::find(std::begin(stress_bc), std::end(stress_bc), 4) != std::end(stress_bc)},
+    };
+    for (const Feature& feature : features) {
+        if (feature.used) {
+            std::cerr << "Error: " << feature.name << " has not been checked with MPI; "
+                      << "run it with the serial or GPU executable.\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
 }
 #endif
 

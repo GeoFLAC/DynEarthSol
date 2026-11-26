@@ -28,6 +28,7 @@
 #include "bc.hpp"
 #include "earthquake_state.hpp"
 #include "fields.hpp"
+#include "hydraulics.hpp"
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
@@ -249,6 +250,8 @@ void metadata(MpiState& state, Variables& var) {
     ARCHIVE(vbc_vertical_ratio_x0);
     ARCHIVE(vbc_vertical_ratio_x1);
     state.value(var.surfinfo.max_surf_vel);
+    // Fluid volume balance of the last accepted step; every rank holds the reduced sums.
+    ARCHIVE(fluid_balance);
 #undef ARCHIVE
 }
 
@@ -298,6 +301,7 @@ void release(Variables& var) {
     RELEASE(surfinfo.elem_and_nodes)
     RELEASE(surfinfo.total_dx)
     RELEASE(surfinfo.total_slope)
+    RELEASE(fluid_balance)
     RELEASE(connectivity_surface)
     RELEASE(ntmp)
     RELEASE(etmp)
@@ -415,6 +419,13 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
             var.surfinfo.edvacc_surf->push_back((*global.surfinfo.edvacc_surf)[g]);
     }
     select(global.surfinfo.dhacc, var.surfinfo.dhacc, partition.nodes);
+    if (global.fluid_balance) {
+        if (!var.fluid_balance) var.fluid_balance = new double_vec;
+        *var.fluid_balance = *global.fluid_balance;
+    } else {
+        delete var.fluid_balance;
+        var.fluid_balance = nullptr;
+    }
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         var.hbc_types[i] = global.hbc_types[i];
         var.stress_bc_types[i] = global.stress_bc_types[i];
@@ -854,7 +865,10 @@ struct MpiSimulation::Impl {
         gather_rows(true, node_fields(local), root_node_fields);
         gather_rows(false, element_fields(local), root_element_fields);
         if (surface_on_ranks) collect_surface();
-        if (rank == 0) master->mat->hydro_diff_max = local.mat->hydro_diff_max;
+        if (rank == 0) {
+            master->mat->hydro_diff_max = local.mat->hydro_diff_max;
+            if (master->fluid_balance && local.fluid_balance) *master->fluid_balance = *local.fluid_balance;
+        }
         root_version = version;
     }
 
