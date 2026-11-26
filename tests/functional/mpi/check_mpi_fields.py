@@ -31,6 +31,14 @@ OUTSIDE = {
     "tmp_result": "scratch",
     # Lookup tables, identical everywhere.
     "log_table": "table", "sin_table": "table", "tan_table": "table",
+    # Five accepted-step sums; the metadata carries them and every rank holds the reduced values.
+    "fluid_balance": "reduced over the ranks",
+    # Coupled models that check_mpi_support() in input.cxx refuses in MPI builds.
+    **{name: "refused under MPI" for name in (
+        "energy_balance", "fluid_split", "heat_source", "inflow_heat", "inflow_rate",
+        "old_temperature", "pending_heat", "pending_temperature", "pore_dilation",
+        "pore_plastic_increment", "pore_recovery", "pore_strain", "shear_heat",
+        "solid_capacity", "solid_mass")},
 }
 
 ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*new\s+"

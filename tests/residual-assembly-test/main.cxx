@@ -466,12 +466,13 @@ static void test_body_force() {
         auto* magnitude = new array_t(m->var.nnode);
         update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,
                      &m->force_undamped,0,false,magnitude);
+        // Saturated elements weigh their solid and water; dry ones their solid only.
+        const double rho = wet ? 2240 : 2500;
         for (int n=0;n<m->var.nnode;++n)
             for (int d=0;d<NDIMS;++d)
                 check("node force magnitude survives boundary scratch",(*magnitude)[n][d],
-                      d==NDIMS-1 ? weight*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
+                      d==NDIMS-1 ? rho*9.8*m->volume[0]*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
         delete magnitude;
-        const double rho = wet ? 2240 : 2500;
         const double area = NDIMS==2 ? 1 : 0.5;
         for (double dt : {0.5,1.0,0.5,0.0}) {
             update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped,dt);

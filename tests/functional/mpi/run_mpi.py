@@ -104,7 +104,7 @@ def compare(reference, current, frame, env):
     # The standard comparator checks invariants and selected coordinates; also check
     # complete vectors/tensors, connectivity, material fields, force and marker records.
     compare_physical_hdf5(reference, current, frame)
-    log, _ = execute([sys.executable, str(ROOT / "benchmarks-cores/compare.py"),
+    log, _ = execute([sys.executable, str(ROOT / "tests/regression/compare.py"),
                       str(reference / "result"), str(current / "result"), str(frame)],
                      current, env, f"compare-{frame}.log")
     return "Status: BIT-EXACT" in log
