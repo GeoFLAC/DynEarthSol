@@ -18,6 +18,7 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
 from des_case import read_config, run_solver
+from des_test_utils import run_des
 
 def mesh_tags(exe, output):
     """Imported tag names do not determine which pressure faces intersect."""
@@ -88,6 +89,43 @@ def mesh_tags(exe, output):
     print(json.dumps(result, indent=2))
 
 
+def initial_schedule(exe, output):
+    """Every pore_pressure_option starts from the scheduled prescribed pressures:
+    x0 = 0 and x1 = 1000 Pa at a constant ratio 0.5 give x1 = 500 Pa in frames 0
+    and 1, and option 1 starts from the steady profile between the scaled ends."""
+    output.mkdir(parents=True, exist_ok=False)
+    result = {}
+    for option in (0, 1, 2):
+        folder = output/f'option-{option}'; folder.mkdir()
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg['sim'].update(modelname='initial', max_steps='1', output_step_interval='1')
+        cfg['control'].update(has_PT='false', gravity='0', fixed_dt='0.01',
+                              has_thermal_diffusion='false',
+                              has_poroelastic_pressure_feedback='false')
+        for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
+            cfg['bc'].update({f'vbc_{side}': '3', f'hbc_{side}': '2' if side[0] == 'x' else '0'})
+        cfg['bc'].update(hbc_pressure='[0,1000,0,0,0,0]', num_hbc_schedule='1',
+                         hbc_schedule_time_in_yr='[0]', hbc_schedule_ratio='[0.5]',
+                         stress_bc_z1='0')
+        cfg['ic'].update(pore_pressure_option=str(option), pore_pressure_value='100',
+                         weakzone_option='0', has_body_force_adjustment='false')
+        run_des(exe, folder, 'input', cfg, timeout=60)
+        model = Dynearthsol(str(folder/'initial'))
+        length = float(cfg['mesh']['xlength'])
+        for frame in (0, 1):
+            x = model.read_field(frame, 'coordinate')[:, 0]
+            p = model.read_field(frame, 'pore pressure')
+            np.testing.assert_array_equal(p[np.isclose(x, length)], 500)
+            np.testing.assert_array_equal(p[np.isclose(x, 0)], 0)
+            if option == 1:
+                np.testing.assert_allclose(p, 500*x/length, rtol=1e-12, atol=1e-9)
+            if option == 2 and frame == 0:
+                inside = ~np.isclose(x, 0) & ~np.isclose(x, length)
+                np.testing.assert_array_equal(p[inside], 100)
+        result[f'option-{option}'] = dict(frames=[0, 1], x1_pressure_Pa=500)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path); parser.add_argument('output', type=Path)
@@ -146,6 +184,7 @@ def main():
                 np.testing.assert_allclose(p, 1000*ratio, atol=1e-10, rtol=1e-12)
             previous = times[frame]
         result[mode] = dict(max_relative_step_balance_error=worst, exact_restart=True)
+    result['initial-schedule'] = initial_schedule(exe, output/'initial-schedule')
     (output/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result, indent=2))
     if model.ndims == 2:

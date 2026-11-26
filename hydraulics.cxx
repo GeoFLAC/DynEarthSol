@@ -410,21 +410,22 @@ void validate_hydraulic_boundaries(const Param &param, const Variables &var)
 void initial_hydrostatic_state(const Param &param, const Variables &var,
                                double_vec &ppressure, double_vec &dppressure)
 {
+    // Prescribed pressures at the start, scaled by their schedule as the pressure
+    // step scales them; the linear profile runs between the scaled end values.
+    const double ratio = param.bc.hbc_schedule_ratio.empty() ? 1 :
+        schedule_mean(param.bc.hbc_schedule_time_in_yr, param.bc.hbc_schedule_ratio,
+                      var.time, var.time);
     if (param.ic.pore_pressure_option != 0) {
-        const double a = param.bc.hbc_pressure[0], b = param.bc.hbc_pressure[1];
+        const double a = param.bc.hbc_pressure[0] * ratio, b = param.bc.hbc_pressure[1] * ratio;
         for (int n = 0; n < var.nnode; ++n) {
             double p = param.ic.pore_pressure_option == 1 ?
                 a + (b-a)*(*var.coord)[n][0]/param.mesh.xlength : param.ic.pore_pressure_value;
             const int side = pressure_boundary(n, var);
-            if (side >= 0 && var.hbc_types[side] == 2) p = param.bc.hbc_pressure[side];
+            if (side >= 0 && var.hbc_types[side] == 2) p = param.bc.hbc_pressure[side] * ratio;
             ppressure[n] = p; dppressure[n] = 0;
         }
         return;
     }
-    // Check if gravity is enabled
-    const double ratio = param.bc.hbc_schedule_ratio.empty() ? 1 :
-        schedule_mean(param.bc.hbc_schedule_time_in_yr, param.bc.hbc_schedule_ratio,
-                      var.time, var.time);
     for (int n = 0; n < var.nnode; ++n) {
         const int side = pressure_boundary(n, var);
         if (side >= 0 && var.hbc_types[side] == 2) {
@@ -450,9 +451,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         buoyancy_profile(param, var, alpha_f, zs, area);
     const double table = profile_integral(zs, area, param.ic.water_table_z);
 
-    // Loop over all nodes
     for (int i = 0; i < var.nnode; ++i) {
-        // Get the z-coordinate (depth) of the current node
         ConstArrayAccessor coord = (*var.coord)[i];
         double z = coord[NDIMS - 1];
 
@@ -465,8 +464,6 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
 
         // Add excess pore pressure for non-boundary nodes
         if (pressure_boundary(i, var) < 0) ppressure[i] += loading_efficiency * loading;
-
-        // Initialize pressure change (dppressure) to zero
         dppressure[i] = 0.0;
     }
 }
