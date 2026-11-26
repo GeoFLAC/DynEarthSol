@@ -1221,14 +1221,25 @@ static void violation_range(const double trial[3], const StrengthCurve& curve, i
     curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, range);
     const Strength ends[2] = {strength_at(curve, x), strength_at(curve, y)};
     const double chord = 0.125*(y - x)*(y - x);
+    // The corners shifted by the pore pressure q as strength_at is: a face is then
+    // anphi (sigma_high + q) - (sigma_low + q) - amc, still linear in amc and anphi.
+    const double q = curve.law.pore;
+    Strength corner[2][2];
+    double amc[2] = {std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()};
+    for (int i = 0; i < 2; ++i)
+        for (int j = 0; j < 2; ++j) {
+            Strength& c = corner[i][j];
+            c = {range.amc[j], range.anphi[i], range.anphi[i], range.ten_max[j]};
+            pore_strength(q, c.anphi, c.amc, c.ten_max);
+            amc[0] = std::min(amc[0], c.amc);
+            amc[1] = std::max(amc[1], c.amc);
+        }
     v[0] = v[1] = -std::numeric_limits<double>::max();
     for (int s = 0; s < return_surface_count(nd); ++s) {
         double lo = std::numeric_limits<double>::max(), hi = -lo;
         for (int i = 0; i < 2; ++i)
             for (int j = 0; j < 2; ++j) {
-                const Strength corner = {range.amc[j], range.anphi[i], range.anphi[i],
-                                         range.ten_max[j]};
-                const double f = surface_violation(s, corner, nd, trial);
+                const double f = surface_violation(s, corner[i][j], nd, trial);
                 lo = std::min(lo, f);
                 hi = std::max(hi, f);
             }
@@ -1236,7 +1247,7 @@ static void violation_range(const double trial[3], const StrengthCurve& curve, i
         if (s < return_face_count(nd)) {
             int low, high;
             face_stresses(s, nd, low, high);
-            const double scale = std::fabs(trial[high]);
+            const double scale = std::fabs(trial[high] + q);
             curvature = range.curvature_anphi < 0 || range.curvature_amc < 0 ? -1 :
                 scale*range.curvature_anphi + range.curvature_amc;
             error = scale*range.error_anphi + range.error_amc;
@@ -1251,8 +1262,10 @@ static void violation_range(const double trial[3], const StrengthCurve& curve, i
         v[0] = std::max(v[0], lo);
         v[1] = std::max(v[1], hi);
     }
-    tol[0] = return_tolerance(trial, range.amc[0], nd);
-    tol[1] = return_tolerance(trial, range.amc[1], nd);
+    // return_tolerance scales with |amc|: its least and largest over the range.
+    const double least = amc[0] > 0 ? amc[0] : (amc[1] < 0 ? -amc[1] : 0);
+    tol[0] = return_tolerance(trial, least, nd);
+    tol[1] = return_tolerance(trial, std::max(std::fabs(amc[0]), std::fabs(amc[1])), nd);
 }
 
 // Whether the trial yields at increment delta, as the first check of fixed_strength_return.
