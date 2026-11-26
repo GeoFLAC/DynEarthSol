@@ -3,7 +3,7 @@
 
 pumping_slab.py meshes the slab with unstructured tetrahedra, whose size does
 not follow mesh.resolution in this thin slab. This driver keeps its
-configuration, comparison and figure, and only selects the structured element
+configuration and comparison, and only selects the structured element
 shape (mesh.meshing_elem_shape = 1), which refines with mesh.resolution, so
 the mesh error can be separated from the slab-model error O((B/r)^2) relative
 to the averaged (generalised Bear-Corapcioglu) model.
@@ -39,7 +39,6 @@ def main():
         with (case/'input.cfg').open('w') as f: cfg.write(f)
         run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'), timeout=14400)
         aq, rows = ps.compare(case)
-        ps.figure(aq, rows, folder)
         model = ps.Dynearthsol(str(case/'slab'))
         summary = [{k: v for k, v in row.items() if k != 'plot'} for row in rows]
         item = dict(resolution_m=h, nodes=len(model.read_field(0, 'coordinate')),

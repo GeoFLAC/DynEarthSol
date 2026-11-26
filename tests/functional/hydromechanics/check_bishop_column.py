@@ -156,6 +156,7 @@ def study(exe, out, ndims, spacings, steps, laws):
             folder = out/f'{law}-h{h:g}'; folder.mkdir()
             with (folder/'bishop.cfg').open('w') as f: config(ndims, h, law, steps).write(f)
             run_solver([str(exe), 'bishop.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+            assert Dynearthsol(str(folder/'bishop')).ndims == ndims, 'the executable and --ndims disagree'
             item = compare(folder, h, law)
             item['input_sha256'] = digest(folder/'bishop.cfg')
             result['cases'].append(item)

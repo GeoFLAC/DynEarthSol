@@ -111,6 +111,7 @@ def study(exe, out, ndims, spacings, steps, mode='pt', scaling=1e5, pt_option=No
         folder = out/f'h{h:g}'; folder.mkdir()
         with (folder/'layer.cfg').open('w') as f: config(ndims, h, steps, mode, scaling, pt_option).write(f)
         run_solver([str(exe), 'layer.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        assert Dynearthsol(str(folder/'layer')).ndims == ndims, 'the executable and --ndims disagree'
         item = dict(spacing_m=h, **compare(folder), input_sha256=digest(folder/'layer.cfg'))
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))

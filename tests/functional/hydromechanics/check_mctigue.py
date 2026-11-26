@@ -123,6 +123,7 @@ def study(exe, out, ndims, spacings, steps):
         with (folder/'mctigue.cfg').open('w') as f: config(ndims, h, steps, folder/'start').write(f)
         for name in ('start', 'mctigue'):
             run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=20000)
+        assert Dynearthsol(str(folder/'mctigue')).ndims == ndims, 'the executable and --ndims disagree'
         frames, nodes = compare(folder, h)
         item = dict(spacing_m=h, nodes=nodes, frames=frames, input_sha256=digest(folder/'mctigue.cfg'),
                     **{k: max(f[k] for f in frames) for k in

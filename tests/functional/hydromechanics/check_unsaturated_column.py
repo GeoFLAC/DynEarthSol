@@ -96,6 +96,7 @@ def transient(exe, out, ndims):
     rows = []
     for res in (0.05, 0.025):
         model = run(exe, column(ndims, res, 7200.0, dt, retention=ret), out / f'transient-{res}')
+        assert model.ndims == ndims, 'the executable and --ndims disagree'
         err = []
         for i, frame in enumerate(model.frames):
             z = model.read_field(frame, 'coordinate')[:, -1] + 1.0
@@ -125,6 +126,7 @@ def modes(exe, out, ndims, reference):
         cfg['control'].update(has_PT='false', inertial_scaling='1e5', use_global_velocity_scaling=gvs)
         cfg['ic']['has_body_force_adjustment'] = 'false'
         model = run(exe, cfg, out / f'modes-gvs-{gvs}')
+        assert model.ndims == ndims, 'the executable and --ndims disagree'
         frame = model.frames[-1]
         z = model.read_field(frame, 'coordinate')[:, -1] + 1.0
         k = np.exp(ALPHA_HEAD * model.read_field(frame, 'pore pressure') / GAMMA)
@@ -157,6 +159,7 @@ def steady(exe, out, ndims):
             cfg = column(ndims, res, 2e6, dt, retention=options, flux=0.5 * KS,
                          fluid_bulk=4e4, frames=2)
             model = run(exe, cfg, out / f'steady-{name}-{res}')
+            assert model.ndims == ndims, 'the executable and --ndims disagree'
             frame = model.frames[-1]
             z = model.read_field(frame, 'coordinate')[:, -1] + 1.0
             p = model.read_field(frame, 'pore pressure')

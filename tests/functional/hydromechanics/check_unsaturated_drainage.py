@@ -121,6 +121,7 @@ def study(exe, out, ndims, spacings, steps, explicit):
         folder = out/(f'h{h:g}' + ('-explicit' if n == 0 else '')); folder.mkdir()
         with (folder/'drain.cfg').open('w') as f: config(ndims, h, n).write(f)
         run_solver([str(exe), 'drain.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        assert Dynearthsol(str(folder/'drain')).ndims == ndims, 'the executable and --ndims disagree'
         frames = compare(folder, h, reference)
         item = dict(spacing_m=h, mode='explicit' if n == 0 else 'PT', steps=n, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),

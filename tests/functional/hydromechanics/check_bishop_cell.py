@@ -113,6 +113,7 @@ def study(exe, out, ndims, steps, explicit, states, pt_option=0):
         folder = out/f"{state}-{f'pt-{n}' if n else 'explicit'}"; folder.mkdir()
         with (folder/'cell.cfg').open('w') as f: config(ndims, n, state, pt_option).write(f)
         run_solver([str(exe), 'cell.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+        assert Dynearthsol(str(folder/'cell')).ndims == ndims, 'the executable and --ndims disagree'
         item = dict(state=state, mode='explicit' if n == 0 else 'PT', steps=n, **compare(folder, state))
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
@@ -139,6 +140,7 @@ def restart_checks(exe, out, ndims, state, steps=40):
                        stderr=subprocess.STDOUT, check=True, timeout=20000))
     fresh['sim']['modelname'] = 'fresh'
     run(out, fresh, 'fresh')
+    assert Dynearthsol(str(out/'fresh')).ndims == ndims, 'the executable and --ndims disagree'
     report = {}
     for name, factor in (('same', 1), ('finer', 4)):
         cfg = config(ndims, steps, state)
@@ -151,8 +153,12 @@ def restart_checks(exe, out, ndims, state, steps=40):
     last = lambda name: out/f"{name}.save.{scan_frames(str(out/name))[-1]['frame']:06d}"
     a, b = fields(last('fresh')), fields(last('same'))
     assert scan_frames(str(out/'fresh'))[-1]['time'] == scan_frames(str(out/'same'))[-1]['time']
-    report['same_step_identical_payloads'] = sum(a[k] == b[k] for k in a if k not in ('walltime_sec', 'provenance') and k in b)
-    report['same_step_different_payloads'] = sum(a[k] != b[k] for k in a if k not in ('walltime_sec', 'provenance') and k in b)
+    runtime = lambda key: (key.rsplit('/', 1)[-1].lstrip('@').removesuffix('.layout') in ('walltime_sec', 'provenance')
+                           or '/provenance/' in key)
+    keys = [k for k in a if k in b and not runtime(k)]
+    different = [k for k in keys if a[k] != b[k]]
+    assert not different, ('The same step must reproduce the fresh run exactly', different)
+    report['same_step_identical_payloads'] = len(keys)
     zz = ndims - 1                                      # strain is (xx, zz, xz) in 2D, (xx, yy, zz, ...) in 3D
     for name in ('fresh', 'finer'):
         # A restarted run has no frame 0, so read its last frame's payloads directly.

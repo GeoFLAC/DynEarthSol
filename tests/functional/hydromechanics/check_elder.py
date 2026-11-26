@@ -75,7 +75,7 @@ def config(h, dt, fluid_bulk, outputs):
     return cfg, interval
 
 
-def compare(folder, reference, interval, dt):
+def compare(folder, reference, dt):
     model = cc.Dynearthsol(str(folder/'elder')); rows = cc.scan_frames(str(folder/'elder'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
     w = cc.lumped_area(coord, conn)
@@ -112,14 +112,14 @@ def study(exe, reference_file, out, spacings, dt, fluid_bulk, threads):
         cfg, interval = config(h, dt, fluid_bulk, reference['times'])
         with (folder/'elder.cfg').open('w') as f: cfg.write(f)
         run_solver([str(exe), 'elder.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=200000)
-        series, nodes, elements = compare(folder, reference, interval, dt)
+        series, nodes, elements = compare(folder, reference, dt)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, series=series)
         result['cases'].append(item)
         (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
         print(json.dumps(dict(spacing_m=h, nodes=nodes, max_abs=[round(s['max_abs_difference'], 4) for s in series],
                               heat=[(round(s['heat_des'], 5), round(s['heat_reference'], 5)) for s in series])),
               flush=True)
-    assert digest(exe) == result['executable_sha256']
+    assert cc.digest(exe) == result['executable_sha256']
     return result
 
 
