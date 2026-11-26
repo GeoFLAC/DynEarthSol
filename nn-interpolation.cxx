@@ -570,12 +570,18 @@ namespace {
         } else {
             const int e = var.nelem;
 
+            // pore_recovery is rebuilt from pore_dilation at the start of every
+            // step (prepare_pore_recovery); reallocate_variables only resizes it.
             for (double_vec **history : {&var.pore_strain, &var.matrix_pressure,
-                                        &var.pore_dilation, &var.pore_plastic_increment, &var.pore_recovery}) {
+                                        &var.pore_dilation, &var.pore_plastic_increment}) {
                 if (!*history) continue;
                 double_vec *mapped = new double_vec(e);
                 inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec, **history, *mapped, e);
-                boundary_field(is_changed, idx_changed, empty_vec, 0.0, *mapped, e);
+                // Strain histories of material entering the mesh start at zero. Matrix
+                // pressure is an absolute pressure: keep the mean of the old elements
+                // the new one overlaps rather than drawing it towards 0 Pa.
+                if (*history != var.matrix_pressure)
+                    boundary_field(is_changed, idx_changed, empty_vec, 0.0, *mapped, e);
                 #pragma acc wait
                 delete *history;
                 *history = mapped;

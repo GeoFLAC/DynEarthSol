@@ -292,6 +292,8 @@ void reset_hydraulic_assembly(const Param &param, Variables &var);
 // Seed the transport timestep before the first step and after material/remesh
 // changes. The pressure update also refreshes this bound from current properties.
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
+// Changes whenever the node coordinates or the mesh change; never 0.
+std::uint64_t mesh_fingerprint(const Variables &var);
 // Physical Darcy volume flux (m/s); tensor, retention and gravity conventions
 // match pressure assembly. Reuse caller-owned gradients when supplied.
 #pragma acc routine seq

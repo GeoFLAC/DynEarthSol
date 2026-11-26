@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <vector>
@@ -245,10 +246,31 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
     var.mat->hydro_step_limit = 0;
 }
 
+std::uint64_t mesh_fingerprint(const Variables &var)
+{
+    // FNV-1a over 64-bit words: the coordinates, the mesh size and the remesh count.
+    std::uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](std::uint64_t word) { h ^= word; h *= 1099511628211ull; };
+    mix(std::uint64_t(var.nnode)); mix(std::uint64_t(var.nelem)); mix(std::uint64_t(var.nremesh));
+    const double *x = var.coord->data();
+    for (std::size_t i = 0; i < std::size_t(var.nnode) * NDIMS; ++i) {
+        std::uint64_t word;
+        std::memcpy(&word, x + i, sizeof word);
+        mix(word);
+    }
+    return h | 1;
+}
+
 void assemble_well_source(const Param &param, const Variables &var)
 {
     const BC &bc = param.bc;
     if (bc.num_wells == 0) return;
+    // The weights depend only on the mesh: compute_mass can run several times
+    // a step, or every step on a fixed mesh, without the mesh changing.
+    #pragma acc wait
+    const std::uint64_t mesh = mesh_fingerprint(var);
+    if (mesh == var.fluid_source_mesh) return;
+    var.fluid_source_mesh = mesh;
 
     double_vec &source = *var.fluid_source;
     std::fill(source.begin(), source.end(), 0.0);

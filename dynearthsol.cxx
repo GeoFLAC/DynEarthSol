@@ -1379,7 +1379,11 @@ int main(int argc, const char* argv[])
            param.control.hydraulic_content_model == 0)
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
-        if (param.control.hydraulic_content_model == 0) update_porosity(var);
+        if (param.control.hydraulic_content_model == 0) {
+            update_porosity(var);
+            // The timestep below reads the diffusivity of the new porosity.
+            if (var.pore_strain) refresh_hydraulic_diffusivity(param, var);
+        }
 
         // The functions of a slow step are expensive and their inputs change
         // slowly, so they run every slow_updates_interval steps.
@@ -1403,8 +1407,12 @@ int main(int argc, const char* argv[])
         // if the update below selects var.dt for the next step.
         const double rotation_dt = var.dt;
         if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
-        if (param.control.has_moving_mesh)
+        // Whether this step already chose the next dt from the accepted state.
+        bool dt_chosen = false;
+        if (param.control.has_moving_mesh) {
             update_mesh(param, var);
+            dt_chosen = param.control.use_global_velocity_scaling;
+        }
         else if (!current_pressure && (param.control.rsf_dtheta_max > 0.0 ||
                  param.control.use_global_velocity_scaling)) {
             // A fixed mesh still needs the accepted velocity's GVS mass and
@@ -1413,6 +1421,7 @@ int main(int argc, const char* argv[])
             compute_mass(param, var, var.max_vbc_val, *var.volume_n,
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
+            dt_chosen = true;
         }
         else if (!current_pressure && (phase_change_step || var.pore_strain)) {
             // A fixed mesh has no update_mesh() to rebuild them.
@@ -1420,7 +1429,7 @@ int main(int argc, const char* argv[])
                          *var.mass, *var.tmass, *var.hmass, *var.ymass,
                          *var.tmp_result);
         }
-        if (var.pore_strain && !current_pressure) var.dt = compute_dt(param, var);
+        if (var.pore_strain && !current_pressure && !dt_chosen) var.dt = compute_dt(param, var);
         if (param.control.hydraulic_content_model == 1) {
             hydraulic_step.advance(param,var);
             if (current_pressure) {

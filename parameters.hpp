@@ -1,6 +1,7 @@
 #ifndef DYNEARTHSOL3D_PARAMETERS_HPP
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
+#include <cstdint>
 #include <map>
 #include <limits>
 #include <string>
@@ -1030,6 +1031,7 @@ struct Variables {
     double_vec *energy_balance = nullptr; // sensible energy change, sources, carried heat, boundary reactions, error
     double fluid_reference_temperature = 0; // EOS reference, preserved when temperature boundaries change
     double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
+    mutable std::uint64_t fluid_source_mesh = 0; // mesh_fingerprint() fluid_source was assembled on
     double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 
     // For rate-and-state friction

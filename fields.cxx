@@ -164,6 +164,7 @@ void reallocate_variables(const Param& param, Variables& var)
   
     delete var.edvoldt;
     var.edvoldt = new double_vec(e);
+    if (var.pore_recovery) var.pore_recovery->assign(e, 0.0);
 
 
     delete var.dpressure;
