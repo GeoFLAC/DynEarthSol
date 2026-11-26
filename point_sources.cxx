@@ -85,6 +85,15 @@ bool source_totals_match(long double actual, long double expected,
     return std::abs(actual - expected) <= tolerance;
 }
 
+void point_position(const Injection &injection, int p, double q[NDIMS])
+{
+    q[0] = injection.points_x[p];
+#ifdef THREED
+    q[1] = injection.points_y[p];
+#endif
+    q[NDIMS - 1] = injection.points_z[p];
+}
+
 [[noreturn]] void point_source_error(ExitCode code, int point_id,
                                      const double q[NDIMS],
                                      const Variables& var, const char* reason)
@@ -131,13 +140,6 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
             "Point-source integration interval must be finite and positive.");
     }
 
-    // A compute rank holds part of the mesh: a point outside it belongs to
-    // another rank, and assemble_point_sources checks the total over all ranks.
-#ifdef USEMPI
-    const bool partial = var.mpi && var.mpi->in_kernel();
-#else
-    const bool partial = false;
-#endif
     // The owners belong to this mesh and these point positions.
     std::uint64_t mesh = mesh_fingerprint(var);
     for (const double_vec *v : {&injection.points_x, &injection.points_y, &injection.points_z})
@@ -148,28 +150,21 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
         }
     mesh |= 1;
     PointSourceOwners &owners = var.point_owners[&injection];
-    if (owners.mesh != mesh) {
+    // The owner changes only with the mesh: find it once per mesh. All ranks
+    // search again when any rank's mesh changed, for the check over the ranks.
+    if (mpi_any(var, owners.mesh != mesh)) {
         owners.element.assign(injection.num_points, -1);
         owners.weight.assign(std::size_t(injection.num_points)*NODES_PER_ELEM, 0.0);
-    }
-    for (int p = 0; p < injection.num_points; ++p) {
-        double q[NDIMS];
-        q[0] = injection.points_x[p];
-#ifdef THREED
-        q[1] = injection.points_y[p];
-#endif
-        q[NDIMS - 1] = injection.points_z[p];
-
-        for (int d = 0; d < NDIMS; ++d) {
-            if (!std::isfinite(q[d])) {
-                point_source_error(EXIT_RUNTIME_NAN, p, q, var,
-                                   "has a non-finite coordinate");
+        int_vec placed(injection.num_points, 0);
+        for (int p = 0; p < injection.num_points; ++p) {
+            double q[NDIMS];
+            point_position(injection, p, q);
+            for (int d = 0; d < NDIMS; ++d) {
+                if (!std::isfinite(q[d])) {
+                    point_source_error(EXIT_RUNTIME_NAN, p, q, var,
+                                       "has a non-finite coordinate");
+                }
             }
-        }
-
-        // The owner changes only with the mesh: find it once per mesh.
-        if (owners.mesh != mesh) {
-            owners.element[p] = -1;
             for (int e = 0; e < var.nelem; ++e) {
                 double weights[NODES_PER_ELEM];
                 if (!compute_point_shape_weights(var, e, q, weights)) continue;
@@ -180,16 +175,35 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
                 owners.element[p] = e;
                 for (int i = 0; i < NODES_PER_ELEM; ++i)
                     owners.weight[p*NODES_PER_ELEM+i] = weights[i];
+                placed[p] = 1;
                 break;
             }
         }
+#ifdef USEMPI
+        // A compute rank holds part of the mesh: a point outside it can lie on
+        // another rank. Rates that cancel hide a lost point from the totals
+        // that assemble_point_sources checks, so each point is checked here.
+        if (var.mpi && var.mpi->in_kernel())
+            var.mpi->maximum(placed.data(), injection.num_points);
+#endif
+        for (int p = 0; p < injection.num_points; ++p) {
+            if (placed[p]) continue;
+            double q[NDIMS];
+            point_position(injection, p, q);
+            if (mpi_reports(var))
+                point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
+                                   "could not be mapped into the current mesh");
+            die_together(EXIT_RUNTIME_LOOKUP);
+        }
+        owners.mesh = mesh;
+    }
+
+    for (int p = 0; p < injection.num_points; ++p) {
         const int mapped_element = owners.element[p];
         const double *mapped_weights = &owners.weight[p*NODES_PER_ELEM];
-        if (mapped_element < 0) {
-            if (partial) continue;
-            point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
-                               "could not be mapped into the current mesh");
-        }
+        if (mapped_element < 0) continue;  // on another rank
+        double q[NDIMS];
+        point_position(injection, p, q);
 
         const double source_rate = (scale ? (*scale)[p] : 1.0) *
             injection_rate_for_step(injection, start, stop, p, peak_rate);
@@ -214,8 +228,6 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
                                "did not conserve its requested nodal source total");
         }
     }
-    owners.mesh = mesh;
-
 }
 
 namespace {
@@ -284,8 +296,7 @@ void assemble_point_sources(const Injection &injection, const Variables &var,
         if (!source_totals_match(assembled_total, requested_total,
                                  absolute_rate_total, active_contributions)) {
             die_together(EXIT_INTERNAL_ASSERT,
-                "Point-source nodal total does not equal the requested active rate; "
-                "a point may lie outside the mesh.");
+                "Point-source nodal total does not equal the requested active rate.");
         }
     }
 }
