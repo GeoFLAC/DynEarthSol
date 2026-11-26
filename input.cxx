@@ -1,6 +1,7 @@
 #include <algorithm>  // For std::is_sorted
 #include <cmath>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -140,7 +141,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("monitor.points_x", opt::list()->default_value("[]"),
          "Monitoring x coordinates array '[x0, x1, ...]'.")
         ("monitor.points_y", opt::list()->default_value("[]"),
-         "Monitoring y coordinates array '[y0, y1, ...]' (3D only; 2D legacy alias for monitor.points_z).")
+         "Monitoring y coordinates array '[y0, y1, ...]' (3D; in 2D, used as monitor.points_z when that is not given).")
         ("monitor.points_z", opt::list()->default_value("[]"),
          "Monitoring z coordinates array '[z0, z1, ...]' (2D second coordinate or 3D third coordinate).")
         ("monitor.points_unit", opt::value<std::string>(&p.monitor.points_unit)->default_value("m"),
@@ -554,6 +555,18 @@ static void declare_parameters(opt::Registry &cfg,
          "Any other value is rejected at startup.\n")
         ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
+        ("control.iterative_return_mapping_option",
+         opt::value<int>(&p.control.iterative_return_mapping_option)->default_value(0),
+         "Strength used by the Mohr-Coulomb return mapping when the friction or\n"
+         "dilation angle weakens with plastic strain.\n"
+         "0: friction and dilation at the start of the step; cohesion follows the\n"
+         "   plastic strain of the step (default).\n"
+         "1: (experimental) iterate until cohesion, friction and dilation all match the\n"
+         "   plastic strain at the end of the step (backward Euler). Slower where\n"
+         "   friction or dilation weakens; less dependent on the step size. Where more\n"
+         "   than one plastic increment matches, it can take a later one than the\n"
+         "   smallest, with more plastic strain in the step.\n"
+         "Both give the same result when only cohesion weakens.\n")
 
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
@@ -642,7 +655,8 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.PT_max_iter", opt::value<int>(&p.control.PT_max_iter)->default_value(5000),
          "Maximum iteration for PT loop")
         ("control.PT_relative_tolerance",opt::value<double>(&p.control.PT_relative_tolerance)->default_value(1e-6),
-         "Relative tolerance on projected physical-force RMS, scaled by the first warm trial")
+         "Relative tolerance on projected physical-force RMS, scaled by the first warm trial. "
+         "The threshold is never below 1000 * machine epsilon * the absolute force RMS.")
         ("control.PT_absolute_tolerance", opt::value<double>(&p.control.PT_absolute_tolerance)->default_value(0.0),
          "Absolute projected-force RMS tolerance (N/m in 2D, N in 3D)")
         ("control.PT_option", opt::value<int>(&p.control.PT_option)->default_value(0),
@@ -666,7 +680,7 @@ static void declare_parameters(opt::Registry &cfg,
          opt::value<std::string>()->default_value("shear"),
          "Elastic-speed ceiling used by global velocity scaling. It sets the floor of\n"
          "the fictitious density rho_fict = K / v_elastic^2.\n"
-         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (historical default).\n"
+         "shear: sqrt(G/rho), giving rho_fict >= rho K/G (default).\n"
          "bulk : sqrt(K/rho), giving rho_fict >= rho and restoring physical density\n"
          "       when the pseudo-wave speed reaches the bulk-wave ceiling.\n")
         ("control.rsf_slip_rate_projection_option",
@@ -674,7 +688,7 @@ static void declare_parameters(opt::Registry &cfg,
              ->default_value(rsf_slip_rate_projection_maximum_shear),
          "Velocity-dimensional rate supplied to the RSF update.\n"
          "0: project the element velocity onto the maximum-shear direction inferred from stress\n"
-         "   (default; the historical behavior).\n"
+         "   (default).\n"
          "1: use V = 2 w eps_II from the total deviatoric strain rate, where w is the\n"
          "   element's minimum altitude.\n")
         ("control.rsf_dtheta_max",
@@ -994,7 +1008,10 @@ static void declare_parameters(opt::Registry &cfg,
          "How to set the initial material type of markers?\n"
          "0: marker's mattype is determined by regional attribute (currently can be modified only in the code or in a poly file).\n"
          "1: marker's mattype is layered.\n"
-         "101: custom mattype.")
+         "101: custom mattype.\n"
+         "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1): "
+         "a marker takes mattype i where GWB composition i is at least 0.5, i < mat.num_materials. "
+         "The world must define a material at every marker; a marker without one is an error.")
         ("ic.num_mattype_layers", opt::value<int>(&p.ic.num_mattype_layers)->default_value(2),
          "Number of material layers")
         ("ic.layer_mattypes", opt::list()->default_value("[0,1]"),
@@ -1008,7 +1025,9 @@ static void declare_parameters(opt::Registry &cfg,
          "1: planar weak zone with specified azimuth, inclination, halfwidth, min/max depth range, and center location.\n"
          "2: ellipsoidal weak zone with specified center location and semi-axes.\n"
          "3: Gaussian distribution point weak zone with specified center location and standard deviation.\n"
-         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n")
+         "4: multiple planar segments; each segment uses the same parameters as option 1 but given as '[v0, v1, ...]' arrays.\n"
+         "936: the fault features of the Geodynamic World Builder world ic.gwb_filename (needs a build with "
+         "usegwb=1): weakzone_plstrain in the elements whose centroid lies in one.\n")
         ("ic.is_restarting_weakzone", opt::value<bool>(&p.ic.is_restarting_weakzone)->default_value(false),
          "Create a new weakzone when restarting?")
         ("ic.weakzone_plstrain", opt::value<double>(&p.ic.weakzone_plstrain)->default_value(0.1),
@@ -1041,7 +1060,8 @@ static void declare_parameters(opt::Registry &cfg,
          "Length of weak zone semi-axis in z direction (in meters)\n")
         ("ic.weakzone_standard_deviation", opt::value<double>(&p.ic.weakzone_standard_deviation)->default_value(1e3),
          "Standard deviation of Gaussian weak zone (in meters).\n"
-         "Used as point-Gaussian std dev (option 3) and as along-strike sigma (option 4).\n")
+         "Used as point-Gaussian std dev (option 3), as along-strike sigma (option 4), and across "
+         "a fault for option 936 with ic.gwb_fault_is_gaussian.\n")
         ("ic.weakzone_gaussian_amplitude", opt::value<double>(&p.ic.weakzone_gaussian_amplitude)->default_value(0),
          "Amplitude of the Gaussian x-shift for weakzone_option=4 (in meters).\n"
          "The fault x-position is offset by A*exp(-(y-y0)^2/(2*sigma^2)) where\n"
@@ -1084,7 +1104,8 @@ static void declare_parameters(opt::Registry &cfg,
          "4: uniform ic.temp_background plus a Gaussian anomaly.\n"
          "5: linear conduction from bc.surface_temperature at the top to bc.mantle_temperature\n"
          "   at the bottom (mesh.zlength), plus the same Gaussian anomaly.\n"
-         "90: temperature read from an external grid\n")
+         "90: temperature read from an external grid\n"
+         "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1).\n")
 
         // for temperature_option = 0
 	    ("ic.oceanic_plate_age_in_yr", opt::value<double>(&p.ic.oceanic_plate_age_in_yr)->default_value(60e6),
@@ -1127,6 +1148,19 @@ static void declare_parameters(opt::Registry &cfg,
          "<0: Infinite width; thermal profile is uniform along y-axis (ridge/hinge).\n")
         ("ic.radiogenic_heat_dome_azimuth", opt::value<double>(&p.ic.radiogenic_heat_dome_azimuth)->default_value(0),
          "Dome azimuth (rotation angle), used for the temperature profile on the plate (in degree) (3D).\n")
+
+        // for temperature_option, mattype_option and/or weakzone_option = 936
+        ("ic.gwb_filename", opt::value<std::string>(&p.ic.gwb_filename)->default_value(""),
+         "Geodynamic World Builder world (.wb) for ic.temperature_option, ic.mattype_option "
+         "and/or ic.weakzone_option 936. It is queried at each node, marker and element "
+         "centroid of the initial mesh at depth -z; a 2D DES model needs a world with a cross "
+         "section, x running along it.")
+        ("ic.gwb_fault_is_gaussian", opt::value<bool>(&p.ic.gwb_fault_is_gaussian)->default_value(false),
+         "For ic.weakzone_option 936. no: every element in a GWB fault gets weakzone_plstrain. "
+         "yes: an element in a fault gets weakzone_plstrain * exp(-d^2 / (2 sigma^2)), d being "
+         "its centroid's distance from the fault's plane and sigma ic.weakzone_standard_deviation; "
+         "the fault's GWB thickness still bounds the zone, so make it about 4 to 6 sigma. The "
+         "world's faults then need distinct names.\n")
 
         ("ic.temp_background", opt::value<double>(&p.ic.temp_background)->default_value(273),
          "Uniform background temperature in K for temperature_option=4.")
@@ -1175,7 +1209,7 @@ static void declare_parameters(opt::Registry &cfg,
          "Conducting PT loop to get initial stress field from inital guess")
         ("ic.initial_stress_option", opt::value<int>(&p.ic.initial_stress_option)->default_value(0),
          "How to initialize stress?\n"
-         "0: use the legacy gravity-dependent initialization.\n"
+         "0: lithostatic stress and strain from gravity; zero stress when gravity = 0.\n"
          "1: prescribe a homogeneous absolute Cauchy stress tensor; requires gravity=0.\n")
 #ifdef THREED
         ("ic.initial_stress", opt::list()->default_value("[0,0,0,0,0,0]"),
@@ -1562,6 +1596,33 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
+#ifdef USEMPI
+// The values of the options that choose code inside the distributed kernels, each
+// checked against the MPI backend: its fields are in mpi_local_fields.hpp and
+// tests/functional/mpi compares it with a serial run. An MPI build refuses any other
+// value, which would otherwise run without the fields it needs on the compute ranks.
+// Add a value here only once it passes those checks (doc/mpi.md, "Adding a
+// distributed kernel"). Work on rank zero's full mesh (remeshing, phase changes,
+// surface processes, markers) needs no entry.
+static void check_mpi_support(const Param& p)
+{
+    struct Checked { const char* name; int value; int first, last; };
+    const Checked options[] = {
+        {"control.damping_option", p.control.damping_option, 0, 4},
+        {"control.PT_option", p.control.PT_option, 0, 1},
+        {"control.rsf_slip_rate_projection_option", p.control.rsf_slip_rate_projection_option, 0, 1},
+    };
+    for (const Checked& option : options) {
+        if (option.value < option.first || option.value > option.last) {
+            std::cerr << "Error: " << option.name << " = " << option.value
+                      << " has not been checked with MPI; this build accepts "
+                      << option.first << " to " << option.last << ".\n";
+            die(EXIT_CONFIG_VALUE);
+        }
+    }
+}
+#endif
+
 static void parse_point_source(const opt::Registry &vm, const Param &p,
                                const char *section, Injection &source, bool fluid)
 {
@@ -1880,7 +1941,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
         get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
 #else
-        // 2D legacy alias: points_y means z when points_z is not given
+        // 2D: points_y supplies z when points_z is not given
         const bool z_from_y = vm.str("monitor.points_z") == "[]" &&
                               vm.str("monitor.points_y") != "[]";
         get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
@@ -2082,6 +2143,11 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             std::cerr << "Error: control.ref_pressure_option must be 0, 1, or 2 (got "
                       << p.control.ref_pressure_option << ").\n";
             die(EXIT_CONFIG_VALUE);
+        }
+        if (p.control.iterative_return_mapping_option != 0 &&
+            p.control.iterative_return_mapping_option != 1) {
+            die(EXIT_CONFIG_VALUE,
+                "control.iterative_return_mapping_option must be 0 or 1.");
         }
         if (p.control.rsf_slip_rate_projection_option !=
                 rsf_slip_rate_projection_maximum_shear &&
@@ -2380,6 +2446,26 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                 + std::to_string(p.mat.mattype_continental_crust) + ") in [0, mat.num_materials).";
             die(EXIT_CONFIG_VALUE, msg.c_str());
         }
+
+        // Geodynamic World Builder initial conditions
+        if (p.sim.is_restarting && p.ic.is_restarting_weakzone && p.ic.weakzone_option == 936)
+            die(EXIT_CONFIG_VALUE, "ic.weakzone_option 936 cannot re-seed the weak zone of a restart: "
+                "set ic.is_restarting_weakzone = no, or choose another ic.weakzone_option.");
+        if (p.ic.temperature_option == 936 || p.ic.mattype_option == 936 || p.ic.weakzone_option == 936) {
+#ifndef USEGWB
+            die(EXIT_UNSUPPORTED_LIB, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                "936 needs the Geodynamic World Builder: build with usegwb=1.");
+#endif
+            if (p.ic.gwb_filename.empty())
+                die(EXIT_CONFIG_VALUE, "ic.temperature_option, ic.mattype_option or ic.weakzone_option "
+                    "936 needs ic.gwb_filename.");
+            if (! std::ifstream(p.ic.gwb_filename)) {
+                std::cerr << "Error: cannot open ic.gwb_filename '" << p.ic.gwb_filename << "'.\n";
+                die(EXIT_IO_OPEN);
+            }
+        }
+        if (p.ic.weakzone_option == 936 && p.ic.gwb_fault_is_gaussian && p.ic.weakzone_standard_deviation <= 0)
+            die(EXIT_CONFIG_VALUE, "ic.gwb_fault_is_gaussian needs ic.weakzone_standard_deviation > 0.");
 
         if (p.mat.nmat == 1 && p.control.ref_pressure_option != 0) {
             p.control.ref_pressure_option = 0;
@@ -2782,6 +2868,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
     }
 
+#ifdef USEMPI
+    check_mpi_support(p);
+#endif
 }
 
 

@@ -167,8 +167,10 @@ private:
 
 };
 
+struct SplitParents;
+// split: RemeshScratch::split_parent, from nearest_neighbor_interpolation (remesh-scratch.hpp).
 void remap_markers(const Param&, Variables &,
-                   const array_t &, const conn_t &);
+                   const array_t &, const conn_t &, const SplitParents &split);
 void correct_inflow_band_marker_mattype(const Param&, const Variables&,
                                         const bool *side_in);
 void advect_hydrous_markers(const Param &, const Variables &, double,

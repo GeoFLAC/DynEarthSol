@@ -7,7 +7,7 @@ transport, hillslope diffusion and marine deposition. DES handles tectonics;
 GoSPL handles the surface.
 
 For a step-by-step walkthrough with exercises, see the tutorial
-[Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl).
+[Coupling with GoSPL](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl).
 This file is the reference kept with the code.
 
 ## Files

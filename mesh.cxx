@@ -648,7 +648,7 @@ void create_equilateral_node(const Param& param, const Variables& var, double *&
 void new_mesh_regular_equilateral(const Param& param, Variables& var)
 {
     double *pcoord, *pregattr;
-    int *pconnectivity, *psegment, *psegflag;
+    int_vec pconnectivity, psegment, psegflag;
 
     double sqrt3_to_2 = 2./std::sqrt(3.0);
 
@@ -664,17 +664,14 @@ void new_mesh_regular_equilateral(const Param& param, Variables& var)
     create_equilateral_segments(var, psegment, psegflag);
 
     var.coord = new array_t(pcoord, var.nnode);
-    var.connectivity = new conn_t(pconnectivity, var.nelem);
-    var.segment = new segment_t(psegment, var.nseg);
-    var.segflag = new segflag_t(psegflag, var.nseg);
+    var.connectivity = new conn_t(pconnectivity.data(), var.nelem);
+    var.segment = new segment_t(psegment.data(), var.nseg);
+    var.segflag = new segflag_t(psegflag.data(), var.nseg);
 
     create_regular_regattr(var, pregattr);
     var.regattr = new regattr_t(pregattr, var.nelem);
 
     delete [] pcoord;
-    delete [] pconnectivity;
-    delete [] psegment;
-    delete [] psegflag;
     delete [] pregattr;
 }
 
@@ -2907,8 +2904,8 @@ void new_mesh_from_exofile(const Param& param, Variables& var)
 } // end of anonymous namespace
 
 
-void create_equilateral_elem(const Variables& var, int *&connectivity) {
-    connectivity = new int[var.nelem*3];
+void create_equilateral_elem(const Variables& var, int_vec &connectivity) {
+    connectivity.resize(var.nelem*3);
 
     int istart_n1 = var.nx * (int(var.nz/2)+var.nz%2);
 
@@ -2943,9 +2940,9 @@ void create_equilateral_elem(const Variables& var, int *&connectivity) {
     }
 }
 
-void create_equilateral_segments(const Variables& var, int *&segments, int *&segflags) {
-    segments = new int[var.nseg*2];
-    segflags = new int[var.nseg];
+void create_equilateral_segments(const Variables& var, int_vec &segments, int_vec &segflags) {
+    segments.resize(var.nseg*2);
+    segflags.resize(var.nseg);
     int seg_idx = 0;
     int flag_idx = 0;
 
@@ -3320,9 +3317,11 @@ void create_top_elems(Variables& var)
 
     var.ntop_elems = telems.size();
 
-    var.top_elems = new int_vec(var.ntop_elems);
-    for (int i=0; i<var.ntop_elems; i++)
-        (*var.top_elems)[i] = telems[i];
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.top_elems)
+        var.top_elems->assign(telems.begin(), telems.end());
+    else
+        var.top_elems = new int_vec(telems.begin(), telems.end());
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -3388,11 +3387,6 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.top_nodes;
     surfinfo.top_nodes =  new int_vec(top_nodes.begin(),top_nodes.end());
 
-    // create globle --> local map
-    surfinfo.arctop_nodes.clear();
-    for (size_t i=0; i<ntop; i++)
-        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
-    
     delete surfinfo.dh;
     surfinfo.dh = new double_vec(ntop,0.);
     delete surfinfo.dhacc;
@@ -3407,6 +3401,16 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
     delete surfinfo.total_slope;
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
+    index_surface(var, surfinfo);
+}
+
+
+void index_surface(const Variables& var, SurfaceInfo& surfinfo)
+{
+    const size_t etop = var.bfacets[iboundz1]->size();
+    surfinfo.arctop_nodes.clear();
+    for (int i=0; i<surfinfo.ntop; i++)
+        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
 
     for (size_t i=0; i<etop; i++) {
         (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
@@ -3418,9 +3422,35 @@ void update_surface_info(const Variables& var, SurfaceInfo& surfinfo)
             (*surfinfo.elem_and_nodes)[i][k] =
                 surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
     }
-    create_support_surf(surfinfo, ntop, etop);
-
+    create_support_surf(surfinfo, surfinfo.ntop, etop);
 }
+
+void create_surface_connectivity(Variables& var)
+{
+    int etop = var.bfacets[iboundz1]->size();
+    // first call: allocate; after a remesh: replace the contents, keeping the object
+    if (var.connectivity_surface)
+        *var.connectivity_surface = conn_t(etop);
+    else
+        var.connectivity_surface = new conn_t(etop);
+
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
+#endif
+    // MPI mesh management runs on the root CPU; the compact GPU fields are
+    // populated after topology and boundary facets have been constructed.
+#if !defined(ACC) || !defined(USEMPI)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
+#endif
+    for (int i=0; i<etop; ++i) {
+        int e = (*var.bfacets[iboundz1])[i].first;
+        int f = (*var.bfacets[iboundz1])[i].second;
+        for (int j=0; j<NODES_PER_FACET; ++j) {
+            (*var.connectivity_surface)[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
+        }
+    }
+}
+
 
 void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& surfinfo)
 {
@@ -3460,10 +3490,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.terrig_diffusivity = param.control.terrig_sediment_diffusivity;
     surfinfo.terrig_dpeth_coeff = param.control.terrig_depth_coefficient;
 
-    // create globle --> local map
-    surfinfo.arctop_nodes.clear();
-    for (size_t i=0; i<ntop; i++)
-        surfinfo.arctop_nodes[(*surfinfo.top_nodes)[i]] = i;
     surfinfo.dh = new double_vec(ntop,0.);
     surfinfo.dhacc = new double_vec(var.nnode,0);
     surfinfo.edvacc_surf = new double_vec(etop,0);
@@ -3475,76 +3501,11 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.total_dx = new double_vec(var.nnode,0.);
     surfinfo.total_slope = new double_vec(var.nnode,0.);
 
-    for (size_t i=0; i<etop; i++) {
-        (*surfinfo.top_facet_elems)[i] = (*(var.bfacets[iboundz1]))[i].first;
-
-        // Same facets in the same order, so connectivity_surface has already gathered
-        // this facet's global node ids: elem_and_nodes is just those mapped into the
-        // surface numbering -- one contiguous read, not a second random gather.
-        for (int k=0; k<NDIMS; k++)
-            (*surfinfo.elem_and_nodes)[i][k] =
-                surfinfo.arctop_nodes[(*var.connectivity_surface)[i][k]];
-    }
-    create_support_surf(surfinfo, ntop, etop);
+    index_surface(var, surfinfo);
 
     //***** to do *****
 //    surface_edhacc_geometry_interpolation(var,info);
 
-}
-namespace {
-
-    struct OrderedInt
-    {
-#ifdef THREED
-        int a, b, c;
-        OrderedInt(int x, int y, int z)
-        {
-            // ensure that a < b < c
-            if (x < y) {
-                if (y < z)
-                    a = x, b = y, c = z;
-                else {
-                    if (x < z)
-                        a = x, b = z, c = y;
-                    else
-                        a = z, b = x, c = y;
-                }
-            }
-            else {
-                if (x < z)
-                    a = y, b = x, c = z;
-                else {
-                    if (y < z)
-                        a = y, b = z, c = x;
-                    else
-                        a = z, b = y, c = x;
-                }
-            }
-        }
-
-        bool operator==(OrderedInt &rhs)
-        {
-            return a==rhs.a && b==rhs.b && c==rhs.c;
-        }
-
-#else
-
-        int a, b;
-        OrderedInt(int x, int y)
-        {
-            // ensure that a < b
-            if (x < y)
-                a = x, b = y;
-            else
-                a = y, b = x;
-        }
-
-        bool operator==(OrderedInt &rhs)
-        {
-            return a==rhs.a && b==rhs.b;
-        }
-#endif
-    };
 }
 
 
@@ -3557,99 +3518,75 @@ void create_boundary_facets(Variables& var)
      * on the i-th boundary. (See constants.hpp for the order of boundaries.)
      */
 
-    // Looping through var.segment
-    #pragma omp parallel default(none) shared(var, NODE_OF_FACET, std::cerr) // TODO: fix no deterministic behavior
-    {
-        // local storage for each thread
-        int_pair_vec bfacet_local[nbdrytypes];
-
-        #pragma omp for nowait
-        for (int i=0; i<var.nseg; ++i) {
-            uint flag = static_cast<uint>((*var.segflag)[i][0]);
-            if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
-            // Nodes of this facet
-            OrderedInt af((*var.segment)[i][0], (*var.segment)[i][1]
-#ifdef THREED
-                          , (*var.segment)[i][2]
-#endif
-                          );
-
-            // Finding the corresponding element and facet #
-            bool found = false;
-            for (int e=0; e<var.nelem && !found; ++e) {
-                ConstConnAccessor conn = (*var.connectivity)[e];
-                for (int f=0; f<FACETS_PER_ELEM && !found; ++f) {
-                    uint facet_flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]] &
-                                      (*var.bcflag)[conn[NODE_OF_FACET[f][1]]]
-#ifdef THREED
-                                      & (*var.bcflag)[conn[NODE_OF_FACET[f][2]]]
-#endif
-                                      ;
-
-                    if ((flag & facet_flag) == 0U) continue; // skip
-
-                    OrderedInt bf(conn[NODE_OF_FACET[f][0]], conn[NODE_OF_FACET[f][1]]
-#ifdef THREED
-                                  , conn[NODE_OF_FACET[f][2]]
-#endif
-                                  );
-                    if (af == bf) {
-                        for (int k=0; k<nbdrytypes; ++k) {
-                            if (flag == (1U << k)) {
-                                bfacet_local[k].emplace_back(e, f);
-                                found = true; // break out of nested loops
-                                break;
-                            }
-                        }
-                    }
-                }
+    // Element facets whose nodes share a boundary flag, sorted by their node
+    // ids, then by element and facet: the first match of a key is the one a
+    // scan over all elements would find.
+    typedef std::array<int,NODES_PER_FACET> facet_key;
+    struct Candidate {
+        facet_key key;
+        int e, f;
+        uint flag;
+    };
+    std::vector<Candidate> candidates;
+    for (int e=0; e<var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        for (int f=0; f<FACETS_PER_ELEM; ++f) {
+            Candidate c;
+            c.flag = (*var.bcflag)[conn[NODE_OF_FACET[f][0]]];
+            for (int j=0; j<NODES_PER_FACET; ++j) {
+                c.key[j] = conn[NODE_OF_FACET[f][j]];
+                c.flag &= (*var.bcflag)[c.key[j]];
             }
-            // not found
-            if (!found) {
-                #pragma omp critical
-                {
-                    std::cerr << "Error: " << i << "-th segment is not on any element\n";
-                    die(EXIT_INTERNAL_UNREACHABLE);
+            if ((c.flag & BOUND_ANY) == 0U) continue;
+            std::sort(c.key.begin(), c.key.end());
+            c.e = e;
+            c.f = f;
+            candidates.push_back(c);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate &a, const Candidate &b) {
+                  if (a.key != b.key) return a.key < b.key;
+                  return a.e < b.e || (a.e == b.e && a.f < b.f);
+              });
+
+    // Looping through var.segment, in its order
+    for (int i=0; i<var.nseg; ++i) {
+        uint flag = static_cast<uint>((*var.segflag)[i][0]);
+        if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
+        facet_key af;
+        for (int j=0; j<NODES_PER_FACET; ++j)
+            af[j] = (*var.segment)[i][j];
+        std::sort(af.begin(), af.end());
+
+        // Finding the corresponding element and facet #
+        bool found = false;
+        auto c = std::lower_bound(candidates.begin(), candidates.end(), af,
+                                  [](const Candidate &a, const facet_key &k) { return a.key < k; });
+        for (; c != candidates.end() && c->key == af && !found; ++c) {
+            if ((flag & c->flag) == 0U) continue; // skip
+            for (int k=0; k<nbdrytypes; ++k) {
+                if (flag == (1U << k)) {
+                    var.bfacets[k]->emplace_back(c->e, c->f);
+                    found = true;
+                    break;
                 }
             }
         }
-
-        // Merge local results into global results
-        #pragma omp critical
-        {
-            for (int k = 0; k < nbdrytypes; ++k) {
-                var.bfacets[k]->insert(
-                    var.bfacets[k]->end(),
-                    bfacet_local[k].begin(),
-                    bfacet_local[k].end());
-            }
-        }
-
-        #pragma omp barrier
-
-        #pragma omp for
-        for (int n=0; n<nbdrytypes; ++n) {
-            std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
-                    [](const int_pair &a, const int_pair &b) {
-                        return a.first < b.first;
-                    });
+        if (!found) {
+            std::cerr << "Error: " << i << "-th segment is not on any element\n";
+            die(EXIT_INTERNAL_UNREACHABLE);
         }
     }
 
-    int etop = var.bfacets[iboundz1]->size();
-    var.connectivity_surface = new conn_t(etop);
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(var,NODE_OF_FACET,etop)
-#endif
-    #pragma acc parallel loop gang vector
-    for (int i=0; i<etop; ++i) {
-        int e = (*var.bfacets[iboundz1])[i].first;
-        int f = (*var.bfacets[iboundz1])[i].second;
-        for (int j=0; j<NODES_PER_FACET; ++j) {
-            (*var.connectivity_surface)[i][j] = (*var.connectivity)[e][ NODE_OF_FACET[f][j] ];
-        }
+    for (int n=0; n<nbdrytypes; ++n) {
+        std::sort(var.bfacets[n]->begin(), var.bfacets[n]->end(),
+                [](const int_pair &a, const int_pair &b) {
+                    return a.first < b.first;
+                });
     }
+
+    create_surface_connectivity(var);
 
     // for (int n=0; n<nbdrytypes; ++n) {
     //     std::cout << "boundary facet " << n << ":\n";
@@ -3672,6 +3609,15 @@ void create_boundary_facets(Variables& var)
 #endif
 }
 
+
+int_vec top_facet_ids(const Variables& var)
+{
+    const auto& top = *var.bfacets[iboundz1];
+    int_vec ids(top.size());
+    for (std::size_t i=0; i<top.size(); ++i)
+        ids[i] = top[i].first * FACETS_PER_ELEM + top[i].second;
+    return ids;
+}
 
 
 void create_support(Variables& var)
@@ -3742,7 +3688,7 @@ void create_neighbor(Variables& var)
         shared(var, NODE_OF_FACET, ncontact) collapse(2)
 #endif
 #endif
-    #pragma acc parallel loop collapse(2) copy(ncontact) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) collapse(2) copy(ncontact) async
     for (int e=0; e<var.nelem; ++e) {
         for (int i=0; i<NODES_PER_ELEM; ++i) {
             // No "already set" early-exit: it would race the cross-row write below, and the
@@ -3910,7 +3856,7 @@ void average_nodal_to_elem(T_in nodal, const conn_t &connectivity,
     #pragma omp parallel for default(none) \
             shared(nodal, connectivity, nelem, elem, nnodes_per_elem)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < nelem; ++e) {
         ConstConnAccessor conn = connectivity[e];
         double avg = 0.0;

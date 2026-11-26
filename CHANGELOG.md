@@ -17,6 +17,40 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- Material-following monitor points use `monitor.point_type` (`particle` or
+  `grid`), retain their exact checkpoint location, and preserve CSV histories
+  through restart. `monitor.remesh_output` selects before/both remesh rows;
+  CSVs identify regular, pre-remesh and post-remesh states in a final `row` column
+  ([#135]).
+- Native and HDF5 frames include nodal `displacement = coordinate - coord0` ([#135]).
+- Experimental CPU MPI timestep kernels, enabled with `make usempi=1`, in separate
+  `dynearthsol2d.mpi` and `dynearthsol3d.mpi` executables. Temperature, mechanics,
+  geometry, mass and timestep bounds use compact spatial partitions with neighbor
+  halo exchanges. Ownership is rebalanced after every MMG remesh; the log reports
+  element, node, marker and ghost loads. Rank zero retains the
+  global mesh for MMG, phase changes, marker/surface management and output.
+  Individual marker records stay on rank zero; compute ranks keep material counts.
+  Both PT relaxation methods, including initial equilibrium and failure rollback,
+  use the distributed compute meshes and collective convergence checks.
+  CPU halo and solver regression checks accompany the backend;
+  see `doc/mpi.md`. The `.manifest` and the start report record the MPI layout
+  in `[runtime.mpi]`: ranks, nodes, ranks per node, threads per rank, MPI thread
+  level and MPI library.
+- Experimental NVIDIA GPU MPI executables (`usempi=1 openacc=1`) advance compact
+  timestep fields with one device per rank and pinned host staging for halos.
+  Root CPU mesh management handles MMG and remapping. GPU identity, full-field,
+  checkpoint and restart checks accompany the backend;
+  scientific equivalence and speedup must be verified for each workload.
+- MPI interior-node/halo overlap for thermal, force and mass assembly. Mesh
+  checks collect geometry only, and inactive serpentinization/monitor paths
+  avoid unused collections. Per-rank operation and
+  communication profiles expose rank loads and halo traffic.
+  Shared SoA halo packers have explicit OpenACC host/device test modes; host
+  checks alone do not verify full GPU solver behavior or NVLink transport.
+- MPI builds (`usempi=1`) require METIS 5 and partition every mesh with it,
+  using shared-node connectivity and a communication volume objective; meshes with
+  no more elements than ranks use recursive coordinate bisection, and a one-rank
+  GPU run keeps every element on its rank.
 - `control.hydraulic_content_model=1` enables saturated finite-density water
   inventory and retained sensible heat with evolving Biot porosity. Output
   separates physical water mass from the numerical fixed-stress buffer;
@@ -28,26 +62,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   `pore_healing_energy`. Recovery changes porosity, permeability and the fluid
   source; elastic changes and permanent compaction are excluded.
 
-- Monitor CSVs gain a last column, `row`: 0 for the regular `step_interval`
-  series, 1 for the state just before a remesh that falls between monitor
-  steps, and 2 for the remapped state just after it. `monitor.remesh_output`
-  selects `before` (default) or `both`. Filter `row == 0` for an evenly spaced
-  series. A restart keeps a CSV's earlier rows across remeshes.
-
-- `monitor.point_type`: `particle` (default) interpolates nodal values at the
-  monitor point and reads element values from its containing element; `grid`
-  reports the node and element nearest the point, as before.
-  `tests/functional/monitor/check_monitor_tracking.py` checks both through
-  remeshing and restart. Checkpoints preserve the exact element and weights
-  so a restart also preserves the CSV values in 3D; malformed tracer state
-  is rejected before CSV histories change. Older position-only checkpoints
-  remain readable, with relocation round-off.
-
 - `mat.permeability_model=2` uses `k=k0*(phi/phi0)^n`, with positive material
   exponents from `mat.permeability_exponent` (default `[3]`).
-
-- Saved frames include the nodal vector `displacement = coordinate - coord0`
-  in native and HDF5 output. It follows the current reference geometry.
 
 - `control.has_shear_heating` integrates the nonelastic heating proposed in
   [#88](https://github.com/GeoFLAC/DynEarthSol/pull/88), including plastic
@@ -150,6 +166,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Contributor documentation: `CONTRIBUTING.md` (renamed from `DEVELOPING.md`)
   with commit-message guidelines and an AI-usage policy, pull request and issue
   templates, and `AGENTS.md` for coding assistants ([#96]).
+- Rules in `CONTRIBUTING.md` for code comments, source files and classes,
+  which also keep history out of the docs; `AGENTS.md` asks coding assistants
+  and AI reviewers to follow them ([#129]).
 - Frames embed their step, counts and time, so a run restarts and is read
   without its `.info` index; `utils/recreate_info.py` rebuilds the index ([#96]).
 - Provenance records: the executable embeds its build identity, each run writes
@@ -179,6 +198,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   serpentinizes above wet crust (oceanic crust, sediment or sedimentary rock)
   that the VirtualTopology grid finds, down to `mat.serpentinization_max_depth`;
   a grid cell is wet crust above `mat.wet_crust_fraction_threshold` of its
+  markers. `examples/subduction.cfg` runs it ([#110]).
+- Initial conditions from a [Geodynamic World Builder](https://geodynamicworldbuilder.github.io/)
+  world (`ic.gwb_filename`, build with `usegwb=1`): option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes
+  the temperature, each marker's material (GWB composition *i* is mattype *i*)
+  and a weak zone in the world's faults from it, uniform or, with
+  `ic.gwb_fault_is_gaussian`, a Gaussian across each fault; `examples/gwb-*.cfg`
+  show all three ([#117]).
   markers. `examples/tectonics/subduction.cfg` runs it ([#110]).
 
 - The Docker images build `usemmg=1` and `hdf5=1` in the container, offline
@@ -192,6 +219,24 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
+  the material through deformation, remeshing and restart; delete the retired
+  key from existing inputs ([#135]).
+- **Breaking.** Seismic moment uses element plastic-strain increments in N m
+  (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
+- The time summary and the manifest time phase changes for every
+  `mat.phase_change_option`, not only option 3, together with hydrous markers and
+  the serpentinization grid, show surface processes on a new `Surface` line, and
+  count checkpoints as output. Under MPI the remesh, phase-change and surface times
+  include the gather to rank zero and the redistribution, which `Compute` no
+  longer contains.
+- HDF5 output failures stop with the I/O exit codes 20 or 21 instead of an
+  uncaught exception (serial) or exit 61 (MPI).
+- **Breaking.** Checkpoints record the top facet of each surface deposition
+  entry (`dv surface acc`), and a restart puts each entry on its facet. A
+  checkpoint written before this, even by one thread, stops the restart with
+  exit 22 when an element with two top facets has different entries on them;
+  other older checkpoints restart as before.
 - **Breaking.** Monitor points follow the material through deformation,
   remeshing and restart, located like markers by their element and
   barycentric weights. `monitor.remesh_rebind_mode` is removed; delete it from
@@ -256,9 +301,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   writes output; the example's `bc` comments now say north and south are
   fixed outlets, as GoSPL reads them ([#104]).
 - **Breaking.** `mmg_hmin_factor` and `mmg_hmax_factor` are retired: MMG takes
-  its size band from `smallest_size` and `largest_size`, and
-  `examples/defaults.cfg` gives the conversion. With `use_mmg_init`, a `.poly`
-  region without a size constraint is no longer refined to `resolution` ([#95]).
+  its size band from `smallest_size` and `largest_size`; [#95] gives the
+  conversion. With `use_mmg_init`, a `.poly` region without a size constraint
+  is no longer refined to `resolution` ([#95]).
 - **Breaking.** `meshing_option = 2` meshes are finer; multiplying
   `largest_size` by 3.46 (2D) or 5.93 (3D) keeps the old initial mesh ([#95]).
 - **Breaking.** Checkpoints written before this change do not restart ([#95]).
@@ -299,6 +344,19 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Fixed
 
+- Explicit/GVS output cadence and pending remesh stages survive restart.
+  Changed timestep controls refresh timestep and mass together; fixed-mesh
+  GVS also refreshes both from the accepted velocity. Large output intervals
+  no longer overflow the regular frame-index product ([#135]).
+- Restart manifests report only the steps executed in the current run ([#135]).
+- A GVS run no longer writes a duplicate regular frame when the elapsed time
+  lands on an output time to within rounding ([#135]).
+- The benchmark comparator resolves the requested frame through the frame list
+  when printing its step, allowing sparse restart outputs beginning above frame 0.
+- PT steps that start or end near equilibrium no longer stop with exit 54:
+  the default convergence threshold has the same rounding floor as
+  `PT_use_running_scale`, and that floor now ignores boundary tractions
+  ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
 - `sim.seismic_moment_calculate_output`: the event moment is now the sum of
   2 G V times each element's plastic-strain increment, in N m, with no fault
   geometry. It was the shear modulus times volume times node speed, which had
@@ -474,6 +532,59 @@ For a release, the full auto-generated list of merged pull requests is in its
   build copied into a container) instead of failing to link its library; a
   failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
 
+- Plane-strain and 3D plastic shear returns handle two active Mohr-Coulomb
+  faces when a single-face correction crosses the principal-stress order.
+  Strain-dependent cohesion uses the recorded plastic increment in its return,
+  in 3D, plane strain and 2D, including the yield-intercept conversion for
+  plane strain. With a nonzero dilation angle the recorded increment exceeds
+  the plastic multiplier, so results of dilatant softening models change on
+  every yielding face, not only at edges; at zero dilation single-face
+  results are unchanged ([#136]).
+- An elastic trial at or above the tensile cap can return by shear when that
+  return finishes below the cap. When the closed-form returns do not apply,
+  the return searches the shear faces and tensile caps for the active set: a
+  cohesion drop faster than elastic unloading continues to the residual
+  strength, the cohesion-dependent tensile cap uses the stored history, and
+  3D biaxial and triaxial tension, tension-shear corners and the cone apex,
+  and the pure 2D face-cap and cap-cap corners, return to the composite
+  surface. Pure 2D (`mat.is_plane_strain = no`, the default) uses the same
+  returns in the same order as 3D and plane strain. Friction and dilation
+  stay at their values at the start of the step, as before. Rate-and-state
+  models use the same piecewise cohesion law, including its residual value,
+  with the step's slip rate and state held fixed during the return.
+  Plane-strain tension no longer clips principal stresses: it returns from the
+  elastic trial with associated flow on the tensile cap and records that
+  plastic strain, as in 3D, so plane-strain results with tensile failure
+  change. Other results change only where the closed form does not apply
+  (corners, tension, or a step that crosses a weakening breakpoint). A
+  non-finite trial stops with exit status 54 in 3D, plane strain and pure 2D,
+  on the CPU and the GPU, also within a PT iteration, naming the step, the
+  first element and the cause; an elasto-visco-plastic element whose viscous
+  stress is selected does not stop. A law that jumps at one plastic strain
+  (`pls0 = pls1`) is followed across the jump, and the stored history takes the
+  strength past it. Where the law jumps up so that no plastic increment near
+  the jump returns the stress to the strength of the history it stores, the
+  return lies where a later fall of the law, such as that of a second material
+  in the element, brings one back; without one, the run stops with status 54
+  and that cause. Where more than one plastic increment returns the stress to
+  the strength of the history it stores, as where friction or dilation change
+  along a piece of the law or the return moves from a face of the yield
+  surface to an edge, the return takes the smallest; where friction or
+  dilation change (`control.iterative_return_mapping_option = 1`), it can take
+  a later one, with a larger plastic increment, if the active set of the
+  return changes and comes back between the returns the search evaluates. A search for the
+  return that needs more than 4,096 evaluations stops with status 54 and that
+  cause.
+  Mesh regularization of strong softening remains separate ([#136]).
+- New option `control.iterative_return_mapping_option` (default 0). With 1
+  (experimental), the return iterates until cohesion, friction and dilation
+  all match the plastic strain at the end of the step (backward Euler), and
+  rate-and-state models store the friction coefficient of the final plastic
+  history. This depends less on the step size but costs more where friction
+  or dilation weakens: on one thread the 2D accretionary-wedge example runs
+  about 6% longer than before with the default and about 13% longer with 1.
+  Both give the same result when only cohesion weakens ([#136]).
+
 ## [2.0.2] - 2026-09-17
 
 DOI: [10.5281/zenodo.20330979](https://doi.org/10.5281/zenodo.20330979).
@@ -532,6 +643,10 @@ a published release's tag name cannot be reused.
 DOI: [10.5281/zenodo.20293558](https://doi.org/10.5281/zenodo.20293558).
 Forty-two merged pull requests; the full list is in the
 [release notes](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v2.0.0).
+
+Exit codes: 1 user input, 2 IO, 10 triangulation or tetrahedralization,
+11 runtime, 12 assertion (a programming error). 2.0.2 replaces them with
+two-digit codes ([#86]).
 
 ### Added
 
@@ -644,6 +759,10 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#110]: https://github.com/GeoFLAC/DynEarthSol/pull/110
 [#113]: https://github.com/GeoFLAC/DynEarthSol/pull/113
 [#114]: https://github.com/GeoFLAC/DynEarthSol/pull/114
+[#117]: https://github.com/GeoFLAC/DynEarthSol/pull/117
 [#118]: https://github.com/GeoFLAC/DynEarthSol/issues/118
 [#119]: https://github.com/GeoFLAC/DynEarthSol/pull/119
 [#125]: https://github.com/GeoFLAC/DynEarthSol/pull/125
+[#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
+[#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
+[#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Compare regular output schedules and physical state across a checkpoint."""
 import argparse
-import configparser
 import json
 import math
 from pathlib import Path
 import struct
-import subprocess
 
 from pt_initial_checkpoint import fields
+from des_test_utils import read_config, run_des
 
 
 def main():
@@ -28,9 +27,7 @@ def main():
     executable = args.executable.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    cfg = configparser.ConfigParser(strict=False)
-    cfg.optionxform = str
-    cfg.read(args.config)
+    cfg = read_config(args.config, strict=False)
     cfg['control'].update(has_PT=str(args.method == 'pt').lower(),
                           use_global_velocity_scaling=str(args.method == 'gvs').lower())
     if args.rsf:
@@ -72,11 +69,7 @@ def main():
                 cfg['sim']['output_step_interval'] = str(args.step_after_restart)
             if args.time_after_restart:
                 cfg['sim']['output_time_interval_in_yr'] = repr(args.time_after_restart*dt/year_seconds)
-        with (output / f'{phase}.cfg').open('w') as stream:
-            cfg.write(stream)
-        with (output / f'{phase}.log').open('w') as stream:
-            subprocess.run([str(executable), f'{phase}.cfg'], cwd=output, stdout=stream,
-                           stderr=subprocess.STDOUT, check=True, timeout=240)
+        run_des(executable, output, phase, cfg, timeout=240)
     histories = {}
     for phase in phases:
         rows = []

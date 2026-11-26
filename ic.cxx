@@ -7,6 +7,7 @@
 #include "markerset.hpp"
 
 #include "ic-read-temp.hpp"
+#include "gwb.hpp"
 #include "ic.hpp"
 #include "utils.hpp"
 
@@ -328,7 +329,7 @@ void set_homogeneous_initial_stress(const Param &param, const Variables &var,
         imposed[i] = param.ic.initial_stress[i];
     const bool is_plane_strain = param.mat.is_plane_strain;
 
-    #pragma acc parallel loop gang vector copyin(imposed[0:NSTR]) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector copyin(imposed[0:NSTR]) async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = stress[e];
         TensorAccessor eps = strain[e];
@@ -363,7 +364,7 @@ void initial_stress_state(const Param &param, const Variables &var,
     double rho = var.mat->rho(0);
     double ks = var.mat->bulkm(0);
 
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int e=0; e<var.nelem; ++e) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
         double zcenter = 0;
@@ -472,6 +473,22 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
 void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,
                        const conn_t &connectivity, double_vec &plstrain)
 {
+    if (param.ic.weakzone_option == 936) {
+        // the GWB world's fault features, uniform or a Gaussian across each (gwb_fault_weight);
+        // a host loop, since GWB runs only on the CPU
+        for (int e=0; e<nelem; ++e) {
+            ConstArrayIndirectAccessor coord = coord_all.view_const(connectivity[e]);
+            double center[NDIMS] = {0};
+            for (int i=0; i<NODES_PER_ELEM; ++i)
+                for (int d=0; d<NDIMS; ++d)
+                    center[d] += coord[i][d] / NODES_PER_ELEM;
+            const double w = gwb_fault_weight(param, center);
+            if (w > 0)
+                plstrain[e] = param.ic.weakzone_plstrain * w;
+        }
+        return;
+    }
+
     Zone *weakzone;
     Value *weakvalue;
 
@@ -603,7 +620,7 @@ void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,
         die(EXIT_CONFIG_VALUE);
     }
 
-    #pragma acc parallel loop gang vector
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
     for (int e=0; e<nelem; ++e) {
         ConstArrayIndirectAccessor coord = coord_all.view_const(connectivity[e]);
         // the coordinate of the center of this element
@@ -1006,6 +1023,13 @@ void initial_temperature(const Param &param, const Variables &var,
         break;
     case 90:
         read_external_temperature_from_comsol(param, var, *var.temperature);
+        break;
+    case 936:
+        for (int i=0; i<var.nnode; ++i) {
+            double x[NDIMS];
+            for (int d=0; d<NDIMS; ++d) x[d] = (*var.coord)[i][d];
+            temperature[i] = gwb_temperature(param, x);
+        }
         break;
     default:
         std::cout << "Error: unknown ic.temperature option: " << param.ic.temperature_option << '\n';

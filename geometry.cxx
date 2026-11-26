@@ -8,9 +8,11 @@
 
 #include "constants.hpp"
 #include "parameters.hpp"
+#include "mpi_simulation.hpp"
 #include "matprops.hpp"
 #include "utils.hpp"
 #include "geometry.hpp"
+#include "remesh-scratch.hpp"
 #include "fields.hpp"
 #include "hydraulics.hpp"
 #include "bc.hpp"
@@ -210,7 +212,7 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
     #pragma omp parallel for default(none)      \
         shared(coord, connectivity, volume)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e=0; e<int(volume.size()); ++e) {
         int n0 = connectivity[e][0];
         int n1 = connectivity[e][1];
@@ -236,15 +238,21 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 void compute_volume(const Variables &var,
                     double_vec &volume)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Volume, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, volume)
+    #pragma omp parallel for default(none) shared(var, volume) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         int n0 = (*var.connectivity)[e][0];
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
@@ -268,6 +276,12 @@ void compute_volume(const Variables &var,
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Dvoldt, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -278,10 +292,10 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var, etmp)
+        shared(var, etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0;e<var.nelem;e++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee;e++) {
         ConstTensorAccessor strain_rate = (*var.strain_rate)[e];
         // TODO: try another definition:
         // dj = (volume[e] - volume_old[e]) / volume_old[e] / dt
@@ -289,12 +303,14 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
         etmp[e] = dj * (*var.volume)[e];
     }
 
+    mpi_sync(var, etmp, MpiEntity::Element);
+
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var,dvoldt,etmp)
+        shared(var,dvoldt,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int n=0;n<var.nnode;n++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
         double acc = 0.;
@@ -315,6 +331,12 @@ void compute_dvoldt(const Variables &var, double_vec &dvoldt, double_vec &etmp)
 void compute_edvoldt(const Variables &var, double_vec &dvoldt,
                      double_vec &edvoldt)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Edvoldt, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -324,10 +346,10 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
 #ifndef ACC
     #pragma omp parallel for default(none)      \
-        shared(var, dvoldt, edvoldt)
+        shared(var, dvoldt, edvoldt) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dj = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -347,6 +369,12 @@ void compute_edvoldt(const Variables &var, double_vec &dvoldt,
 
 void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, double_vec &etmp, double_vec* stressyy)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Nmd, var, 0.0)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -354,18 +382,20 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     // lumped onto the nodes.
 
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,etmp)
+    #pragma omp parallel for default(none) shared(var,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0;e<var.nelem;e++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee;e++) {
         etmp[e] = (*var.dpressure)[e] * (*var.volume)[e];
     }
 
+    mpi_sync(var, etmp, MpiEntity::Element);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var,dp_nd,etmp)
+    #pragma omp parallel for default(none) shared(var,dp_nd,etmp) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int n=0;n<var.nnode;n++) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int n=mpi_nb; n<mpi_ne;n++) {
         const int npatch = var.support.size(n);
         const int* patch = var.support.patch(n);
         double acc = 0;
@@ -375,11 +405,13 @@ void NMD_stress(const Variables &var, tensor_t& stress, double_vec &dp_nd, doubl
     }
 
     // dp_el is the averaged (i.e. smoothed) dp_nd on the element.
+    mpi_sync(var, dp_nd, MpiEntity::Node);
+
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy)
+    #pragma omp parallel for default(none) shared(var, dp_nd, stress, stressyy) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
-    #pragma acc parallel loop gang vector async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double dp = 0;
         for (int i=0; i<NODES_PER_ELEM; ++i) {
@@ -457,7 +489,9 @@ static bool spr_solve_centered(const double A[3][3], const double b[3],
 // centroid values in the patch.  Uses Gaussian elimination with partial pivoting
 // on the 4×4 normal system.  Returns true on success; false if the patch is
 // degenerate (fewer than 4 independent directions → fallback).
+#if !defined(ACC) || !defined(USEMPI)
 #pragma acc routine seq
+#endif
 static bool spr_solve_centered_3d(const double A[4][4], const double b[4],
                                    const double dxi, const double dyi, const double dzi,
                                    double &result)
@@ -542,6 +576,12 @@ static void spr_fused_fields(const Variables &var,
                              double* const out_ptrs[], const int out_strides[], 
                              int num_fields)
 {
+#ifdef USEMPI
+    // SPR is centralized mesh-management work in the MPI backend. Complete
+    // global GPU producers before the CPU fit; compact timestep arrays remain
+    // on their devices until the collect/remesh/repartition transition.
+    #pragma acc wait
+#endif
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -550,8 +590,10 @@ static void spr_fused_fields(const Variables &var,
     #pragma omp parallel for default(none) shared(var, in_ptrs, in_strides, out_ptrs, \
                 out_strides, num_fields)
 #endif
-    #pragma acc parallel loop gang vector async copyin(in_ptrs[0:num_fields], \
+#if !defined(ACC) || !defined(USEMPI)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async copyin(in_ptrs[0:num_fields], \
                 in_strides[0:num_fields], out_ptrs[0:num_fields], out_strides[0:num_fields])
+#endif
     for (int i = 0; i < var.nnode; ++i) {
         const int npatch = var.support.size(i);
 
@@ -559,7 +601,9 @@ static void spr_fused_fields(const Variables &var,
         const int* patch = var.support.patch(i);
         const int e0 = patch[0];
         
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int f = 0; f < num_fields; ++f) {
             smin[f] = smax[f] = in_ptrs[f][e0 * in_strides[f]];
         }
@@ -570,7 +614,9 @@ static void spr_fused_fields(const Variables &var,
 #endif
 
         // calculate patch centroid (x0, y0, z0) and field value extrema (smin, smax) for clamping
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
@@ -578,7 +624,9 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-            #pragma acc loop seq
+#if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 cx += ck[k][0];
                 cy += ck[k][1];
@@ -595,7 +643,9 @@ static void spr_fused_fields(const Variables &var,
             z0 += cz;
 #endif
 
-            #pragma acc loop seq
+#if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int f = 0; f < num_fields; ++f) {
                 double s = in_ptrs[f][e * in_strides[f]]; // use Stride
                 if (s < smin[f]) smin[f] = s;
@@ -611,7 +661,9 @@ static void spr_fused_fields(const Variables &var,
 
         // build A and b_vec for all fields in the patch, 
         // with shared loops and Stride-aware access
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int jp = 0; jp < npatch; ++jp) {
             const int e = patch[jp];
             ConstArrayIndirectAccessor ck = var.coord->view_const((*var.connectivity)[e]);
@@ -619,7 +671,9 @@ static void spr_fused_fields(const Variables &var,
 #ifdef THREED
             double cz = 0.0;
 #endif
-            #pragma acc loop seq
+#if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int k = 0; k < NODES_PER_ELEM; ++k) {
                 cx += ck[k][0];
                 cy += ck[k][1];
@@ -652,7 +706,9 @@ static void spr_fused_fields(const Variables &var,
             A[3][3] += dz*dz;
 #endif
 
-            #pragma acc loop seq
+#if !defined(ACC) || !defined(USEMPI)
+        #pragma acc loop seq
+#endif
             for (int f = 0; f < num_fields; ++f) {
                 double s = in_ptrs[f][e * in_strides[f]]; // use Stride
                 b_vec[f][0] += s;
@@ -672,7 +728,9 @@ static void spr_fused_fields(const Variables &var,
 #endif
 
         // solve A for all fields in the patch, with fallback and clamping
+#if !defined(ACC) || !defined(USEMPI)
         #pragma acc loop seq
+#endif
         for (int f = 0; f < num_fields; ++f) {
             double temp_val;
 
@@ -1216,7 +1274,7 @@ double SurfaceTopo::heff_at(ConstArrayAccessor p, double d) const
     return heff_at(c, d);
 }
 
-void compute_spr_blend_weight(const Param &param, const Variables &var)
+void compute_spr_blend_weight(const Param &param, const Variables &var, RemeshScratch &rs)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1232,10 +1290,11 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
         const double dt_remesh = std::max(var.time - var.last_remesh_time, var.dt);
         const double lde0 = std::log10(param.mesh.remesh_deborah_min);
         const double lde1 = std::log10(param.mesh.remesh_deborah_max);
+        double_vec *spr_blend_weight = rs.spr_blend_weight.get();
         // Host loop: visc()/shearm() read the host-side MatProps.
         #pragma acc wait
 #ifndef ACC
-        #pragma omp parallel for default(none) shared(param, var) \
+        #pragma omp parallel for default(none) shared(param, var, spr_blend_weight) \
                 firstprivate(dt_remesh, lde0, lde1)
 #endif
         for (int e = 0; e < var.nelem; ++e) {
@@ -1252,7 +1311,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
             // switching remap operator abruptly for elements sitting on one; a
             // steeper S-curve (e.g. quintic) would need a wider De window to keep
             // the same mid-range sensitivity. Monotone, and w(t=1/2) = 1/2.
-            (*var.spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
+            (*spr_blend_weight)[e] = t * t * (3.0 - 2.0 * t);
         }
     }
 #ifdef NPROF_DETAIL
@@ -1262,7 +1321,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var)
 
 
 void center_stress_to_ref(const Param &param, const Variables &var,
-                          const SurfaceTopo &topo)
+                          const SurfaceTopo &topo, RemeshScratch &rs)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1289,10 +1348,11 @@ void center_stress_to_ref(const Param &param, const Variables &var,
     // old_coord, old_connectivity — all still old here). Undone by
     // restore_stress_from_ref on the new mesh.
     // ----------------------------------------------------------------
+    double_vec *spr_p_ref_old = rs.spr_p_ref_old.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo)
+    #pragma omp parallel for default(none) shared(param, var, topo, spr_p_ref_old)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         double c[NDIMS] = {0.0};
@@ -1312,7 +1372,7 @@ void center_stress_to_ref(const Param &param, const Variables &var,
         // Record the reference ADDED here so an unchanged element can subtract the
         // identical value in restore_stress_from_ref (the new-mesh topo table
         // differs globally).
-        (*var.spr_p_ref_old)[e] = p_ref_old;
+        (*spr_p_ref_old)[e] = p_ref_old;
     }
 
     #pragma acc wait
@@ -1375,7 +1435,7 @@ void spr_elem_to_node(const Param &param, const Variables &var,
 }
 
 void spr_node_to_elem(const Param &param, const Variables &var,
-                      const SurfaceTopo &topo,
+                      const SurfaceTopo &topo, RemeshScratch &rs,
                       tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
@@ -1393,11 +1453,15 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     const double sea_level = param.control.surf_base_level;
     const double rho_w_g = param.bc.has_water_loading
                          ? param.bc.sea_water_density * param.control.gravity : 0.0;
+    tensor_t *stress_n = rs.stress_n.get();
+    const double_vec *stressyy_n = rs.stressyy_n.get();
+    const double_vec *spr_blend_weight = rs.spr_blend_weight.get();
+    const int_vec *remesh_is_changed = rs.remesh_is_changed.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, topo) \
+    #pragma omp parallel for default(none) shared(param, var, topo, stress_n) \
             firstprivate(sea_level, rho_w_g)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i = 0; i < var.surfinfo.ntop; ++i) {
         int n = (*var.surfinfo.top_nodes)[i];
         double z = (*var.coord)[n][NDIMS-1];
@@ -1405,10 +1469,10 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
         double p_ref_node = ref_pressure(param, topo.zeff((*var.coord)[n]));
 
-        (*var.stress_n)[n][NDIMS-1] = p_ref_node - p_water;
-        (*var.stress_n)[n][(NDIMS-1)*2] = 0.0;
+        (*stress_n)[n][NDIMS-1] = p_ref_node - p_water;
+        (*stress_n)[n][(NDIMS-1)*2] = 0.0;
 #ifdef THREED
-        (*var.stress_n)[n][5] = 0.0;
+        (*stress_n)[n][5] = 0.0;
 #endif
     }
 
@@ -1423,7 +1487,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         ConstTensorAccessor s = (*stress)[e];
         TensorAccessor s_nn = stress_nn[e];
@@ -1439,11 +1503,11 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // enters the compressiveness test below, so it is averaged here too.
     // ----------------------------------------------------------------
     for (int d = 0; d < NSTR; ++d)
-        average_nodal_to_elem(var.stress_n->component_const(d), *var.connectivity,
+        average_nodal_to_elem(stress_n->component_const(d), *var.connectivity,
                               var.nelem, stress->component(d));
 
     if (param.mat.is_plane_strain)
-        average_nodal_to_elem(static_cast<const double*>(var.stressyy_n->data()), *var.connectivity,
+        average_nodal_to_elem(static_cast<const double*>(stressyy_n->data()), *var.connectivity,
                               var.nelem, stressyy->data());
 
     // Fallback: where the SPR average left a surface element LESS compressive
@@ -1453,7 +1517,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i = 0; i < var.ntop_elems; ++i) {
         int e = (*var.top_elems)[i];
         TensorAccessor s = (*stress)[e];
@@ -1481,20 +1545,21 @@ void spr_node_to_elem(const Param &param, const Variables &var,
     // Runs after the surface fallback: where the fallback restored the NN stress
     // the blend is a no-op, never making a surface element less compressive again.
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, stress_nn, stressyy_nn, \
+            remesh_is_changed, spr_blend_weight)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         TensorAccessor s = (*stress)[e];
         ConstTensorAccessor s_nn = stress_nn[e];
-        if ((*var.remesh_is_changed)[e] == 0) {
+        if ((*remesh_is_changed)[e] == 0) {
             for (int d = 0; d < NSTR; ++d)
                 s[d] = s_nn[d];
             if (param.mat.is_plane_strain)
                 (*stressyy)[e] = stressyy_nn[e];
         }
         else {
-            const double w = (*var.spr_blend_weight)[e];
+            const double w = (*spr_blend_weight)[e];
             for (int d = 0; d < NSTR; ++d)
                 s[d] = w * s_nn[d] + (1.0 - w) * s[d];
             if (param.mat.is_plane_strain)
@@ -1511,7 +1576,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 
 
 void restore_stress_from_ref(const Param &param, const Variables &var,
-                             const SurfaceTopo &topo,
+                             const SurfaceTopo &topo, const RemeshScratch &rs,
                              tensor_t *stress, double_vec *stressyy)
 {
 #ifdef NPROF_DETAIL
@@ -1524,16 +1589,19 @@ void restore_stress_from_ref(const Param &param, const Variables &var,
     // Restore reference pressure at new element centroids.
     // The SPR operated on pressure-centered stress; add back p_ref at each
     // new element's depth (below the NEW surface) to recover the total stress.
+    const int_vec *remesh_is_changed = rs.remesh_is_changed.get();
+    const double_vec *spr_p_ref_old = rs.spr_p_ref_old.get();
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo)
+    #pragma omp parallel for default(none) shared(param, var, stress, stressyy, topo, \
+            remesh_is_changed, spr_p_ref_old)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int e = 0; e < var.nelem; ++e) {
         double p_ref;
-        if ((*var.remesh_is_changed)[e] == 0) {
+        if ((*remesh_is_changed)[e] == 0) {
             // Untouched element: subtract exactly what spr_elem_to_node added, so
             // the round trip is a bit-exact no-op (the new topo table differs).
-            p_ref = (*var.spr_p_ref_old)[e];
+            p_ref = (*spr_p_ref_old)[e];
         } else {
             ConstConnAccessor conn = (*var.connectivity)[e];
             double c[NDIMS] = {0.0};
@@ -1575,6 +1643,27 @@ double compute_dt(const Param& param, Variables& var,
                   bool include_rsf_state_limit)
 
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::TimeStep, var, include_rsf_state_limit ? 1.0 : 0.0)) {
+        const double dt = var.mpi->result();
+        // The op reports a NaN velocity or dt <= 0 below and returns a non-positive
+        // dt, as the serial checks fail; a fixed dt returns before them. The error
+        // frame gathers every field to rank zero, and die() stops the workers.
+        if (param.control.fixed_dt == 0 && dt <= 0) {
+            var.output->write_exact_error(var);
+            die(EXIT_RUNTIME_NAN);
+        }
+        return dt;
+    }
+    // Inside the op every rank sees the same reduced counts and limits, so all
+    // ranks fail together; the op returns the failure to rank zero (above).
+    const bool in_op = var.mpi && var.mpi->in_kernel();
+#else
+    const bool in_op = false;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -1614,12 +1703,12 @@ double compute_dt(const Param& param, Variables& var,
 #ifndef ACC
     #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) \
-        default(none) shared(param, var) firstprivate(rsf_dtheta_max)
+        default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) async
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection, global_dt_min) \
+        reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    for (int e=mpi_eb; e<mpi_ee; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
         int n0 = (*var.connectivity)[e][0];
@@ -1753,17 +1842,33 @@ double compute_dt(const Param& param, Variables& var,
 
     #pragma acc wait
 
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) {
+        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min,
+                           dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection};
+        var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
+        minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
+        dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
+        dt_hydro_wave=limits[6]; hydro_wave_length=limits[7]; hydro_wave_floor=limits[8];
+        dt_thermal_advection=limits[9];
+        global_max_vem=var.mpi->maximum(global_max_vem);
+        nan_elem_count=var.mpi->sum(nan_elem_count);
+    }
+#endif
+
     // check_nan() is the broad detector, but the regular frame path Output::write() never
     // calls it (only write_exact() does), so this narrow check closes that gap. Not a
     // universal net: compute_dt runs every slow_updates_interval steps, so a NaN that
     // reaches the markers first exits EXIT_RUNTIME_LOOKUP instead.
     if (nan_elem_count > 0) {
-        std::cerr << "Error: NaN velocity in " << nan_elem_count
-                  << " elements at step " << var.steps
-                  << " -- stopping before writing further frames.\n";
+        if (mpi_reports(var))
+            std::cerr << "Error: NaN velocity in " << nan_elem_count
+                      << " elements at step " << var.steps
+                      << " -- stopping before writing further frames.\n";
+        if (in_op) return 0;
         // write_exact_error() runs check_nan(), which dies on any NaN it finds in vel;
         // the die() below still covers an element mean gone NaN from Inf - Inf.
-        var.output->write_exact_error(var);
+        if (var.output) var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
     }
 
@@ -1814,16 +1919,18 @@ double compute_dt(const Param& param, Variables& var,
                           dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, dt_thermal_advection}) *
                 param.control.dt_fraction;
     // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
-    if (param.debug.dt) {
+    if (param.debug.dt && mpi_reports(var)) {
         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
                   << dt_rsf << " " << dt_diffusion << " "
                   << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << " sec\n";
     }
     if (dt <= 0) {
-        std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
-                  << " " << dt_diffusion
-                  << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
-        var.output->write_exact_error(var);
+        if (mpi_reports(var))
+            std::cerr << "Error: dt <= 0!  " << dt_maxwell << " " << dt_rsf
+                      << " " << dt_diffusion
+                      << " " << dt_hydro_diffusion << " " << dt_advection << " " << dt_elastic << "\n";
+        if (in_op) return dt;
+        if (var.output) var.output->write_exact_error(var);
         die(EXIT_RUNTIME_NAN);
     }
     
@@ -1838,6 +1945,12 @@ void compute_mass(const Param &param, const Variables &var,
                   double_vec &mass, double_vec &tmass, double_vec &hmass, double_vec &ymass, elem_cache &tmp_result)
 
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Mass, var, max_vbc_val)) return;
+#endif
+    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
+    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
+
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
@@ -1855,17 +1968,17 @@ void compute_mass(const Param &param, const Variables &var,
 
 #ifndef ACC
 #ifdef GPP1X
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #else
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int e=0;e<var.nelem;e++) {
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
 
@@ -1893,27 +2006,50 @@ void compute_mass(const Param &param, const Variables &var,
             tr[4] = ym; 
         }
 
-#ifndef ACC
-        #pragma omp for
+#if !defined(ACC) && defined(USEMPI)
+        #pragma omp master
 #endif
-        #pragma acc parallel loop gang vector async
-        for (int n=0;n<var.nnode;n++) {
-            volume_n[n]=0;
-            mass[n]=0;
-            tmass[n]=0;
-            hmass[n]=0;
-            ymass[n]=0;
+        {
+            mpi_begin_gather(var,tmp_result,5);
+        }
+#if !defined(ACC) && defined(USEMPI)
+        #pragma omp barrier
+#endif
+        const int passes=mpi_gather_passes(var);
+        for(int pass=0;pass<passes;++pass) {
+            if(pass==1) {
+#if !defined(ACC) && defined(USEMPI)
+                #pragma omp master
+#endif
+                mpi_finish_gather(var);
+#if !defined(ACC) && defined(USEMPI)
+                #pragma omp barrier
+#endif
+            }
+            const MpiNodeRows rows=mpi_gather_nodes(var,pass);
+#ifndef ACC
+            #pragma omp for
+#endif
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(rows)
+            for(int row=0;row<rows.count;++row) {
+                const int n=rows.ids?rows.ids[row]:row;
+                volume_n[n]=0;
+                mass[n]=0;
+                tmass[n]=0;
+                hmass[n]=0;
+                ymass[n]=0;
         
-            const int npatch = var.support.size(n);
-            const int* patch = var.support.patch(n);
-            for (int i=0; i<npatch; ++i) {
-                ConstElemCacheAccessor tr = tmp_result[patch[i]];
-                volume_n[n] += tr[0];
-                mass[n] += tr[1];
-                if (has_temperature_transport(param))
-                    tmass[n] += tr[2];
-                hmass[n] += tr[3];
-                ymass[n] += tr[4];
+                const int npatch = var.support.size(n);
+                const int* patch = var.support.patch(n);
+                for (int i=0; i<npatch; ++i) {
+                    ConstElemCacheAccessor tr = tmp_result[patch[i]];
+                    volume_n[n] += tr[0];
+                    mass[n] += tr[1];
+                    if (has_temperature_transport(param))
+                        tmass[n] += tr[2];
+                    hmass[n] += tr[3];
+                    ymass[n] += tr[4];
+                }
             }
         }
     }
@@ -1976,7 +2112,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(coord, connectivity, volume, n) reduction(min:q)
 #endif
-    #pragma acc parallel loop gang vector reduction(min:q) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:q) async
     for (int e=0; e<n; e++) {
         double quality = elem_quality(coord, connectivity, volume, e);
         if (quality < q) q = quality;
@@ -1987,7 +2123,7 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 #ifndef ACC
         #pragma omp parallel for default(none) shared(coord, connectivity, volume, n, q) reduction(min:w)
 #endif
-        #pragma acc parallel loop gang vector reduction(min:w) async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:w) async
         for (int e=0; e<n; e++) {
             if (e < w && elem_quality(coord, connectivity, volume, e) == q) w = e;
         }
@@ -2007,19 +2143,20 @@ void compute_pt_factors(const Param& param, const Variables& var,
     // The physical constitutive target is evaluated elsewhere; these factors
     // affect the route to equilibrium, never the stored physical history.
     #pragma acc wait
+    const int ee = mpi_element_end(var), nn = mpi_node_end(var);
     const bool adaptive = param.control.PT_option == 1;
     double length = std::max(param.mesh.xlength, param.mesh.zlength);
 #ifdef THREED
     length = std::max(length, param.mesh.ylength);
 #endif
     if (!(length > 0 && var.dt > 0 && std::isfinite(var.dt)))
-        die(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
+        die_together(EXIT_CONFIG_VALUE, "PT requires positive domain length and physical dt.");
     int bad = 0;
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length, adaptive) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, stress_fraction) firstprivate(length, adaptive, ee, nn) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
-    for (int e=0; e<var.nelem; ++e) {
+    #pragma acc parallel loop gang vector firstprivate(adaptive, ee, nn) reduction(|:bad)
+    for (int e=0; e<ee; ++e) {
         double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
 #ifdef THREED
         double dy[NODES_PER_ELEM];
@@ -2057,13 +2194,15 @@ void compute_pt_factors(const Param& param, const Variables& var,
             stress_fraction[e] = theta/(1+theta);
         }
     }
-    if (bad)
-        die(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
+    mpi_sync(var, effective_viscosity, MpiEntity::Element);
+    if (!adaptive) mpi_sync(var, height, MpiEntity::Element);
+    if (mpi_any(var, bad))
+        die_together(EXIT_CONFIG_VALUE, "PT requires finite positive material stiffness, viscosity and element height.");
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length, adaptive) reduction(|:bad)
+    #pragma omp parallel for default(none) shared(param, var, height, effective_viscosity, mobility) firstprivate(length, adaptive, ee, nn) reduction(|:bad)
 #endif
-    #pragma acc parallel loop gang vector firstprivate(adaptive) reduction(|:bad)
-    for (int n=0; n<var.nnode; ++n) {
+    #pragma acc parallel loop gang vector firstprivate(adaptive, ee, nn) reduction(|:bad)
+    for (int n=0; n<nn; ++n) {
         double h = std::numeric_limits<double>::max(), visc = 0, volume = 0;
         const int* patch = var.support.patch(n);
         for (int k=0; k<var.support.size(n); ++k) {
@@ -2076,8 +2215,8 @@ void compute_pt_factors(const Param& param, const Variables& var,
         if (!adaptive)
             mobility[n] = param.control.PT_CFL*h*length/(param.control.PT_Re*visc*volume);
     }
-    if (bad)
-        die(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
+    if (mpi_any(var, bad))
+        die_together(EXIT_MESH_QUALITY, "PT node has no positive-volume material support.");
 }
 
 void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity,
@@ -2089,6 +2228,7 @@ void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity
     // This does not bound the full nonlinear constrained operator. The bulk part
     // uses the elastic volumetric response, as in compute_pt_factors.
     #pragma acc wait
+    const int nn = mpi_node_end(var);
     const int nrow = NODES_PER_ELEM*NDIMS;
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, effective_viscosity, elem_rows) firstprivate(nrow)
@@ -2118,10 +2258,10 @@ void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity
             }
     }
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, elem_rows, mass) firstprivate(nrow)
+    #pragma omp parallel for default(none) shared(var, elem_rows, mass) firstprivate(nrow, nn)
 #endif
-    #pragma acc parallel loop gang vector
-    for (int n=0; n<var.nnode; ++n) {
+    #pragma acc parallel loop gang vector firstprivate(nn)
+    for (int n=0; n<nn; ++n) {
         const int* patch = var.support.patch(n);
         const int* local = var.support.local(n);
         for (int d=0; d<NDIMS; ++d) {

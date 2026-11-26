@@ -169,12 +169,54 @@ defaults are not what you want.
     `GOSPL_EXT_DIR` and `CONDA_ENV_PATH` default to `~/opt/gospl_extensions`
     and `~/miniforge3/envs/gospl`. `make usegospl=1` also writes the
     `dynearthsol-gospl` wrapper script.
+  * GoSPL coupling is not yet available in MPI builds; `make usempi=1 usegospl=1`
+    stops with an error.
   * The tutorial
-    [Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+    [Coupling with GoSPL](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl)
     walks through setup and a worked example; `gospl_driver/README.md` is the
     reference for build, runtime and coupling details, and
     `gospl_driver/examples/` holds the example configs. The Docker image below
     ships the whole stack ready to run.
+* [Geodynamic World Builder](https://github.com/GeodynamicWorldBuilder/WorldBuilder)
+  (GWB), `usegwb=1`, to build initial conditions from a GWB world file of plates,
+  slabs and faults, named by `ic.gwb_filename`. Option 936 of
+  `ic.temperature_option`, `ic.mattype_option` and `ic.weakzone_option` takes,
+  each on its own, the initial temperature, the initial marker materials (GWB
+  composition *i* is mattype *i*; the world must give every point one) and the
+  weak zone (`weakzone_plstrain` inside the world's `fault` features) from it.
+  With `ic.gwb_fault_is_gaussian = yes` the weak zone's plastic strain falls off
+  as a Gaussian of the distance from each fault's plane, with standard
+  deviation `ic.weakzone_standard_deviation` (in metres).
+  Examples: `examples/gwb-subduction.cfg` (2D, all three),
+  `examples/gwb-slab-3d.cfg` (3D, all three) and `examples/gwb-core-complex.cfg`
+  (2D, only the weak zone: `core-complex.cfg` with its seed fault from GWB).
+  * GWB needs CMake 3.5 or newer and a C++14 compiler. Build it as a shared
+    library and install it (under a minute on 4 cores):
+    ```bash
+    git clone https://github.com/GeodynamicWorldBuilder/WorldBuilder.git
+    cmake -S WorldBuilder -B WorldBuilder/build -DCMAKE_BUILD_TYPE=Release \
+      -DBUILD_SHARED_LIBS=ON -DWB_ENABLE_TESTS=OFF -DWB_ENABLE_PYTHON=OFF \
+      -DWB_MAKE_FORTRAN_WRAPPER=OFF -DCMAKE_INSTALL_PREFIX=$HOME/opt/WorldBuilder
+    cmake --build WorldBuilder/build -j 4
+    cmake --install WorldBuilder/build
+    ```
+    DES links `libWorldBuilder` as a shared library, so keep
+    `-DBUILD_SHARED_LIBS=ON`. The three `OFF` options skip parts DES does not
+    use; with Python on, the install also runs GWB's `setup.py install` into
+    the active Python.
+  * The install puts the headers in `include/` and the library in `bin/`, not
+    `lib/`. Build DES with `make usegwb=1`; `GWB_DIR` (default
+    `~/opt/WorldBuilder`) names another install prefix, and `GWB_LIB_DIR`
+    (default `$(GWB_DIR)/bin`) the library's directory. `make usegwb=1 config`
+    prints both. The executable records the library's directory, so no
+    `LD_LIBRARY_PATH` is needed.
+  * CI tests GWB at the commit pinned by `GWB_SHA` in
+    `.github/workflows/gwb-build.yml`; to build the same one, run
+    `git -C WorldBuilder checkout <GWB_SHA>` before `cmake`.
+  * GWB's `gwb-dat`, which prints a world's temperature and compositions at
+    given points, is not installed: it stays in `WorldBuilder/build/bin/`. It
+    helps when writing a world, and `tests/functional/gwb/check_gwb.py` compares
+    DES with it.
 
 <div id="llvm"></div>
 
@@ -326,8 +368,14 @@ make useexo=1
 # enable HDF5-based vtkhdf output support (requires HDF5)
 make hdf5=1
 
+# experimental CPU MPI timestep kernels (requires mpicxx; separate .mpi executable)
+make ndims=2 usempi=1 usemmg=1 hdf5=1
+
 # enable GoSPL surface process coupling (requires gospl_extensions and gospl conda env)
 make usegospl=1
+
+# enable Geodynamic World Builder initial conditions (requires an installed GWB)
+make usegwb=1
 
 # NVHPC/profiler build (uses nvc++ when set)
 make nprof=1
@@ -343,6 +391,21 @@ make openacc=1 GPU_CC=90
 ```
 
 # Running DES
+
+The experimental [MPI backends](doc/mpi.md) use spatial partitions, compact
+local meshes and neighbor halo exchanges. They rebuild ownership after every MMG
+remesh. Rank zero retains a global mesh for MMG, marker management and output.
+METIS partitions the mesh, so MPI builds need METIS 5. The guide
+covers correctness checks and scaling limits. The existing MMG policy
+and field transfer remain in use.
+Thermal, force and mass assembly support interior-node/halo overlap; per-rank
+profiles expose operation and communication costs. `usempi=1 openacc=1`
+adds NVIDIA GPU timestep executables with one GPU per rank, pinned host staging
+for halos and CPU mesh management. Full-field/checkpoint tests accompany the
+backend; verify scientific equivalence and performance for the intended case.
+The [reviewer quickstart](doc/mpi-quickstart.md) gives copyable build/run commands,
+small examples and expected results for CPU MPI and multiple GPUs.
+
 * Execute `dynearthsol2d input.cfg` (or `dynearthsol3d`). The input file is
   required; `-h` or `--help` lists every parameter with its description.
 * The input format is documented in `examples/defaults.cfg`, and working cases
@@ -366,7 +429,7 @@ make openacc=1 GPU_CC=90
   ```
   Run from the directory holding the GoSPL YAML, whose path is resolved from
   the working directory. See the
-  [GoSPL tutorial](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+  [GoSPL tutorial](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl)
   and `gospl_driver/README.md` for the details.
 
 # Visualizing DES outputs

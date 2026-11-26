@@ -1,9 +1,12 @@
 #if !defined(DYNEARTHSOL3D_ARRAY2D_h)
 #define DYNEARTHSOL3D_ARRAY2D_h
 
+#include "mpi_acc.hpp"
+
 #include <vector>
 #include <algorithm>
 #include <cstring>  // for memcpy
+#include <utility>  // for std::move
 
 template <typename T, int N>
 class Array2D {
@@ -192,7 +195,7 @@ public:
         #pragma omp parallel for default(none) shared(buffer, count) \
             collapse(2) if(count > 10000)
 #endif
-        #pragma acc parallel loop gang vector collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
                 (*this)[i][d] = buffer[i * N + d];
@@ -222,7 +225,7 @@ public:
         #pragma omp parallel for default(none) shared(buffer, count) \
             collapse(2) if(count > 10000)
 #endif
-        #pragma acc parallel loop gang vector collapse(2)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
         for (std::size_t i = 0; i < count; ++i) {
             for (int d = 0; d < N; ++d) {
                 buffer[i * N + d] = (*this)[i][d];
@@ -237,7 +240,7 @@ public:
         if (buffer.size() < count)
             buffer.resize(count);
 
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (std::size_t i = 0; i < count; ++i) {
             buffer[i].x = (float)(*this)[i][0];
             buffer[i].y = (float)(*this)[i][1];
@@ -282,7 +285,7 @@ public:
                 #pragma omp parallel for default(none) shared(aos_data) \
                     collapse(2) if(n_ > 10000)
 #endif
-                #pragma acc parallel loop gang vector collapse(2)
+                #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
                 for (int i = 0; i < n_; ++i) {
                     for (int d = 0; d < N; ++d) {
                         // AoS(i, d) -> SoA(i, d)
@@ -309,6 +312,23 @@ public:
         } else {
             a_ = nullptr;
         }
+    }
+
+    // A move takes the buffer and leaves the source empty, as steal_ref does.
+    Array2D(Array2D&& src) noexcept : a_(src.a_), n_(src.n_) {
+        src.a_ = nullptr;
+        src.n_ = 0;
+    }
+
+    Array2D& operator=(Array2D&& rhs) noexcept {
+        if (this != &rhs) {
+            if (a_) delete [] a_;
+            a_ = rhs.a_;
+            n_ = rhs.n_;
+            rhs.a_ = nullptr;
+            rhs.n_ = 0;
+        }
+        return *this;
     }
 
     ~Array2D() { if (a_) delete [] a_; }
@@ -359,13 +379,8 @@ public:
         if (a_) std::fill_n(a_, N * n_, val);
     }
 
-    void steal_ref(Array2D& other) {
-        if (a_) delete [] a_;
-        a_ = other.a_;
-        n_ = other.n_;
-        other.a_ = nullptr;
-        other.n_ = 0;
-    }
+    // The move assignment under its older name.
+    void steal_ref(Array2D& other) { *this = std::move(other); }
 
     void reset(T* a, int n) {
         // Warning: this will take ownership of the pointer a, and delete it when destructed or resized
@@ -398,7 +413,7 @@ public:
         #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
             if(n_ > 10000)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (int i = 0; i < n_; ++i) {
             ptr[offset + i * stride] = val;
         }

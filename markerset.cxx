@@ -12,12 +12,15 @@
 #include "barycentric-fn.hpp"
 #include "binaryio.hpp"
 #include "markerset.hpp"
+#include "remesh-scratch.hpp"
 #include "mesh.hpp"
 #include "geometry.hpp"
 #include "utils.hpp"
+#include "gwb.hpp"
 #include "knn.hpp"
 #include "matprops.hpp"
 #include "remeshing.hpp"
+#include "mpi_simulation.hpp"
 
 
 namespace {
@@ -706,6 +709,9 @@ int MarkerSet::initial_mattype( const Param& param, const Variables &var,
         case 101:
             mt = custom_initial_mattype(param, var, elem, eta, p);
             break;
+        case 936:
+            mt = gwb_mattype(param, p);
+            break;
         default:
             std::cerr << "Error: unknown ic.mattype_option: " << param.ic.mattype_option << '\n';
             die(EXIT_CONFIG_VALUE);
@@ -778,7 +784,7 @@ void MarkerSet::remove_markers(const Param& param, const Variables &var, int_vec
         #pragma omp for
 #else
         #pragma omp single
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
 #endif
         for (int i = 0; i < int(a_out.size()); i++) {
             int_vec& emarkers = markers_in_elem[(*_elem)[b_out[i]]];
@@ -1035,7 +1041,7 @@ void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) co
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, points)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int n=0; n<_nmarkers; n++) {
         ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[(*_elem)[n]]);
 
@@ -1106,7 +1112,7 @@ namespace {
             #pragma omp parallel for default(none) shared(ms, queries, old_coord, \
                 old_connectivity, start, end)
 #endif
-            #pragma acc parallel loop gang vector
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 // 1. Get physical coordinates, x, of an old marker.
@@ -1127,7 +1133,7 @@ namespace {
             #pragma omp parallel for default(none) shared(param, ms, bary, old_coord, old_connectivity, \
                 nmarkers, queries, neighbors, start, end) firstprivate(k_neig)
 #endif
-            #pragma acc parallel loop gang vector deviceptr(neighbors)
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector deviceptr(neighbors)
             for (int i = start; i < end; i++) {
                 int idx_q = i - start;
                 bool found = false;
@@ -1178,7 +1184,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(var, ms, markers_in_elem, elemmarkers)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int e = 0; e < var.nelem; e++) {
             int_vec &markers = markers_in_elem[e];
             for (int i = 0; i < int(markers.size()); i++) {
@@ -1378,7 +1384,7 @@ namespace {
 #ifndef ACC
         #pragma omp parallel for default(none) shared(param, unplenished_elems, ne, nneed_mk)
 #endif
-        #pragma acc parallel loop gang vector
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
         for (int i=0; i<ne; ++i)
             nneed_mk[i] = param.markers.min_num_markers_in_element - unplenished_elems[i].second;
 
@@ -1408,7 +1414,7 @@ namespace {
         #pragma omp parallel for default(none) \
                 shared(var, unplenished_elems, nneed_mk, etas, queries, ne, mk_start)
 #endif
-        #pragma acc parallel loop gang vector async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             for (int j=0; j<nneed_mk[i]; ++j) {
@@ -1429,7 +1435,7 @@ namespace {
 
         ms.calculate_marker_coord(var, points); // coordinate of markers
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         array_t point_tmp(1);
         PointCloud cloud(point_tmp);
 #else
@@ -1486,7 +1492,7 @@ namespace {
                 genesis, nneed_mk, mk_start, neighbors, queries, etas) reduction(||:is_no_nn)
 #endif
 #endif
-        #pragma acc parallel loop gang vector deviceptr(neighbors) reduction(||:is_no_nn)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector deviceptr(neighbors) reduction(||:is_no_nn)
         for (int i=0; i<ne; ++i) {
             int e = unplenished_elems[i].first;
             int start = mk_start[i];
@@ -1531,12 +1537,12 @@ namespace {
 #endif
     }
 
-    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): the
-    // split parent's (var.remesh_elem_split_mat) when from_split_parent, else the only mattype
-    // among its surviving markers (the caller guarantees one). Serial.
+    // Fill an element known to be one mattype with that mattype (no nearest-neighbour guess): its
+    // split parent's (split->mat) when given split, else the only mattype among its surviving
+    // markers (the caller guarantees one). Serial.
     void replenish_markers_homogeneous(const Param& param, const Variables &var,
             int_pair_vec &homo_elems, int genesis, bool is_surface, const EMI_vec& emi,
-            bool from_split_parent = false)
+            const SplitParents *split = nullptr)
     {
         if (homo_elems.empty()) return;
         MarkerSet &ms = *var.markersets[0];
@@ -1549,19 +1555,19 @@ namespace {
             int num_marker_in_elem = pr.second;
 
             int mt = 0;
-            if (from_split_parent)
-                mt = var.remesh_elem_split_mat[e];
+            if (split)
+                mt = split->mat[e];
             else
                 for (int t = 0; t < param.mat.nmat; ++t)
                     if ((*var.elemmarkers)[e][t] > 0) { mt = t; break; }
 
             // Sediment: the lowest-index sediment survivor's time, else the split parent's
-            // (remesh_elem_split_time) rather than 0, an initial marker's. Other mattypes carry 0.
+            // (split->time) rather than 0, an initial marker's. Other mattypes carry 0.
             double ti_base = 0.;
             if (mt == param.mat.mattype_sediment) {
                 const int m0 = ms.lowest_index_marker((*var.markers_in_elem)[e], mt);
                 if (m0 >= 0) ti_base = ms.get_time(m0);
-                else if (from_split_parent) ti_base = var.remesh_elem_split_time[e];
+                else if (split) ti_base = split->time[e];
             }
 
             const int first_new = ms.get_nmarkers();
@@ -1703,7 +1709,7 @@ void MarkerSet::check_marker_elem_consistency(const Variables &var) const
 #ifndef ACC
     #pragma omp parallel for reduction(+:ncount,is_error) default(none) shared(var,std::cerr)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:ncount,is_error)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:ncount,is_error)
     for (int e=0; e<var.nelem; ++e) {
         const int_vec &em = (*var.elemmarkers)[e];
         int nmarker_mat = 0;
@@ -1760,7 +1766,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,dhacc)
 #endif
-    #pragma acc parallel loop gang vector async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
     for (int i=0;i<var.ntop_elems;i++) {
         ConstConnAccessor tnodes = (*var.connectivity)[(*var.top_elems)[i]];
         ConstArrayIndirectAccessor coord = var.coord->view_const(tnodes);
@@ -1794,7 +1800,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var,coord0s,bary,markers_in_elem) reduction(+:nchange)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:nchange) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:nchange) async
     for (int i=0; i<var.ntop_elems;i++) {
         int e = (*var.top_elems)[i];
         int_vec &markers = markers_in_elem[e];
@@ -1959,7 +1965,7 @@ void MarkerSet::correct_surface_marker(const Param &param, const Variables& var,
 
 
 void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
-                   const conn_t &old_connectivity)
+                   const conn_t &old_connectivity, const SplitParents &split)
 {
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
@@ -1991,7 +1997,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
         #pragma acc wait
 
-#ifdef ACC
+#if defined(ACC) && !defined(USEMPI)
         array_t point_tmp(1);
         PointCloud cloud(point_tmp);
 #else
@@ -2025,7 +2031,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var) reduction(+:nunplenished)
 #endif
-    #pragma acc parallel loop gang vector reduction(+:nunplenished)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:nunplenished)
     for (int e = 0; e < var.nelem; e++) {
         int num_marker_in_elem = (*var.markers_in_elem)[e].size();
         if (num_marker_in_elem < param.markers.min_num_markers_in_element) {
@@ -2081,17 +2087,17 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
         rest = &filtered;
     }
 
-    // elements with a single-mattype parent (var.remesh_elem_split_mat) inherit its mattype
-    if ((int)var.remesh_elem_split_mat.size() != var.nelem)
+    // elements with a single-mattype parent (split.mat) inherit its mattype
+    if ((int)split.mat.size() != var.nelem)
         die(EXIT_INTERNAL_ASSERT, "remap_markers: the split-parent map is not for this mesh");
     int_pair_vec split_elems, nonsplit;
     nonsplit.reserve(rest->size());
     for (const auto& pr : *rest)
-        if (var.remesh_elem_split_mat[pr.first] >= 0) split_elems.push_back(pr);
+        if (split.mat[pr.first] >= 0) split_elems.push_back(pr);
         else nonsplit.push_back(pr);
     if (!split_elems.empty()) {
         replenish_markers_homogeneous(param, var, split_elems, 1, /*is_surface*/ false, EMI_vec(),
-                                      /*from_split_parent*/ true);
+                                      &split);
         std::cout << "    Marker replenish (split-parent): " << split_elems.size()
                   << " element(s) filled with their single parent's mattype.\n";
     }
@@ -2238,6 +2244,10 @@ namespace {
 void advect_hydrous_markers(const Param& param, const Variables& var, double dt_subtotal,
                             MarkerSet& hydms, Array2D<int,1>& hydem)
 {
+#ifdef USEMPI
+    if (var.mpi && var.mpi->dispatch(MpiOp::Hydrous, var, dt_subtotal)) return;
+#endif
+
     std::unordered_map<int, Barycentric_transformation*> cache;
     Barycentric_transformation *bary;
 

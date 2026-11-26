@@ -22,6 +22,8 @@
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
 ##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
+##  - usempi = 1 : MPI timestep kernels; openacc=1 builds dynearthsol[23]d.mpi.gpu.
+##       Requires METIS 5, which partitions the mesh (METIS_INCLUDE_DIR, METIS_LIB_DIR).
 ##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
@@ -36,14 +38,16 @@ openmp = 1
 nprof = 0
 gprof = 0
 usemmg = 0
+usempi = 0
 useexo = 0
 usegospl = 0
+usegwb = 0
 hdf5 = 0
 snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg useexo usegospl nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc hdf5 usemmg usempi useexo usegospl usegwb nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -51,13 +55,13 @@ endif
 
 ## Reject a variable this Makefile does not know: make accepts any NAME=VALUE
 ## silently, so `ndim=2` builds 3D and reports success. Command-line names only.
-KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX BOOST_ROOT_DIR \
-             HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
+KNOWN_VARS = ndims opt $(KNOB_VARS) GPU_CC CXX MPI_CXX METIS_INCLUDE_DIR METIS_LIB_DIR \
+             BOOST_ROOT_DIR HDF5_INCLUDE_DIR HDF5_LIB_DIR NVHPC_DIR \
              OPENMP_ROOT_DIR OPENMP_INCLUDE_DIR OPENMP_LIB_DIR \
              BREW_PREFIX MACPORTS_PREFIX CONDA_PREFIX \
              PYTHON_VERSION PYTHON_INCLUDE_DIR PYTHON_LIB_DIR \
              EXO_INCLUDE EXO_LIB_DIR MMG_INCLUDE MMG_LIB_DIR \
-             GOSPL_EXT_DIR CONDA_ENV_PATH
+             GOSPL_EXT_DIR CONDA_ENV_PATH GWB_DIR GWB_LIB_DIR
 CMDLINE_VARS = $(foreach v,$(.VARIABLES),$(if $(filter command line,$(origin $(v))),$(v)))
 UNKNOWN_VARS = $(filter-out $(KNOWN_VARS),$(CMDLINE_VARS))
 ifneq ($(UNKNOWN_VARS),)
@@ -153,6 +157,29 @@ else
 			CXX = g++
 		endif
 	endif
+endif
+ifeq ($(usempi), 1)
+ifneq ($(filter-out 0,$(nprof)),)
+$(error usempi=1 currently supports builds without nprof)
+endif
+ifeq ($(usegospl), 1)
+$(error usempi=1 does not support GoSPL coupling yet; build usegospl=1 without usempi)
+endif
+MPI_CXX ?= mpicxx
+CXX = $(MPI_CXX)
+## Open MPI and MPICH spell the wrapper introspection differently.
+CXX_BACKEND := $(shell $(CXX) --showme:command 2>/dev/null || $(CXX) -show 2>/dev/null)
+suffix = .mpi
+ifeq ($(openacc), 1)
+suffix = .mpi.gpu
+## OpenACC flags are set only for nvc++; another backend would build a CPU
+## executable under the GPU name. check-deps refuses it, and `make config` says so.
+ifeq (, $(findstring nvc++, $(CXX_BACKEND)))
+MPI_ACC_BACKEND_MISSING = yes
+endif
+endif
+else
+CXX_BACKEND = ${CXX}
 endif
 
 ifeq ($(hdf5), 1)
@@ -308,6 +335,22 @@ ifeq ($(usegospl), 1)
 	endif
 endif
 
+ifeq ($(usegwb), 1)
+	# Geodynamic World Builder (github.com/GeodynamicWorldBuilder/WorldBuilder) for
+	# ic.temperature_option, ic.mattype_option and ic.weakzone_option 936. Build it as a
+	# shared library and install it (README.md, "Optional packages"):
+	#   cmake .. -DBUILD_SHARED_LIBS=ON -DCMAKE_INSTALL_PREFIX=$(GWB_DIR) && make install
+	# Its install puts the headers in include/ and the library in bin/.
+	GWB_DIR ?= $(HOME)/opt/WorldBuilder
+	GWB_LIB_DIR ?= $(GWB_DIR)/bin
+	GWB_CXXFLAGS = -I$(GWB_DIR)/include -DUSEGWB
+	GWB_LDFLAGS = -L$(GWB_LIB_DIR) -lWorldBuilder
+	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+		GWB_LDFLAGS += -Wl,-rpath=$(GWB_LIB_DIR)
+	endif
+	GWB_RPATH = $(GWB_LIB_DIR)   # Darwin: added by install_name_tool after the link
+endif
+
 
 ## Warnings belong in every build, not only the debug one. gcc's uninitialized and
 ## array-bounds analyses run inside the optimizer, so -O0 -- the only level that used to
@@ -319,7 +362,7 @@ endif
 ## drown in them, and -Wno-unused-private-field, which only clang has.
 WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
 
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
@@ -430,7 +473,7 @@ ifneq (, $(findstring clang++, $(CXX)))
 	endif
 	endif
 
-else ifneq (, $(findstring g++, $(CXX))) # if using any version of g++
+else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 	CXX_SUPPORTED = yes
 	CXXFLAGS = -g -std=c++17 $(WARNFLAGS) -Wno-unknown-pragmas
 	LDFLAGS = -lm
@@ -466,7 +509,7 @@ else ifneq (, $(findstring g++, $(CXX))) # if using any version of g++
 		CXXFLAGS += -DGPP1X
 	endif
 
-else ifneq (, $(findstring nvc++, $(CXX)))
+else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## No WARNFLAGS here: nvc++ rejects -Wno-unknown-pragmas outright ("Unknown switch"),
 	## and bare -Wall added nothing but a macro redefinition inside Boost's pgi.hpp, which is no longer included.
@@ -512,6 +555,9 @@ else ifneq (, $(findstring nvc++, $(CXX)))
 		## into our objects, mem:managed allocates it, and std::getline in
 		## libstdc++.so frees it with glibc (see Registry::scan_lines in options.hpp).
 		CXXFLAGS += -acc=gpu -cuda -DACC
+		ifeq ($(usempi), 1)
+			CXXFLAGS += -Kieee
+		endif
 		LDFLAGS += -acc=gpu -gpu=cc$(GPU_CC),mem:managed -cuda
 		# CXXFLAGS += -acc=gpu -Mcuda -DACC
 		# LDFLAGS += -acc=gpu -gpu=managed -Mcuda
@@ -582,6 +628,8 @@ SRCS =	\
 	matprops.cxx \
 	mesh.cxx \
 	mmg_utils.cxx \
+	mpi_simulation.cxx \
+	mpi_partition.cxx \
 	monitor.cxx \
 	nn-interpolation.cxx \
 	output.cxx \
@@ -592,7 +640,8 @@ SRCS =	\
 	runtime_info.cxx \
 	utils.cxx \
 	markerset.cxx \
-	knn.cxx
+	knn.cxx \
+	gwb.cxx
 
 ifeq ($(usegospl), 1)
 	SRCS += gospl_driver/gospl-driver.cxx
@@ -609,6 +658,7 @@ INCS =	\
 	earthquake_state.hpp \
 	fields.hpp \
 	geometry.hpp \
+	gwb.hpp \
 	hydraulics.hpp \
 	ic.hpp \
 	ic-read-temp.hpp \
@@ -618,6 +668,13 @@ INCS =	\
 	matprops.hpp \
 	mesh.hpp \
 	mmg_utils.hpp \
+	mpi_simulation.hpp \
+	mpi_partition.hpp \
+	mpi_local_fields.hpp \
+	mpi_transport.hpp \
+	mpi_halo_kernels.hpp \
+	mpi_acc.hpp \
+	exit_codes.hpp \
 	monitor.hpp \
 	nn-interpolation.hpp \
 	output.hpp \
@@ -625,6 +682,7 @@ INCS =	\
 	phasechanges.hpp \
 	point_sources.hpp \
 	pseudo_transient.hpp \
+	remesh-scratch.hpp \
 	remeshing.hpp \
 	rheology.hpp \
 	runtime_info.hpp \
@@ -677,13 +735,42 @@ ifeq ($(usemmg), 1)
 	LDFLAGS += $(MMG_LDFLAGS)
 endif
 
+ifeq ($(usempi), 1)
+	CXXFLAGS += -DUSEMPI -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
+	# MPI runs always partition with METIS. Blank overrides use the
+	# compiler/linker's normal search paths.
+	METIS_INCLUDE_DIR ?=
+	METIS_LIB_DIR ?=
+	METIS_CXXFLAGS = $(if $(strip $(METIS_INCLUDE_DIR)),-I$(METIS_INCLUDE_DIR))
+	CXXFLAGS += $(METIS_CXXFLAGS)
+	LDFLAGS += $(if $(strip $(METIS_LIB_DIR)),-L$(METIS_LIB_DIR)) -lmetis
+ifneq ($(strip $(METIS_LIB_DIR)),)
+	LDFLAGS += -Wl,-rpath,$(METIS_LIB_DIR)
+endif
+endif
+
 ifeq ($(usegospl), 1)
 	CXXFLAGS += $(GOSPL_CXXFLAGS)
 	LDFLAGS += $(GOSPL_LDFLAGS)
 endif
 
+ifeq ($(usegwb), 1)
+	CXXFLAGS += $(GWB_CXXFLAGS)
+	LDFLAGS += $(GWB_LDFLAGS)
+endif
+
 C3X3_DIR = 3x3-C
 C3X3_LIBNAME = 3x3$(suffix)
+ifeq ($(usempi), 1)
+ifneq ($(openacc), 1)
+	# MPI changes the DES executable, not this CPU-only eigensolver library.
+	C3X3_LIBNAME = 3x3
+endif
+ifeq ($(openacc), 1)
+	# Device routines must come from the GPU eigensolver archive.
+	C3X3_LIBNAME = 3x3.gpu
+endif
+endif
 ## GPU_CC goes to the sub-make as itself: it folds the capability into the one -gpu= it
 ## assembles, and its flag stamp covers CFLAGS, so a changed capability deletes the
 ## objects it invalidates.
@@ -753,10 +840,11 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS
+FEATURES = HDF5 USEMMG USEEXODUS USEGWB
 FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
 FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
+FEATURE_USEGWB_FLAGS    = $(GWB_CXXFLAGS)
 
 FEATURE_FLAGS  = $(foreach f,$(FEATURES),$(FEATURE_$(f)_FLAGS))
 FEATURE_STAMP  = .build-flags-$(1).$(ndims)d$(suffix)
@@ -856,9 +944,12 @@ check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
 		echo "Unsupported compiler '$(CXX)': no flags would be set. Use clang++,"; \
 		echo "g++ or nvc++, e.g. make CXX=g++."; exit 1; }
+	@test -z "$(MPI_ACC_BACKEND_MISSING)" || { \
+		echo "usempi=1 openacc=1 needs an MPI wrapper around nvc++, but '$(CXX)'"; \
+		echo "runs '$(CXX_BACKEND)'. Set MPI_CXX to an NVHPC MPI wrapper."; exit 1; }
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
-ifneq (, $(findstring clang++, $(CXX)))
+ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	@test -f "$(OPENMP_INCLUDE_DIR)/omp.h" \
 	  && test -f "$(OPENMP_LIB_DIR)/libomp.dylib" || { \
 		echo "Missing: an OpenMP runtime -- Apple clang has the pragmas, ships none."; \
@@ -879,6 +970,12 @@ config:
 	@echo "platform           $(OSNAME) $(shell uname -m)"
 	@echo "compiler           $(CXX)$(if $(CXX_SUPPORTED),,   ** UNSUPPORTED -- no flags will be set **)"
 	@echo "openmp             $(strip $(openmp))"
+	@echo "usempi             $(strip $(usempi))"
+ifeq ($(usempi), 1)
+	@echo "  wrapper runs     $(CXX_BACKEND)$(if $(MPI_ACC_BACKEND_MISSING),   ** openacc=1 needs nvc++ -- set MPI_CXX **)"
+	@echo "  metis include    $(if $(strip $(METIS_INCLUDE_DIR)),$(METIS_INCLUDE_DIR),compiler default)"
+	@echo "  metis lib dir    $(if $(strip $(METIS_LIB_DIR)),$(METIS_LIB_DIR),linker default)"
+endif
 ifeq ($(OSNAME), Darwin)
 	@echo "brew prefix        $(BREW_PREFIX)"
 ifeq ($(openmp), 1)
@@ -894,6 +991,11 @@ endif
 	@echo "usemmg             $(strip $(usemmg))"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
+	@echo "usegwb             $(strip $(usegwb))"
+ifeq ($(usegwb), 1)
+	@echo "  gwb include      $(GWB_DIR)/include"
+	@echo "  gwb lib dir      $(GWB_LIB_DIR)"
+endif
 	@echo "openacc            $(strip $(openacc))"
 ifeq ($(openacc), 1)
 	@echo "  gpu target       cc$(GPU_CC)   ($(GPU_CC_NOTE))"
@@ -1006,8 +1108,9 @@ ifeq ($(OSNAME), Darwin)  # fix for dynamic library problem on Mac
 		@# Record each dependency's directory as an rpath, skipping any that is
 		@# already there: install_name_tool fails outright on a duplicate, and
 		@# with usegospl=1 OPENMP_RPATH and GOSPL_RPATH are both the env's lib.
-		@# An empty one (openmp=0, or no runtime found) drops out of the loop.
-		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH); do \
+		@# An empty one (openmp=0, or no runtime found) drops out of the loop, as does
+		@# GWB_RPATH without usegwb=1 (GWB's library names itself @rpath/...).
+		@for d in $(OPENMP_RPATH) $(GOSPL_RPATH) $(GWB_RPATH); do \
 			otool -l $@ | grep -qF " path $$d (" || install_name_tool -add_rpath $$d $@; \
 		done
 ifeq ($(usegospl), 1)

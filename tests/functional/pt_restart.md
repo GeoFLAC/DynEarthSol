@@ -99,33 +99,22 @@ Relative polygon paths are resolved against the source configuration directory.
 OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d tests/functional/pt_output_schedule.cfg /tmp/des-pt-schedule --schedule mixed
 ```
 
-Repeat with `--schedule step`, `time`, and `catchup`, new output directories,
-and the 3D executable. Use `--schedule step-default` to omit the time interval
-and exercise the disabled-time default; the checkpoint clock must remain
-finite. The runner selects elastic rheology so `--method pt`, `explicit` and
-`gvs` exercise their requested scheduler. Add `--rsf` with `pt` or `gvs` to
-retain the original RSF fixture, which forces global velocity scaling on.
-Repeat PT with both options. The same cell tests binary and HDF5 checkpoints.
+Repeat with `--schedule step`, `time`, `catchup`, and `overflow`, new output
+directories, and the 3D executable. Use `--schedule step-default` to omit the
+time interval and check a finite checkpoint clock. Select `--method pt`,
+`explicit`, or `gvs` to exercise each integration/output path; the driver
+uses elastic material unless `--rsf` retains the RSF fixture (PT/GVS only).
+Repeat with both PT options. The same checks support binary and HDF5 output.
+Use `--schedule step --step-after-restart 6` or
+`--schedule time --time-after-restart 3.5` to change cadence at restart and
+compare physical fields against an independent output-every-step run.
 The comparison includes frame numbers, physical steps, output times and all
-subsequent save/checkpoint payloads. The fixed physical timestep isolates the
-output clock; it does not qualify adaptive GVS or changing physical timesteps.
-
-All methods retain the original schedule anchors, next regular output index
-and configured step/time intervals. Unchanged cadence preserves the original
-frame sequence. An explicitly changed interval starts a new cadence at the
-restart step/time. Check decreasing and increasing step intervals with
-`--schedule step --step-after-restart 2` and `6`; use
-`--schedule time --time-after-restart 3.7` to change the time interval to
-3.7 fixed timesteps. These checks compare the physical state against a separate
-run saving every step; output-clock metadata is allowed to differ.
-
-PT's existing schedule field names remain readable. New non-PT checkpoints use
-generic names; the reader detects the saved schema even for a permitted
-step-zero method conversion. Older checkpoints without schedule fields remain
-readable with a warning and legacy scheduling. Without saved interval fields,
-an interval change cannot be detected reliably. Incomplete new records are
-rejected. These checks do not qualify earthquake-event history, averaged-field
-accumulator restart or changing `fixed_dt` during continuation.
+subsequent save/checkpoint payloads. Unchanged cadence retains its original
+anchors; an explicitly changed cadence starts a new schedule at the restart
+point. Checkpoints retain the schedule anchors and the next regular output
+index. Older checkpoints without these fields remain readable with a warning
+and legacy scheduling; incomplete new schedule records are rejected. This test
+does not qualify earthquake-event history or averaged-field accumulator restart.
 
 ## Nonconvergence diagnostics
 
