@@ -185,20 +185,30 @@ inline double hydraulic_bulk_density(const MatProps &mat, int e, double sat = 1)
     return mat.rho(e) * (1 - phi) + mat.rho_fluid_reference(e) * phi * sat;
 }
 
+// Element means of the nodal pore pressure and temperature, the state at which
+// an element's fluid properties are evaluated.
+#pragma acc routine seq
+inline void fluid_means(const Variables &var, int e, double &p, double &t)
+{
+    p = t = 0;
+    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        const int n = (*var.connectivity)[e][j];
+        p += (*var.ppressure)[n]/NODES_PER_ELEM;
+        t += (*var.temperature)[n]/NODES_PER_ELEM;
+    }
+}
+
 // Owned nodal solid mass and actual fluid content determine physical weight.
 // volume_n is the sum of patch volumes (without simplex lumping).
 #pragma acc routine seq
 inline double hydraulic_bulk_density(const Param &param, const Variables &var, int e, double sat = 1)
 {
     if (!var.fluid_split) return hydraulic_bulk_density(*var.mat,e,sat);
-    double p = 0, t = 0, strain = 0, density = 0;
+    double p, t, strain = 0, density = 0;
     for (int d = 0; d < NDIMS; ++d) strain += (*var.strain)[e][d];
     const double ratio = param.control.has_moving_mesh ? 1 : std::exp(strain);
     const auto conn = (*var.connectivity)[e];
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        p += (*var.ppressure)[conn[j]]/NODES_PER_ELEM;
-        t += (*var.temperature)[conn[j]]/NODES_PER_ELEM;
-    }
+    fluid_means(var, e, p, t);
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
         const int n = conn[j];
         const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],

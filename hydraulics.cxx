@@ -894,16 +894,6 @@ FluidState remap_fluid_state(const Variables &var, int e, int n, double p, doubl
     return state;
 }
 
-void fluid_means(const Variables &var, int e, double &p, double &t)
-{
-    p = t = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = (*var.connectivity)[e][j];
-        p += (*var.ppressure)[n]/NODES_PER_ELEM;
-        t += (*var.temperature)[n]/NODES_PER_ELEM;
-    }
-}
-
 double schedule_peak(const double_vec &time, const double_vec &ratio, double a, double b)
 {
     double peak = std::max(std::fabs(schedule_mean(time,ratio,a,a)),std::fabs(schedule_mean(time,ratio,b,b)));
