@@ -18,16 +18,6 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
 from des_case import read_config, run_solver, source_revision
 
-def load_study(study, record_source, active_runner=None):
-    """Verify the archived and optional active runner before recording a study."""
-    summary = json.loads((study/'summary.json').read_text())
-    assert hashlib.sha256((study/'runner.py').read_bytes()).hexdigest() == summary['runner_sha256']
-    if active_runner is not None:
-        assert hashlib.sha256(active_runner.read_bytes()).hexdigest() == summary['runner_sha256']
-    record_source(study/'summary.json'); record_source(study/'runner.py')
-    return summary
-
-
 def make_config(dim):
     cfg = read_config(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
     cfg['control'].update(PT_option='1', PT_absolute_tolerance='1e-6', gravity='10')
@@ -133,7 +123,7 @@ def load_case(output, dim):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--analyze-only', '--plot-only', dest='analyze_only', action='store_true',
+    parser.add_argument('--analyze-only', dest='analyze_only', action='store_true',
                         help='Check saved runs without executing DES')
     parser.add_argument('--timeout', type=float, default=180)
     args = parser.parse_args()

@@ -93,14 +93,14 @@ def compare(case):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
-    parser.add_argument('--analyze-only', '--plot-only', dest='plot_only', action='store_true', help='Check saved runs')
+    parser.add_argument('--analyze-only', dest='analyze_only', action='store_true', help='Check saved runs')
     parser.add_argument('--resolution', type=float, default=20.0, help='Uniform mesh spacing in m')
     args = parser.parse_args()
     if not math.isfinite(args.resolution) or args.resolution <= 0:
         parser.error('--resolution must be finite and positive')
     output = args.output.resolve()
     case = output / 'slab-3d'
-    if not args.plot_only:
+    if not args.analyze_only:
         output.mkdir(parents=True, exist_ok=False)
         case.mkdir()
         with (case / 'input.cfg').open('w') as stream:

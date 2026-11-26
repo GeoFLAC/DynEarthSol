@@ -24,7 +24,6 @@ which acts as a line source of q/4 per unit thickness: a sanity check.
 """
 import argparse
 import json
-import math
 import os
 from pathlib import Path
 import sys

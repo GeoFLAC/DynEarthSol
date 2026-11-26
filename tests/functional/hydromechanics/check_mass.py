@@ -18,7 +18,6 @@ import re
 import sys
 
 import numpy as np
-from scipy.integrate import solve_ivp
 from scipy.optimize import brentq, root
 
 ROOT = Path(__file__).resolve().parents[3]

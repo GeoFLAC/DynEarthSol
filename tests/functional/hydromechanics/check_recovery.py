@@ -21,7 +21,6 @@ from check_heat_restart import checkpoint_copy, reject
 
 ROOT = plastic.ROOT
 sys.path.insert(0, str(ROOT/'tests/functional'))
-from pt_initial_checkpoint import fields
 
 ALPHA, PHI, GRAIN, FLUID = .8, .25, 1e8, 1e8
 T0, TAU = 293., .25

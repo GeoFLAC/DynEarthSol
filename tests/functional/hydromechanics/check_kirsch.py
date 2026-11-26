@@ -2,9 +2,8 @@
 """Dry plane-strain circular opening under isotropic far compression.
 
 A quarter annulus has symmetry cuts, a free inner wall and prescribed outer
-normal pressure. Compare its stress with the finite-annulus solution and
-state the separate infinite-domain Kirsch truncation error. It covers the
-elastic case only, not the plastic or poroelastic tunnel.
+normal pressure. Compare its stress with the finite-annulus solution. It
+covers the elastic case only, not the plastic or poroelastic tunnel.
 """
 
 import argparse
@@ -23,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT/'benchmarks/poromechanics'))
 sys.path.insert(0, str(ROOT/'tests/functional'))
 from Dynearthsol import Dynearthsol
-from kirsch_reference import annulus, kirsch
+from kirsch_reference import annulus
 from pt_initial_checkpoint import fields
 
 A, R, P = 1., 20., 1e5

@@ -234,7 +234,6 @@ def main():
     parser.add_argument('--inflow', type=float, default=INFLOW)
     parser.add_argument('--ndims', type=int, choices=(2, 3), default=2)
     parser.add_argument('--replay', action='store_true')
-    parser.add_argument('--figures', action='store_true', help='Draw the selected PT case and setup after analysis')
     args = parser.parse_args()
     exe, out = args.executable.resolve(), args.output.resolve()
     assert args.dt > 0 and args.duration > 0 and args.inflow > 0 and min(args.spacings) > 0

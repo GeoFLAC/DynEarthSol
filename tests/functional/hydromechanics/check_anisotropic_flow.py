@@ -83,7 +83,7 @@ def case(executable, folder, h, steps, dim):
     seed = run(executable, folder, cfg, 'seed')
     assert seed.format == 'binary', 'Use a binary executable for the analytical initial-state seed'
     assert seed.ndims == dim
-    x, conn = seed.read_field(0, 'coordinate'), seed.read_field(0, 'connectivity')
+    x = seed.read_field(0, 'coordinate')
     modes = basis(x)
     initial = P0*(modes@INITIAL)
     for d in (0, dim-1):

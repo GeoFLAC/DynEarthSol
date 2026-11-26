@@ -200,7 +200,7 @@ def main():
                         default=['pt0', 'pt1', 'explicit', 'gvs-shear', 'gvs-bulk'])
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--max-steps', type=int, default=2000000)
-    parser.add_argument('--analyze-only', '--plot-only', dest='analyze_only', action='store_true')
+    parser.add_argument('--analyze-only', dest='analyze_only', action='store_true')
     args = parser.parse_args()
     if (not all(math.isfinite(v) and v > 0 for v in [args.spacing, args.duration,
             args.dt_fraction, args.pt_dt, args.timeout, *args.initial_speeds, *args.scalings]) or

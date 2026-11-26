@@ -2,7 +2,7 @@
 """Run a parent and the current DES build on the same finite-grain Biot column.
 
 Output includes input files, raw DES saves, logs, hashes, CSV histories and a
-JSON summary. --plot-only reuses the recorded inputs and provenance.
+JSON summary. --analyze-only reuses the recorded inputs and provenance.
 """
 
 import argparse
@@ -69,10 +69,10 @@ def main():
     parser.add_argument('--timeout', type=float, default=180)
     parser.add_argument('--fixed-dt-seconds', type=float,
                         help='Use the same explicit physical timestep in both versions')
-    parser.add_argument('--analyze-only', '--plot-only', dest='plot_only', action='store_true', help='Check saved runs')
+    parser.add_argument('--analyze-only', dest='analyze_only', action='store_true', help='Check saved runs')
     args = parser.parse_args()
     output = args.output.resolve()
-    if args.plot_only:
+    if args.analyze_only:
         biot = json.loads((output / 'settings.json').read_text())['biot']
     else:
         if (args.parent_bindir is None or not 0.3 <= args.biot <= 1 or

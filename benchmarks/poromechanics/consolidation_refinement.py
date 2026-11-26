@@ -2,7 +2,7 @@
 """Separate mesh and physical-timestep refinement of DES Terzaghi columns.
 
 Run dimensions sequentially with OMP/BLAS threads set to one and a 6 GiB
-virtual-memory ceiling. Existing destinations are refused; --plot-only
+virtual-memory ceiling. Existing destinations are refused; --analyze-only
 reconstructs the report from recorded configurations and raw saves.
 """
 
@@ -198,10 +198,10 @@ def main():
     parser.add_argument('--duration', type=float, default=400.0)
     parser.add_argument('--sample-interval', type=float, default=100.0)
     parser.add_argument('--timeout', type=float, default=600)
-    parser.add_argument('--analyze-only', '--plot-only', dest='plot_only', action='store_true', help='Check saved runs')
+    parser.add_argument('--analyze-only', dest='analyze_only', action='store_true', help='Check saved runs')
     args = parser.parse_args()
     output = args.output.resolve()
-    if args.plot_only:
+    if args.analyze_only:
         settings = json.loads((output / 'settings.json').read_text())
     else:
         values = args.spacings + args.timesteps + [args.spatial_dt, args.temporal_spacing,

@@ -555,7 +555,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
             ppressure[i] -= rho_fluid * gravity * alpha_f * (table - profile_integral(zs, area, z));
 
         // Add excess pore pressure for non-boundary nodes
-        if (pressure_boundary(i, var) < 0) ppressure[i] += loading_efficiency * loading;
+        if (side < 0) ppressure[i] += loading_efficiency * loading;
         dppressure[i] = 0.0;
     }
 }
@@ -1551,8 +1551,9 @@ void HydraulicStep::advance(const Param &param, Variables &var)
         std::printf("    Finite-density transport: %llu substeps in %.17g s\n",
                     static_cast<unsigned long long>(steps),interval);
     for (int n = 0; n < var.nnode; ++n) {
-        const double next_split = pressure_boundary(n,var) < 0 ? lag[n]*((*var.ppressure)[n]-pressure[n]) : 0;
-        if (pressure_boundary(n,var) >= 0) reset -= initial_split[n];
+        const bool free = pressure_boundary(n,var) < 0;
+        const double next_split = free ? lag[n]*((*var.ppressure)[n]-pressure[n]) : 0;
+        if (!free) reset -= initial_split[n];
         (*var.fluid_split)[n] = next_split;
         (*var.dppressure)[n] = pressure[n]-(*var.ppressure)[n];
         (*var.pending_temperature)[n] = (*var.temperature)[n]-temperature[n];
