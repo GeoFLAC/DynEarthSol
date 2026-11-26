@@ -4,7 +4,10 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
+import platform
+import shlex
 import subprocess
 
 import numpy as np
@@ -48,14 +51,16 @@ def main():
     records = []
     for dimension in (2, 3):
         exe = output/f'overlap{dimension}d'
-        command = ['g++', '-std=c++17', '-O2', '-fopenmp', '-ffunction-sections',
-                   '-fdata-sections', '-Wno-unknown-pragmas', '-DGPP1X', '-DSOA',
-                   '-I'+str(ROOT), '-I'+str(ROOT/'nanoflann/include')]
+        command = [*shlex.split(os.environ.get('CXX', 'g++')), '-std=c++17', '-O2',
+                   '-ffunction-sections', '-fdata-sections', '-Wno-unknown-pragmas',
+                   '-DGPP1X', '-DSOA', '-I'+str(ROOT), '-I'+str(ROOT/'nanoflann/include')]
         if dimension == 3:
             command.append('-DTHREED')
         command.extend([str(ROOT/'tests/functional/hydromechanics/overlap_driver.cxx'),
                         str(ROOT/'geometry.cxx'), str(ROOT/'utils.cxx'),
-                        '-Wl,--gc-sections', '-o', str(exe)])
+                        # Unused sections, which refer to the rest of DES, are dropped.
+                        '-Wl,-dead_strip' if platform.system() == 'Darwin' else '-Wl,--gc-sections',
+                        '-o', str(exe)])
         run_solver(command, log=output / f'build-{dimension}d.log', check=True, timeout=120)
         unit = np.r_[np.zeros((1, dimension)), np.eye(dimension)]
         pairs = [(unit, unit), (unit, unit+2), (unit, unit*.5),

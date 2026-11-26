@@ -24,7 +24,8 @@ L, WIDTH, P, END, DT = 10., 1., 1000., 10., .05
 RATE = ct.DIFFUSIVITY*math.pi**2/L**2
 
 
-from des_case import digest, execute
+from des_case import digest
+from des_test_utils import run_des
 
 
 def run(executable, folder, spacing):
@@ -39,7 +40,7 @@ def run(executable, folder, spacing):
             del cfg['bc'][key]
     cfg['bc'].update(num_wells='0', hbc_x0='2', hbc_x1='2',
                      hbc_pressure='[0,0,0,0,0,0]')
-    execute(executable, folder, cfg, 'seed')
+    run_des(executable, folder, 'seed', cfg, timeout=600)
     seed = ct.Dynearthsol(str(folder/'seed'))
     assert seed.ndims == 3 and seed.format == 'binary'
     x = seed.read_field(0, 'coordinate')
@@ -54,7 +55,7 @@ def run(executable, folder, spacing):
     cfg['sim'].update(modelname='pulse', is_restarting='true',
                       restarting_from_modelname='seed', restarting_from_frame='0',
                       max_steps=str(round(END/DT)))
-    execute(executable, folder, cfg, 'pulse')
+    run_des(executable, folder, 'pulse', cfg, timeout=600)
     model = ct.Dynearthsol(str(folder/'pulse'))
     rows = ct.scan_frames(str(folder/'pulse'))
     assert len(rows) == round(END/DT)+1

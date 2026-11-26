@@ -24,10 +24,11 @@ from pt_initial_checkpoint import fields
 from unsaturated_reference import Retention
 
 
-from des_case import execute, read_config, reset_boundaries
+from des_case import read_config, reset_boundaries
+from des_test_utils import run_des
 
 def run(executable, folder, cfg, name):
-    execute(executable, folder, cfg, name, timeout=60)
+    run_des(executable, folder, name, cfg, timeout=60)
 
 
 def main():
