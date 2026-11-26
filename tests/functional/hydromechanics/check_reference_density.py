@@ -46,7 +46,7 @@ def main():
             pressure = model.read_field(frame, 'pore pressure')
             np.testing.assert_allclose(pressure, expected, atol=1e-6, rtol=1e-9)
             errors.append(float(np.max(np.abs(pressure - expected))))
-        summary['cases'][str(density)] = dict(ndims=model.ndims,
+        summary['cases'][str(density)] = dict(ndims=int(model.ndims),
             max_absolute_pressure_error_Pa=max(errors),
             stationary_and_exact_restart=True)
     (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')

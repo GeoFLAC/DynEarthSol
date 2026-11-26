@@ -121,7 +121,9 @@ def study(executable, output, ndims):
                 b = fields(folder/f"resumed.{suffix}.{row['frame']:06d}")
                 assert a.keys() == b.keys()
                 for key in a:
-                    if key in ('provenance', 'walltime_sec'): continue
+                    # HDF5 keys are dataset paths; the native format uses bare names.
+                    base = key.rsplit('/', 1)[-1].lstrip('@').removesuffix('.layout')
+                    if base in ('provenance', 'walltime_sec') or '/provenance/' in key: continue
                     assert a[key] == b[key], (row['steps'], suffix, key)
                     checked += 1
         count = substeps(model.read_field(0, 'coordinate'), model.read_field(0, 'connectivity'), permeability, stabilizer)

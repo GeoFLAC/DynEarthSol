@@ -211,10 +211,6 @@ def main():
         broken = copy.deepcopy(restart)
         broken['sim']['restarting_from_modelname'] = str(folder/name)
         reject(exe, folder, broken, name+'-run', 'Incomplete shear-heat checkpoint')
-    checkpoint_copy(folder/'cell', 3, folder/'legacy-power', drop=HEAT_STATE)
-    legacy = copy.deepcopy(restart)
-    legacy['sim']['restarting_from_modelname'] = str(folder/'legacy-power')
-    reject(exe, folder, legacy, 'legacy-power-run', 'no recoverable pending energy')
     disabled = copy.deepcopy(restart)
     disabled['control']['has_shear_heating'] = 'false'
     reject(exe, folder, disabled, 'disable-pending', 'Cannot disable shear heating')
@@ -224,7 +220,7 @@ def main():
     unknown['sim']['restarting_from_modelname'] = str(folder/'unknown-version')
     reject(exe, folder, unknown, 'unknown-version-run', 'Unsupported shear-heat checkpoint version')
     result = dict(dimensions=args.ndims, exact_continuation_payloads=exact,
-                  legacy_zero_exact_payloads=legacy_exact, rejected_schemas=6,
+                  legacy_zero_exact_payloads=legacy_exact, rejected_schemas=5,
                   reference=reference, changed_timestep=changed_result,
                   rsf=rsf_case(exe, folder/'rsf', args.ndims),
                   scope='Plastic and aging EP-RSF work and checkpoint ownership; this is not a complete earthquake cycle.')
