@@ -417,6 +417,10 @@ small examples and expected results for CPU MPI and multiple GPUs.
   `strings <exe> | grep '^build\.snapshot\.'` shows the build, `<modelname>.manifest`
   each run, and every frame its own origin. The fields are described in
   [doc/provenance.md](doc/provenance.md).
+* **Restart from a des-binary checkpoint**, or from one that a build without MMG
+  wrote: `python utils/convert_checkpoint.py modelname FRAME -o DIR` (NumPy and
+  h5py) writes a `.vtkhdf` pair to `DIR` and prints the `restarting_from_modelname`
+  and `restarting_from_frame` to set.
 * **Running with GoSPL**: set `surface_process_option = 11` in the cfg and use
   the generated wrapper; in the Docker image the environment is already active.
   ```bash
