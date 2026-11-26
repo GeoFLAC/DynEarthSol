@@ -247,10 +247,11 @@ void assemble_well_source(const Param &param, const Variables &var)
     const BC &bc = param.bc;
     if (bc.num_wells == 0) return;
     // The weights depend only on the mesh: compute_mass can run several times
-    // a step, or every step on a fixed mesh, without the mesh changing.
+    // a step, or every step on a fixed mesh, without the mesh changing. All
+    // ranks reassemble when any rank's mesh changed: the screen check sums over them.
     #pragma acc wait
     const std::uint64_t mesh = mesh_fingerprint(var);
-    if (mesh == var.fluid_source_mesh) return;
+    if (!mpi_any(var, mesh != var.fluid_source_mesh)) return;
     var.fluid_source_mesh = mesh;
 
     double_vec &source = *var.fluid_source;
