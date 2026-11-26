@@ -952,7 +952,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
         // Each substep reads its neighbours' ghost pressures; the dispatcher exchanges the last.
         if (i > 0) mpi_sync(var, p, MpiEntity::Node);
         pressure_step(param, var, p, dp, rate, work, stress, old_stress,
-                      dt, var.time - var.dt + (i+1)*dt);
+                      dt, i+1 == steps ? var.time : var.time - var.dt + (i+1)*dt);
     }
 }
 
