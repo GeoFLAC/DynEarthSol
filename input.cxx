@@ -2558,15 +2558,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if (!std::is_sorted(p.bc.hbc_schedule_time_in_yr.begin(), p.bc.hbc_schedule_time_in_yr.end()))
             die(EXIT_CONFIG_VALUE, "Boundary schedule times must be nondecreasing.");
         const int hbc[] = {p.bc.hbc_x0,p.bc.hbc_x1,p.bc.hbc_y0,p.bc.hbc_y1,p.bc.hbc_z0,p.bc.hbc_z1};
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 6; ++i)
             if (hbc[i] < 0 || hbc[i] > 3)
                 die(EXIT_CONFIG_VALUE, "Hydraulic boundary types must be 0, 1, 2 or 3.");
-            for (int j = 0; j < i; ++j)
-                if ((p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2) &&
-                    hbc[i] == 2 && hbc[j] == 2 && i/2 != j/2 &&
-                    p.bc.hbc_pressure[i] != p.bc.hbc_pressure[j])
-                    die(EXIT_CONFIG_VALUE, "Intersecting prescribed-pressure faces must agree at their shared nodes.");
-        }
         for (const double_vec *v : {&p.bc.hbc_pressure, &p.bc.hbc_flux,
                                    &p.bc.hbc_schedule_time_in_yr, &p.bc.hbc_schedule_ratio})
             for (double x : *v)
