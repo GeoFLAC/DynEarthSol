@@ -1,0 +1,221 @@
+This patch is used to estimate the error in ACM.
+
+I changed neta0 in nn-interpolation.cxx to 5, 10, 20, 40, and ran the code
+until it remeshes. The output will look like:
+
+  Remeshing starts...
+    Interpolating fields.
+601 15
+	[605, 622, ]
+	[0.514634, 0.485366, ]
+612 15
+	[605, 622, ]
+	[0.512195, 0.487805, ]
+
+This means: the 601-th element in the new mesh has 15 temporary markers, 51%
+of them are inside 605-th element in the old mesh, and 49% of them are inside
+the 622-th element in the old mesh.
+
+To find the error, use the following python code:
+
+des = Dynearthsol('zzz')
+des.read_header(4)
+v4 = des.read_field(4, 'volume')
+des.read_header(5)
+v5 = des.read_field(5, 'volume')
+
+w4 = v4.take((605,622))  # volume of 605-th and 622-th elem in old mesh
+
+error = (array([0.514634, 0.485366, ])*v5[601] + array([0.512195, 0.487805, ])*v5[612] - w4) / w4
+
+The value of error[0] is the error in estimating volume ratio of 605-th elem,
+and error[1] is the error in 622-th element.
+
+==== Summary of the code ====
+parent: 690:4e1316b785aa tip
+ minor edits for remeshing output
+branch: default
+commit: 4 modified, 1 added
+update: (current)
+
+
+== Code modification (not checked-in) ==
+diff --git a/2vtk.py b/2vtk.py
+--- a/2vtk.py
++++ b/2vtk.py
+@@ -212,7 +212,7 @@ def main(modelname, start, end, delta):
+             #
+             fvtu.write(b'  <CellData>\n')
+ 
+-            #convert_field(des, frame, 'volume', fvtu)
++            convert_field(des, frame, 'volume', fvtu)
+             #convert_field(des, frame, 'edvoldt', fvtu)
+ 
+             convert_field(des, frame, 'mesh quality', fvtu)
+diff --git a/benchmarks/acm-error-est.cfg b/benchmarks/acm-error-est.cfg
+new file mode 100644
+--- /dev/null
++++ b/benchmarks/acm-error-est.cfg
+@@ -0,0 +1,112 @@
++[sim]
++modelname = zzz
++
++#max_steps = 1000  # 3D
++#output_step_interval = 1000
++max_steps = 160000  # 2D
++output_step_interval = 50000
++
++#is_restarting = true
++has_output_during_remeshing = yes
++
++[mesh]
++# how to create the new mesh?
++# see meshing.cxx for available choices
++meshing_option = 2
++meshing_verbosity = -1
++tetgen_optlevel = 0
++
++# dimension of the box (in meters)
++xlength = 80e3
++ylength = 10e3
++zlength = 10e3
++resolution = 1e3
++smallest_size = 0.01
++
++# for 2d mesh quality
++#min_angle = 30.
++# for 3d mesh quality
++#min_tet_angle = 20.
++#max_ratio = 2.0
++
++# for meshing_option = 2
++refined_zonex = [0.3, 0.7]
++refined_zoney = [0., 1.]
++refined_zonez = [0.1, 1.0]
++
++quality_check_step_interval = 1000
++min_quality = 0.5
++
++remeshing_option = 0
++
++[control]
++gravity = 10
++inertial_scaling = 1e5
++damping_factor = 0.8
++ref_pressure_option = 0
++surface_process_option = 1
++surface_diffusivity = 3e-6
++
++[ic]
++weakzone_option = 1
++weakzone_plstrain = 0.1
++weakzone_azimuth = 0
++weakzone_inclination = 60
++weakzone_halfwidth = 1.2
++weakzone_y_min = 0
++weakzone_y_max = 1
++weakzone_depth_min = 0
++weakzone_depth_max = 1
++weakzone_xcenter = 0.5
++weakzone_ycenter = 0.5
++weakzone_zcenter = 0.
++
++
++[bc]
++vbc_x0 = 1
++vbc_x1 = 1
++vbc_val_x0 = -1e-9
++vbc_val_x1 = 1e-9
++vbc_y0 = 1
++vbc_y1 = 1
++vbc_val_y0 = 0
++vbc_val_y1 = 0
++vbc_z0 = 0
++vbc_z1 = 0
++vbc_val_z0 = 0
++vbc_val_z1 = 0
++
++has_wrinkler_foundation = yes
++#wrinkler_foundation = 1
++wrinkler_delta_rho = 0
++
++surface_temperature = 273
++mantle_temperature = 273
++
++[mat]
++rheology_type = elasto-plastic
++#num_material = 1
++num_materials = 1
++rho0 = [ 3210 ]
++alpha = [ 3e-5 ]
++bulk_modulus = [ 128.2e9 ]
++shear_modulus = [ 80.5e9 ]
++visc_exponent = [ 3.05 ]
++visc_coefficient = [ 1.25e-1 ]
++visc_activation_energy = [ 3.76e5 ]
++heat_capacity = [ 1000 ]
++therm_cond = [ 3 ]
++pls0 = [ 0 ]
++pls1 = [ 0.1 ]
++cohesion0 = [ 4e7 ]
++cohesion1 = [ 4e6 ]
++friction_angle0 = [ 30 ]
++friction_angle1 = [ 5 ]
++dilation_angle0 = [ 0 ]
++dilation_angle1 = [ 0 ]
++
++max_viscosity = 1e24
++min_viscosity = 1e19
++max_tension = 1e9
++max_thermal_diffusivity = 5e-6
++
+diff --git a/dynearthsol.cxx b/dynearthsol.cxx
+--- a/dynearthsol.cxx
++++ b/dynearthsol.cxx
+@@ -326,6 +326,7 @@ int main(int argc, const char* argv[])
+                 remesh(param, var, quality_is_bad);
+ 
+                 if (param.sim.has_output_during_remeshing) {
++                    compute_volume(*var.coord, *var.connectivity, *var.volume);
+                     output.write(var, false);
+                 }
+             }
+diff --git a/nn-interpolation.cxx b/nn-interpolation.cxx
+--- a/nn-interpolation.cxx
++++ b/nn-interpolation.cxx
+@@ -44,7 +44,7 @@ namespace {
+                               std::vector<int_vec> &elems_vec,
+                               std::vector<double_vec> &ratios_vec)
+     {
+-        const int neta0 = 10; // larger neta0, more accurate mapping
++        const int neta0 = 5; // larger neta0, more accurate mapping
+         const int neta1 = neta0 + 1; // different from neta0 to prevent the temporary point falling the edge of elements
+         const int neta2 = neta0;
+         const double spacing0 = 1.0 / neta0;
+@@ -170,6 +170,12 @@ namespace {
+                 }
+ 
+                 elem_count.clear();
++
++                std::cout << e << ' ' << total_count << "\n\t";
++                print(std::cout, elems);
++                std::cout << "\n\t";
++                print(std::cout, ratios);
++                std::cout << "\n";
+             }
+         }
+     }
+diff --git a/output.cxx b/output.cxx
+--- a/output.cxx
++++ b/output.cxx
+@@ -155,7 +155,7 @@ void Output::write(const Variables& var,
+     // bin.write_array(*var.mass, "mass", var.mass->size());
+     // bin.write_array(*var.tmass, "tmass", var.tmass->size());
+     // bin.write_array(*var.volume_n, "volume_n", var.volume_n->size());
+-    // bin.write_array(*var.volume, "volume", var.volume->size());
++    bin.write_array(*var.volume, "volume", var.volume->size());
+     // bin.write_array(*var.edvoldt, "edvoldt", var.edvoldt->size());
+ 
+     for (int e=0; e<var.nelem; ++e) {
+
+

@@ -153,7 +153,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   in `benchmarks/poromechanics/README.md`.
 
 - PT save files expose the accepted projected undamped `PT residual force`
-  separately from the legacy damped `force`; `examples/fundamentals/pt-elastic-load.cfg`
+  separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
   demonstrates both PT options in 2D and 3D.
 
 - Physical-step PT trial/commit mechanics with projected undamped-force
@@ -206,7 +206,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   and a weak zone in the world's faults from it, uniform or, with
   `ic.gwb_fault_is_gaussian`, a Gaussian across each fault; `examples/gwb-*.cfg`
   show all three ([#117]).
-  markers. `examples/tectonics/subduction.cfg` runs it ([#110]).
 
 - The Docker images build `usemmg=1` and `hdf5=1` in the container, offline
   (`--network none`), and `docker run` mounts `./runs` for results, written as
@@ -237,14 +236,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   checkpoint written before this, even by one thread, stops the restart with
   exit 22 when an element with two top facets has different entries on them;
   other older checkpoints restart as before.
-- **Breaking.** Monitor points follow the material through deformation,
-  remeshing and restart, located like markers by their element and
-  barycentric weights. `monitor.remesh_rebind_mode` is removed; delete it from
-  existing inputs. A restart continues the same material points from the
-  checkpoint; an older checkpoint restarts them from their query coordinates.
-  The CSV columns keep their names: `query_*` is now the point's current
-  position and `matched_elem` the element whose values are reported.
-
 - Physical-inertia hydraulic steps (`is_quasi_static=false`, `has_PT=false`)
   use strain-driven Biot storage and an undrained-wave timestep limit.
   Nonzero-step checkpoints from the older physical-inertia ordering require
@@ -278,7 +269,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The code is called DynEarthSol and DES in the docs and comments, as the
   repository, `CITATION.cff` and the v2.0 paper already do; the 3D suffix
   predates the 2D executable ([#96]).
-- `examples/tectonics/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
+- `examples/core-complex.cfg` output is time-driven: 34 frames for the 50 kyr
   run instead of 12047 ([#96]).
 - **Breaking.** `2vtk.py -u -c` updates the frames in place, as `-u` does;
   `-hdf -c` writes the updated copies into the current directory instead
@@ -431,9 +422,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   density even when a nonzero porosity is configured.
 
 - Poroelastic pressure storage and initial excess-pressure loading include
-  grain compressibility from `bulk_modulus_s`. The transport timestep uses
-  the same storage from initialization onward; the dimensionally inconsistent
-  hydraulic mass-scaling rejection is removed.
+  grain compressibility from `bulk_modulus_s`, with Biot's
+  1/M = phi*beta_f + (alpha - phi)/K_s. The former storage reversed the sign of
+  the porosity term and agreed only at alpha = 1 or phi = 0 ([#144]). The
+  transport timestep uses the same storage from initialization onward.
+- The startup check "pseudo speed is too slow, increase mass scaling!" is
+  removed. It compared the pseudo wave speed (m/s) with the hydraulic
+  diffusivity (m^2/s) and refused permeable crust that runs stably; the
+  timestep is now bounded by the undrained wave speed of the coupled skeleton
+  and fluid instead.
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
@@ -766,3 +763,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#144]: https://github.com/GeoFLAC/DynEarthSol/issues/144

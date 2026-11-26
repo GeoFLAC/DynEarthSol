@@ -5,7 +5,7 @@ from math import pi,sin, sqrt
 import numpy
 import matplotlib.pyplot as plt
 
-sys.path.append('../../..')
+sys.path.append('..')
 from Dynearthsol import Dynearthsol
 
 

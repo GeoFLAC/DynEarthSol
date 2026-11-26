@@ -77,7 +77,7 @@ GROUP_ORDER = ("ep", "steady_ab_neg", "aging_ab_neg")
 
 
 def candidate_executables(script_dir: Path) -> Iterable[Path]:
-    repo_root = script_dir.parents[2]
+    repo_root = script_dir.parent.parent
     yield repo_root / "dynearthsol2d"
     yield repo_root / "binaries" / "dynearthsol2d"
 

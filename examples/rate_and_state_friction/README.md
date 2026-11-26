@@ -14,8 +14,8 @@ Utility scripts:
 ## Quick Start
 
 ```bash
-cd examples/earthquakes/rate_and_state_friction
-python3 run_rsf_examples.py --exe ../../../dynearthsol2d
+cd examples/rate_and_state_friction
+python3 run_rsf_examples.py --exe ../../dynearthsol2d
 python3 plot_rsf_time_series.py -o rsf_time_series.png
 ```
 

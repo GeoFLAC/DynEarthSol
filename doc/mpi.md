@@ -12,8 +12,8 @@ computation on interior nodes. `usempi=1 openacc=1` additionally builds
 ```sh
 make -j6 ndims=2 usempi=1 usemmg=1 hdf5=1
 make -j6 ndims=3 usempi=1 usemmg=1 hdf5=1
-cd tests/regression
-OMP_NUM_THREADS=1 mpiexec -n 4 ../../dynearthsol2d.mpi test-tiny.cfg
+cd benchmarks-cores
+OMP_NUM_THREADS=1 mpiexec -n 4 ../dynearthsol2d.mpi test-tiny.cfg
 ```
 
 `MPI_CXX=/path/to/mpicxx` selects the wrapper. Configuration parsing uses
@@ -334,7 +334,7 @@ remains required:
 
 ```sh
 # Parent checkout, before changing sources:
-cd tests/regression
+cd benchmarks-cores
 make set NDIMS=2 CASE=test-tiny.cfg
 # Changed executable, reusing that reference:
 make cmp NDIMS=2 CASE=test-tiny.cfg \

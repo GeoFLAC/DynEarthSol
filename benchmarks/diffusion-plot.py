@@ -4,7 +4,7 @@ import sys, os
 from matplotlib.pylab import *
 from scipy.special import erf
 
-sys.path.append(os.getcwd() + '/../../..')
+sys.path.append(os.getcwd() + '/..')
 
 ### 'import 2vtk' will not work because the module name starts with 2,
 ### use the following instead:

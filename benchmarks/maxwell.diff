@@ -1,0 +1,121 @@
+==== Summary of the code ====
+parent: 686:fe6e02511688 tip
+ make sure all elements have markers inside initially
+branch: default
+commit: 1 modified, 1 added
+update: (current)
+
+
+== Code modification (not checked-in) ==
+diff --git a/bc.cxx b/bc.cxx
+--- a/bc.cxx
++++ b/bc.cxx
+@@ -144,6 +144,7 @@ void apply_vbcs(const Param &param, cons
+     // 5: normal component fixed at 0, shear component (not z) fixed, only in 3D
+ 
+     const BC &bc = param.bc;
++    const int far_corner = var.nnode - 1;  // the last node
+ 
+     // diverging x-boundary
+     #pragma omp parallel for default(none) \
+@@ -223,6 +224,9 @@ void apply_vbcs(const Param &param, cons
+                 v[2] = 0;
+                 break;
+ #endif
++            case 100:
++                v[0] = bc.vbc_val_x1 * (*var.coord)[far_corner][0];
++                break;
+             }
+         }
+ #ifdef THREED
+@@ -348,6 +352,9 @@ void apply_vbcs(const Param &param, cons
+ #endif
+                 v[NDIMS-1] = 0;
+                 break;
++            case 100:
++                v[NDIMS-1] = bc.vbc_val_z0 * (*var.coord)[far_corner][NDIMS-1];
++                break;
+             }
+         }
+         else if (flag & BOUNDZ1) {
+diff --git a/benchmarks/maxwell-plot.py b/benchmarks/maxwell-plot.py
+new file mode 100755
+--- /dev/null
++++ b/benchmarks/maxwell-plot.py
+@@ -0,0 +1,76 @@
++#!/usr/bin/python
++from __future__ import print_function, unicode_literals
++import sys, os
++import numpy as np
++from matplotlib import pyplot as plt
++
++sys.path.append(os.getcwd() + '/..')
++
++### 'import 2vtk' will not work because the module name starts with 2,
++### use the following instead:
++_tmp = __import__('2vtk', globals(), locals(), ['Dynearthsol'], -1)
++Dynearthsol = _tmp.Dynearthsol
++
++def solution(time):
++    # analytical solution
++    eta = 1e22
++    mhu = 1e10
++    eps = 1e-14
++    ana = 2 * eps * eta * (1 - np.exp(-mhu * time / eta))    # in Pa
++    return ana
++
++
++def read_result(modelname):
++    des = Dynearthsol(modelname)
++    ndims = des.ndims
++
++    time = np.array(des.time)
++    #print(time)
++
++    s = np.zeros_like(time)
++    s2 = np.zeros_like(time)
++    for i in range(len(des.frames)):
++        frame = des.frames[i]
++        nelem = des.nelem_list[i]
++
++        des.read_header(frame)
++
++        stress = des.read_field(frame, 'stress')
++        s[i] = np.average(stress[:,ndims-1])   # stress_zz averaged over whole domain
++
++        try:
++            stress = des.read_field(frame, 'stress averaged')
++            s2[i] = np.average(stress[:,ndims-1])
++        except KeyError:
++            s2[i] = s[i]
++
++    return time, s, s2
++
++
++#############################################
++
++modelname = sys.argv[1]
++time, s, s2 = read_result(modelname)
++a = solution(time) * 1e-6
++s *= 1e-6
++kyr2sec = 1000 * 365.2422 * 86400
++
++plt.clf()
++d = 15
++plt.plot(time[::d]/kyr2sec, s[::d], 'd', time/kyr2sec, a, 'b', markerfacecolor='w', markersize=6)
++plt.axis([0, 400, 0, 2.1e2])
++plt.xlabel('Time (Kyrs)', fontsize=16)
++plt.ylabel('Stress (MPa)', fontsize=16)
++plt.legend(['DynEartnSol3D', 'Analytical'], loc='upper right', bbox_to_anchor=(0.97, 0.9), numpoints=1)
++
++# plot inset
++plt.axes([0.46, 0.17, 0.4, 0.4])
++plt.plot(time/kyr2sec, 100*(s - a)/a, 'r')
++plt.axis([0, 400, -3e-2, 3e-2])
++plt.ylabel('Relative Error (%))', fontsize=12)
++#plt.plot(time, s - a, 'k', time[1:], s2[1:] - 0.5*(a[1:]+a[:-1]), 'b', markerfacecolor='w', markersize=6)
++#plt.axis([0, 1.3e13, -3e4, 3e4])
++#plt.ylabel('Error (Pa)', fontsize=12)
++
++plt.show()
++

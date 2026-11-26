@@ -82,7 +82,7 @@ jobs:
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 
     - name: test 3d restart
-      working-directory: ./tests/regression
+      working-directory: ./benchmarks-cores
       run: make fresh-restart-cmp CASE=../functional/3d-evp-regular.cfg && rm -rf functional-test.*
 
     - name: make 2d hdf5
@@ -147,7 +147,7 @@ jobs:
         python3 check_remesh_restart.py ../../dynearthsol2d remesh-restart
 
     - name: test 2d restart
-      working-directory: ./tests/regression
+      working-directory: ./benchmarks-cores
       run: make fresh-restart-cmp NDIMS=2 CASE=../functional/2d-ep-irregular.cfg && rm -rf functional-test.*
 
     - name: test 2d RSF ATS benchmark subset

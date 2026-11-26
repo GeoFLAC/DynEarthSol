@@ -38,7 +38,7 @@ def ensure_output_dir(cfg_path: Path) -> None:
 
 
 def candidate_executables(script_dir: Path) -> Iterable[Path]:
-    repo_root = script_dir.parents[2]
+    repo_root = script_dir.parent.parent
     yield repo_root / "dynearthsol2d"
     yield repo_root / "binaries" / "dynearthsol2d"
 

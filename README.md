@@ -416,7 +416,7 @@ small examples and expected results for CPU MPI and multiple GPUs.
 * The [input file generator](https://geoflac.github.io/des-inputgen) builds a
   cfg from a web form.
 * Benchmark cases with analytical solutions are under `benchmarks/`; the
-  regression cases the developers compare against are under `tests/regression/`.
+  regression cases the developers compare against are under `benchmarks-cores/`.
 * **Provenance**: every executable, run and frame records where it came from:
   `strings <exe> | grep '^build\.snapshot\.'` shows the build, `<modelname>.manifest`
   each run, and every frame its own origin. The fields are described in

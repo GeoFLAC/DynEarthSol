@@ -10,7 +10,7 @@ changed sources.
 python tests/functional/mpi/run_pt_mpi.py \
   --serial /path/to/current-master/dynearthsol2d --mpi ./dynearthsol2d.mpi \
   --serial3d /path/to/current-master/dynearthsol3d --mpi3d ./dynearthsol3d.mpi \
-  --ranks 1 3 4 8 --workdir tests/regression/mpi-pt.local
+  --ranks 1 3 4 8 --workdir benchmarks-cores/mpi-pt.local
 ```
 
 Build all executables with HDF5 and MMG. The driver runs both upstream PT methods

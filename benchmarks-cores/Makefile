@@ -52,14 +52,14 @@ NSYS := 0
 VTK := 0
 NDIMS := 3
 INDIR := 0
-EXE := ../../dynearthsol$(NDIMS)d
+EXE := ../dynearthsol$(NDIMS)d
 NUM := 0
 DATE := $(shell date +%Y-%m-%d)
 HOST := $(shell hostname -s)
 KERNEL := CPU
 ifeq ($(ACC), 1)
 	KERNEL := GPU
-	EXE := ../../dynearthsol$(NDIMS)d.gpu
+	EXE := ../dynearthsol$(NDIMS)d.gpu
 endif
 
 # Reject a knob this Makefile does not know: a misspelled CASES= would otherwise
@@ -127,7 +127,7 @@ ifeq ($(INDIR), 1)
 	mkdir -p model-${CASE}-${MODELNAME}
 	cp $(CURDIR)/${EXE} model-${CASE}-${MODELNAME}/
 	cp $(CURDIR)/${CASE} model-${CASE}-${MODELNAME}/
-	@if [ -f "$(CURDIR)/../../snapshot.diff" ]; then cp "$(CURDIR)/../../snapshot.diff" model-${CASE}-${MODELNAME}/; fi
+	@if [ -f "$(CURDIR)/../snapshot.diff" ]; then cp "$(CURDIR)/../snapshot.diff" model-${CASE}-${MODELNAME}/; fi
 	cd model-${CASE}-${MODELNAME} && \
 	rm -f ${MODELNAME}.* && \
 	OMP_NUM_THREADS=${OMP} ${TFLAG} ${DEBUGFLAG} ./$(notdir ${EXE}) $(notdir ${CASE})
@@ -190,7 +190,7 @@ store:
 	rm -rf ${ORIG}
 	mkdir -p ${ORIG}
 	mv ${MODELNAME}.* ${ORIG}
-	cp ../../snapshot.diff ${ORIG}
+	cp ../snapshot.diff ${ORIG}
 
 setjob:
 	# st job to compare
@@ -201,6 +201,6 @@ cmpjob:
 	python ./compare.py orig-job/${MODELNAME} ${CURR}/${MODELNAME} ${FRAME}
 
 vtk:
-	python ../../2vtk.py -m  ${MODELNAME}
+	python ../2vtk.py -m  ${MODELNAME}
 
 .PHONY: all set cmp store test job fresh-restart-cmp

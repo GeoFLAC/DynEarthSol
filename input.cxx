@@ -1344,7 +1344,7 @@ static void declare_parameters(opt::Registry &cfg,
          "In [0, 1). A cell holds markers.markers_per_element times (cell / element measure) markers, nominally "
          "~2.3 in 2D and ~4.2 in 3D at mesh.vt_size 0.5, so at 0.5 a two-marker cell needs both. Default 0.5, "
          "untuned: geoflac's 0.8 (of an element, with no source) leaves out the cell that straddles the slab top "
-         "and cuts the serpentinite band of examples/tectonics/subduction.cfg by more than half.")
+         "and cuts the serpentinite band of examples/subduction.cfg by more than half.")
         ("mat.has_serpentinization", opt::value<bool>(&p.mat.has_serpentinization)->default_value(true),
          "mat.phase_change_option 3: enable mantle<->serpentinite (mantle above the slab serpentinizes inside the "
          "antigorite stability field; serpentinite above 550 C outside it dehydrates back to mantle). Default on. "

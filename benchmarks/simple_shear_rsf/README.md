@@ -32,7 +32,7 @@ The runner can also reproduce the paper's separate zero-velocity healing test:
 ## Full Paper Run
 
 ~~~bash
-cd benchmarks/faults-friction/simple_shear_rsf
+cd benchmarks/simple_shear_rsf
 python3 run_simple_shear_benchmark.py --clean --aging-transient --healing
 python3 plot_simple_shear_benchmark.py -o simple_shear_benchmark.pdf
 ~~~
@@ -57,7 +57,7 @@ The default check runs one steady-state case, one aging-law case, and the
 zero-velocity healing test:
 
 ~~~bash
-cd benchmarks/faults-friction/simple_shear_rsf
+cd benchmarks/simple_shear_rsf
 python3 check_simple_shear_benchmark.py
 ~~~
 
@@ -95,5 +95,5 @@ checker use the Python standard library.
 
 ## Localization examples
 
-The [extensional localization examples](../../geodynamics/localization/README.md)
+The [extensional localization examples](../DESv2.0/rsf/localization/README.md)
 provide the three EP and EP-RSF configurations used in Section 5.3.2, Figure 11.
