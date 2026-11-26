@@ -50,7 +50,7 @@ COPY --from=sdk /opt/nvidia/hpc_sdk /opt/nvidia/hpc_sdk
 #                  submodules itself and aborts outright when git is missing;
 #                  the workflow also marks the checkout a safe.directory first.
 #   ca-certificates  so those submodule fetches can reach github.com.
-#   cmake          configures the mmg submodule for the usemmg=1 job.
+#   cmake          configures the mmg submodule.
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive \
     apt-get install -y --no-install-recommends \
@@ -66,7 +66,7 @@ RUN apt-get update && \
 
 # Fail here, while the image is still being built, rather than after it has been
 # pushed to the :latest tag that every GPU branch pulls. The flags mirror what
-# the workflow's four make variants actually use, so that a prune which removed
+# the workflow's three make variants actually use, so that a prune which removed
 # something they need cannot reach the tag.
 COPY docker/acc_check.cxx docker/nvcc_check.cu /tmp/
 RUN set -eux; \

@@ -33,7 +33,27 @@ bool GoSPLDriver::init_python() {
         return true;  // Already initialized
     }
     
-    // Initialize gospl extensions (this sets up Python)
+    // On Linux an h5py that brings its own libhdf5 (a pip wheel) loads with RTLD_DEEPBIND,
+    // so it takes symbols from its own libraries, not DES's libhdf5.
+    Py_Initialize();
+    if (PyRun_SimpleString(
+            "import ctypes, importlib.util, os, sys\n"
+            "import numpy  # C++ inside, so before the flag\n"
+            "# x86-64: DES holds libhdf5's data and std::cerr by copy relocation, and under the\n"
+            "# flag a library DES shares, or C++, binds the unwritten originals. ASan refuses it.\n"
+            "spec = importlib.util.find_spec('h5py')\n"
+            "own = spec and os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(spec.origin)), 'h5py.libs'))\n"
+            "deep = getattr(os, 'RTLD_DEEPBIND', 0) if own else 0\n"
+            "if hasattr(ctypes.CDLL(None), '__asan_init'): deep = 0\n"
+            "flags = sys.getdlopenflags()\n"
+            "sys.setdlopenflags(flags | deep)\n"
+            "import h5py  # loads all of its compiled modules\n"
+            "sys.setdlopenflags(flags)\n") != 0) {
+        std::cerr << "Failed to load h5py for GoSPL" << std::endl;
+        return false;
+    }
+
+    // Imports GoSPL; Python is already running, so it skips Py_Initialize()
     if (initialize_gospl_extensions() != 0) {
         std::cerr << "Failed to initialize gospl extensions" << std::endl;
         return false;
