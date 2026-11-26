@@ -120,6 +120,9 @@ struct PTWorkspace {
     VelocityConstraints constraints;
     tensor_t lagged_stress;
     array_t old_velocity, undamped;
+    // Node sums of |element force| from the first trial. update_force writes it through a
+    // pointer in device code, so it is here on the heap and not a local of solve_pt.
+    array_t magnitude;
     double_vec stress_fraction, mobility, height, effective_viscosity;
     // Adaptive dynamic relaxation only (PT_option=1); empty otherwise.
     double_vec mass_rows;
@@ -127,8 +130,9 @@ struct PTWorkspace {
 
     PTWorkspace(int nelem, int nnode, bool adaptive)
         : start(nelem), constraints(nnode), lagged_stress(adaptive ? 0 : nelem),
-          old_velocity(nnode), undamped(nnode), stress_fraction(adaptive ? 0 : nelem),
-          mobility(adaptive ? 0 : nnode), height(adaptive ? 0 : nelem), effective_viscosity(nelem),
+          old_velocity(nnode), undamped(nnode), magnitude(nnode),
+          stress_fraction(adaptive ? 0 : nelem), mobility(adaptive ? 0 : nnode),
+          height(adaptive ? 0 : nelem), effective_viscosity(nelem),
           mass_rows(adaptive ? static_cast<std::size_t>(nelem)*NODES_PER_ELEM*NDIMS : 0),
           mass(adaptive ? nnode : 0), momentum(adaptive ? nnode : 0),
           previous_force(adaptive ? nnode : 0) {}
@@ -293,7 +297,6 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
     const double displacement_dt = !initial && param.control.has_moving_mesh ? var.dt : 0;
     const bool running_scale = !initial && param.control.PT_use_running_scale;
     double trial_reference = running_scale ? var.PT_initial_residual_max : 0;
-    array_t magnitude(var.nnode);
     double roundoff_floor = 0;
     PTResult result;
     double best = std::numeric_limits<double>::infinity();
@@ -305,7 +308,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
         result.iterations = iteration+1;
         ++result.evaluations;
         result.residual = evaluate_mechanical_trial(param, var, w, initial, displacement_dt,
-                                                    iteration == 0 ? &magnitude : nullptr);
+                                                    iteration == 0 ? &w.magnitude : nullptr);
         var.l2_residual = result.residual;
         if (iteration == 0) {
             result.initial_residual = result.residual;
@@ -314,7 +317,7 @@ PTResult solve_pt(const Param& param, Variables& var, bool initial)
             // the assembled forces: a step that starts or ends near
             // equilibrium would otherwise never converge.
             roundoff_floor = 1000*std::numeric_limits<double>::epsilon()*
-                absolute_force_rms(var, w.constraints, magnitude);
+                absolute_force_rms(var, w.constraints, w.magnitude);
             result.threshold = std::max(param.control.PT_absolute_tolerance +
                 param.control.PT_relative_tolerance*result.warm_initial_residual, roundoff_floor);
             if (running_scale) {
