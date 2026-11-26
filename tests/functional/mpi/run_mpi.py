@@ -263,6 +263,52 @@ def main():
         results["checks"].append(dict(case=label,ranks=2,bit_exact=exact,timing=timing))
         print(f"{label}: bit-exact",flush=True)
 
+    # A well on a moving mesh pushed from one side: in the first steps only some ranks'
+    # nodes move, yet every rank must assemble the well weights again.
+    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+    cfg.optionxform = str
+    cfg.read(ROOT / "benchmarks/poromechanics/1d-consolidation-des2d_traction.cfg")
+    cfg["sim"].update(modelname="result", max_steps="5", max_time_in_yr="1e20",
+                      output_step_interval="1", output_time_interval_in_yr="1e20")
+    cfg["mesh"].update(meshing_option="1", xlength="1200", zlength="100", resolution="10",
+                       quality_check_step_interval="100")
+    cfg["control"].update(has_PT="no", is_quasi_static="no", gravity="0", fixed_dt="0.001",
+                          has_thermal_diffusion="no", has_moving_mesh="yes",
+                          has_poroelastic_pressure_feedback="no")
+    cfg["bc"].update(vbc_val_x1="1", stress_bc_z1="0", stress_val_z1="0", hbc_z1="0",
+                     num_wells="1", well_x="[1100]", well_z_top="[-25]", well_z_bottom="[-75]",
+                     well_rate="[1e-8]")
+    cfg["ic"].update(weakzone_option="0", has_body_force_adjustment="no")
+    cfg["mat"]["hydraulic_perm"] = "[1e-18]"
+    reference, _ = run("moving-well-parent", cfg, executables["serial"])
+    current, timing = run("moving-well-mpi2", cfg, executables["mpi"], 2)
+    exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
+    results["checks"].append(dict(case="moving-well", ranks=2, bit_exact=exact, timing=timing))
+    print(f"moving-well: {'bit-exact' if exact else 'within rounding of the node sums'}", flush=True)
+
+    # Fluid points outside a .poly mesh, with opposite rates that cancel in every total,
+    # stop the run as in serial: each point must lie on some rank.
+    (work / "box.poly").write_text("4 2 0 0\n0 0 0\n1 0 -100\n2 1200 -100\n3 1200 0\n"
+                                   "4 1\n0 0 1 1\n1 1 2 16\n2 2 3 2\n3 3 0 32\n0\n"
+                                   "1\n0 600 -50 0 0\n")
+    cfg["mesh"].update(meshing_option="90", poly_filename=str(work / "box.poly"))
+    cfg["control"]["has_moving_mesh"] = "no"
+    for key in ("num_wells", "well_x", "well_z_top", "well_z_bottom", "well_rate"):
+        del cfg["bc"][key]
+    cfg["injection"] = dict(enabled="yes", num_points="2", points_x="[-25, 1225]",
+                            points_z="[-43, -57]", rate="[1e-6, -1e-6]")
+    for label, command in (("serial", [str(executables["serial"])]),
+                           ("mpi2", launcher + ["-n", "2", str(executables["mpi"])])):
+        directory = work / f"outside-points-{label}"
+        directory.mkdir()
+        with (directory / "model.cfg").open("w") as f:
+            cfg.write(f)
+        log, _ = execute(command + ["model.cfg"], directory, env, expected_failure=True)
+        if log.count("[DES exit 51]") != 1 or log.count("could not be mapped") != 1:
+            raise RuntimeError(f"{label}: expected one unmapped-point report and DES exit 51")
+    results["checks"].append(dict(case="outside-points", ranks=2, passed=True))
+    print("Points outside the mesh stop the run on two ranks as in serial: passed", flush=True)
+
     for moving in (False, True):
         case = "remesh" if moving else "fixed"
         cfg = configure(2, moving, 1000)
