@@ -2094,9 +2094,9 @@ void build_velocity_constraints(const Param& param, const Variables& var,
         }
     }
     if (mpi_any(var, bad_normal))
-        die_together(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+        die_together(EXIT_CONFIG_VALUE, "An oblique velocity boundary requires a finite unit normal.");
     if (mpi_any(var, bad_horizontal))
-        die_together(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
+        die_together(EXIT_CONFIG_VALUE, "A horizontal oblique velocity boundary requires a nonzero horizontal normal.");
     for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) offset[n][d] = 0;
     apply_vbcs(param, var, offset, homogeneous, true);
@@ -2155,7 +2155,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
                     die(EXIT_CONFIG_VALUE, "A rigid top platen requires free vertical motion at every top node.");
     }
     if (mpi_any(var, inconsistent))
-        die_together(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
+        die_together(EXIT_CONFIG_VALUE, "The velocity boundary constraints have no consistent fixed point.");
 }
 
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,
