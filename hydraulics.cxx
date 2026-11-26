@@ -246,21 +246,6 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
     var.mat->hydro_step_limit = 0;
 }
 
-std::uint64_t mesh_fingerprint(const Variables &var)
-{
-    // FNV-1a over 64-bit words: the coordinates, the mesh size and the remesh count.
-    std::uint64_t h = 1469598103934665603ull;
-    const auto mix = [&h](std::uint64_t word) { h ^= word; h *= 1099511628211ull; };
-    mix(std::uint64_t(var.nnode)); mix(std::uint64_t(var.nelem)); mix(std::uint64_t(var.nremesh));
-    const double *x = var.coord->data();
-    for (std::size_t i = 0; i < std::size_t(var.nnode) * NDIMS; ++i) {
-        std::uint64_t word;
-        std::memcpy(&word, x + i, sizeof word);
-        mix(word);
-    }
-    return h | 1;
-}
-
 void assemble_well_source(const Param &param, const Variables &var)
 {
     const BC &bc = param.bc;
@@ -1653,6 +1638,7 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
     #pragma acc wait
     const int count = old_connectivity.size();
     array_t centers(count);
+    double_vec radii(count, 0.0);
     double radius = 0;
     for (int e = 0; e < count; ++e) {
         for (int d = 0; d < NDIMS; ++d) {
@@ -1661,7 +1647,8 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
                 centers[e][d] += old_coordinate[old_connectivity[e][j]][d]/NODES_PER_ELEM;
         }
         for (int j = 0; j < NODES_PER_ELEM; ++j)
-            radius = std::max(radius,std::sqrt(dist2<ConstArrayAccessor>(centers[e],old_coordinate[old_connectivity[e][j]])));
+            radii[e] = std::max(radii[e],std::sqrt(dist2<ConstArrayAccessor>(centers[e],old_coordinate[old_connectivity[e][j]])));
+        radius = std::max(radius,radii[e]);
     }
     PointCloud cloud(centers);
     NANOKDTree tree(NDIMS,cloud);
@@ -1686,6 +1673,10 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
         tree.radiusSearch(center,search_radius*search_radius,candidates);
         for (const auto &candidate : candidates) {
             const int old = candidate.first;
+            // The search radius covers the largest donor. Simplices whose
+            // enclosing balls about their centroids are apart cannot overlap.
+            const double reach = (radii[old]+local_radius)*(1+1e-12);
+            if (candidate.second > reach*reach) continue;
             const SimplexOverlap overlap = simplex_overlap(old_coordinate.view_const(old_connectivity[old]),coordinate);
             if (overlap.volume == 0) continue;
             if (!heat_density.empty()) mapped_heat[e] += overlap.volume*heat_density[old];

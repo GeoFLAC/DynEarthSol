@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
 #include <sstream>
 
@@ -101,6 +103,21 @@ bool source_totals_match(long double actual, long double expected,
 
 } // namespace
 
+std::uint64_t mesh_fingerprint(const Variables &var)
+{
+    // FNV-1a over 64-bit words: the coordinates, the mesh size and the remesh count.
+    std::uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](std::uint64_t word) { h ^= word; h *= 1099511628211ull; };
+    mix(std::uint64_t(var.nnode)); mix(std::uint64_t(var.nelem)); mix(std::uint64_t(var.nremesh));
+    const double *x = var.coord->data();
+    for (std::size_t i = 0; i < std::size_t(var.nnode) * NDIMS; ++i) {
+        std::uint64_t word;
+        std::memcpy(&word, x + i, sizeof word);
+        mix(word);
+    }
+    return h | 1;
+}
+
 void deposit_point_sources(const Injection &injection, const Variables &var,
                            double start, double stop, PointSourceSink sink, void *context,
                            const double_vec *scale, bool peak_rate)
@@ -121,6 +138,20 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
 #else
     const bool partial = false;
 #endif
+    // The owners belong to this mesh and these point positions.
+    std::uint64_t mesh = mesh_fingerprint(var);
+    for (const double_vec *v : {&injection.points_x, &injection.points_y, &injection.points_z})
+        for (double x : *v) {
+            std::uint64_t word;
+            std::memcpy(&word, &x, sizeof word);
+            mesh = (mesh ^ word) * 1099511628211ull;
+        }
+    mesh |= 1;
+    PointSourceOwners &owners = var.point_owners[&injection];
+    if (owners.mesh != mesh) {
+        owners.element.assign(injection.num_points, -1);
+        owners.weight.assign(std::size_t(injection.num_points)*NODES_PER_ELEM, 0.0);
+    }
     for (int p = 0; p < injection.num_points; ++p) {
         double q[NDIMS];
         q[0] = injection.points_x[p];
@@ -136,20 +167,24 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
             }
         }
 
-        int mapped_element = -1;
-        double mapped_weights[NODES_PER_ELEM];
-        for (int e = 0; e < var.nelem; ++e) {
-            double weights[NODES_PER_ELEM];
-            if (!compute_point_shape_weights(var, e, q, weights)) continue;
+        // The owner changes only with the mesh: find it once per mesh.
+        if (owners.mesh != mesh) {
+            owners.element[p] = -1;
+            for (int e = 0; e < var.nelem; ++e) {
+                double weights[NODES_PER_ELEM];
+                if (!compute_point_shape_weights(var, e, q, weights)) continue;
 
-            // Shared faces can have several candidates. Element order is
-            // stable, so selecting the first maps the requested rate once and
-            // makes ownership deterministic across thread counts.
-            mapped_element = e;
-            for (int i = 0; i < NODES_PER_ELEM; ++i)
-                mapped_weights[i] = weights[i];
-            break;
+                // Shared faces can have several candidates. Element order is
+                // stable, so selecting the first maps the requested rate once and
+                // makes ownership deterministic across thread counts.
+                owners.element[p] = e;
+                for (int i = 0; i < NODES_PER_ELEM; ++i)
+                    owners.weight[p*NODES_PER_ELEM+i] = weights[i];
+                break;
+            }
         }
+        const int mapped_element = owners.element[p];
+        const double *mapped_weights = &owners.weight[p*NODES_PER_ELEM];
         if (mapped_element < 0) {
             if (partial) continue;
             point_source_error(EXIT_RUNTIME_LOOKUP, p, q, var,
@@ -179,6 +214,7 @@ void deposit_point_sources(const Injection &injection, const Variables &var,
                                "did not conserve its requested nodal source total");
         }
     }
+    owners.mesh = mesh;
 
 }
 

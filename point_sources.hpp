@@ -7,6 +7,8 @@
 // for fluid sources and energy/time units for heat sources; the receiver owns
 // conversion to physical inventories. No point locator is duplicated there.
 using PointSourceSink = void (*)(int point, int node, double rate, void *context);
+// Changes whenever the node coordinates or the mesh change; never 0.
+std::uint64_t mesh_fingerprint(const Variables &var);
 void deposit_point_sources(const Injection &injection, const Variables &var,
                            double start, double stop, PointSourceSink sink, void *context,
                            const double_vec *scale = nullptr, bool peak_rate = false);

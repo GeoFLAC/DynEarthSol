@@ -893,6 +893,14 @@ struct SurfaceInfo {
 class MatProps;
 class MarkerSet;
 class VirtualTopology;
+// The element holding each point source and its shape weights there, found
+// on the mesh that mesh_fingerprint() identifies.
+struct PointSourceOwners {
+    std::uint64_t mesh = 0;
+    int_vec element;      // -1: not in this (rank's) mesh
+    double_vec weight;    // NODES_PER_ELEM per point
+};
+
 struct Variables {
 #ifdef USEMPI
     MpiSimulation *mpi = nullptr; // owned by main; null in ordinary serial builds
@@ -1032,6 +1040,7 @@ struct Variables {
     double fluid_reference_temperature = 0; // EOS reference, preserved when temperature boundaries change
     double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
     mutable std::uint64_t fluid_source_mesh = 0; // mesh_fingerprint() fluid_source was assembled on
+    mutable std::map<const Injection*, PointSourceOwners> point_owners; // per point-source set
     double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 
     // For rate-and-state friction
