@@ -206,7 +206,7 @@ def main():
             print(f"{name}: ranks={ranks} OMP={threads}: bit-exact ({len(frames)} frames)",flush=True)
 
     # Exercise optional kernels that the stock examples leave disabled.
-    optional = [(name,ndims) for name in ("hydraulic","pt-hydraulic","thermal-off")
+    optional = [(name,ndims) for name in ("hydraulic","hydraulic-sources","pt-hydraulic","thermal-off")
                 for ndims in ((2,3) if args.serial3d else (2,))]
     optional.append(("hydration",2))
     for name,ndims in optional:
@@ -228,6 +228,25 @@ def main():
                 cfg["control"]["has_hydraulic_diffusion"]="yes"
                 cfg["mat"]["porosity"]="[0.01]"
                 cfg["mat"]["hydraulic_perm"]="[1e-20]"
+            if name=="hydraulic-sources":
+                # A well screen and a point source inside the mesh, so that they
+                # cross rank boundaries, with side flux, rotated permeability and
+                # matrix exchange: everything the distributed pressure step assembles.
+                x, z = float(cfg["mesh"]["xlength"]), float(cfg["mesh"]["zlength"])
+                y = float(cfg["mesh"].get("ylength", "0"))
+                cfg["mat"].update(hydraulic_perm="[1e-16]", permeability_tensor="[2, 1, 1.5, 0.2, 0.3, 0.1]",
+                                  matrix_storage="[1e-10]", matrix_exchange="[1e-17]")
+                cfg["bc"].update(num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",
+                                 well_z_top=f"[{-0.3*z}]", well_z_bottom=f"[{-0.7*z}]",
+                                 well_rate="[1e-6]" if ndims==2 else "[1e-3]",
+                                 hbc_x0="3", hbc_flux="[1e-12, 0, 0, 0, 0, 0]")
+                if not cfg.has_section("injection"): cfg.add_section("injection")
+                cfg["injection"].update(enabled="yes", num_points="1", points_x=f"[{0.63*x}]",
+                                        points_y=f"[{0.55*y}]", points_z=f"[{-0.45*z}]",
+                                        rate="[-1e-6]" if ndims==2 else "[-1e-3]")
+                if ndims==2:
+                    del cfg["injection"]["points_y"]
+                    del cfg["bc"]["well_y"]
             if name=="pt-hydraulic":
                 # The physical-step solver must converge, including its
                 # initial equilibrium, so the case starts from the
