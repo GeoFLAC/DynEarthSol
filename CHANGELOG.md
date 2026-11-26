@@ -353,6 +353,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   geometry. It was the shear modulus times volume times node speed, which had
   the wrong units and counted rigid motion. In 2D it is per unit length out of
   the plane and no Mw is written.
+- The principal stresses of a tensor whose first row is tiny, or whose
+  entries are all tiny, are finite and correct. The 3x3 eigen solver
+  (`dsytrd3`) builds its first Householder reflection from that row scaled
+  into [0.5, 1); it returned infinite principal stresses, which stop a
+  Mohr-Coulomb return with exit 54, or wrong eigenvalues as success.
 
 - Fixed-property saturated remeshing preserves global linear Biot excess
   content, its pending pressure buffer and immobile storage separately.

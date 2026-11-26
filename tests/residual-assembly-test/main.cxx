@@ -3,6 +3,7 @@
 // Mesh: two elements sharing node 0, identical constant stress -> cancellation at node 0.
 // Cases: cancellation, Neumann traction, damping exclusion, body force.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include <limits>
 #include "matprops.hpp"
 #include "geometry.hpp"
+#include "3x3-C/dsyevh3.h"
 
 #ifndef ATOL
 #define ATOL 1e-9
@@ -1749,6 +1751,71 @@ static void test_rejected_mc_return(bool pure_2d) {
     f.update();
 }
 
+#ifdef THREED
+// Two equal principal stresses split only by shears near underflow, the rounding a
+// confined column leaves, send dsyevh3 to its QL fallback with a first row far below
+// the diagonal. The return must match the same state without them.
+static void test_tiny_shear_return() {
+    std::printf("[Mohr-Coulomb return with near-underflow shear]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    set_mc_material(f, 0);
+    const double trial[3]={-1e6,-1e6,-1e5};
+    f.set_principal(trial);
+    f.update();
+    double reference[NSTR];
+    for(int d=0;d<NSTR;++d) reference[d]=f.m->stress[0][d];
+    f.set_principal(trial);
+    for(int e=0;e<f.m->var.nelem;++e) {
+        f.m->stress[e][4]=-4.9e-88;
+        f.m->stress[e][5]=-6e-16;
+    }
+    f.update();
+    for(int d=0;d<NSTR;++d)
+        check("near-underflow shear leaves the return unchanged",f.m->stress[0][d],reference[d]);
+}
+#endif
+
+// dsyevh3 on one symmetric matrix scaled from 1e-300 to 1e30: the eigenvalues scale
+// with it and Q diag(w) Q^T rebuilds it. Below ~1e-7 the eigenvalues come from the QL
+// fallback, whose first Householder reflection is built from the small first row.
+static void test_eigen_scales() {
+    std::printf("[3x3 eigensystem across input scales]\n");
+    const double B[3][3]={{1,0.5,2},{0.5,3,-0.7},{2,-0.7,2}};
+    auto solve=[&](double scale,double w[3],double& rebuilt) {
+        double A[3][3],Q[3][3];
+        for(int i=0;i<3;++i) for(int j=0;j<3;++j) A[i][j]=scale*B[i][j];
+        // A NaN would drop out of std::max and break the sort below: check
+        // finiteness first and stop there.
+        bool solved=dsyevh3(A,Q,w)==0;
+        for(int i=0;i<3;++i) {
+            solved=solved && std::isfinite(w[i]);
+            for(int j=0;j<3;++j) solved=solved && std::isfinite(Q[i][j]);
+        }
+        rebuilt=0;
+        if(!solved) return false;
+        for(int i=0;i<3;++i) for(int j=0;j<3;++j) {
+            double a=0;
+            for(int m=0;m<3;++m) a+=Q[i][m]*w[m]*Q[j][m];
+            rebuilt=std::max(rebuilt,std::fabs(a-A[i][j])/(3*scale));
+        }
+        std::sort(w,w+3);
+        return true;
+    };
+    double unit[3],rebuilt;
+    check("unit-scale eigensystem is finite",solve(1,unit,rebuilt),1);
+    for(int p=-300;p<=30;p+=10) {
+        const double scale=std::pow(10.0,p);
+        double w[3];
+        const bool solved=solve(scale,w,rebuilt);
+        double eigen=0;
+        for(int i=0;i<3;++i) eigen=std::max(eigen,std::fabs(w[i]/scale-unit[i])/3);
+        const bool ok=solved && eigen<1e-12 && rebuilt<1e-12;
+        if(!ok) std::printf("  scale 1e%d: %s, eigenvalue error %.3g, rebuilt error %.3g\n",
+                            p,solved?"finite":"failed or not finite",eigen,rebuilt);
+        check("eigensystem scales with the matrix",ok,1);
+    }
+}
+
 static void test_pt_norm() {
     std::printf("[PT projected residual reduction]\n");
     auto* m = new Fixture();
@@ -2528,6 +2595,10 @@ int main(int argc, char** argv) {
 #endif
     }
     return_mapping_option=0;
+#ifdef THREED
+    test_tiny_shear_return();
+#endif
+    test_eigen_scales();
     test_constraints();
     test_cancellation();
     test_traction();
