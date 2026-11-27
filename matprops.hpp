@@ -2,7 +2,6 @@
 #define DYNEARTHSOL3D_MATPROPS_HPP
 
 #include "parameters.hpp"
-#include "unsaturated.hpp"
 
 #pragma acc routine seq
 double ref_pressure(const Param& param, double z);
@@ -50,11 +49,6 @@ public:
     double alpha_biot(int e) const;
     #pragma acc routine seq
     double beta_mineral(int e) const;
-    // Retention law of material m; has_retention when any law is unsaturated.
-    #pragma acc routine seq
-    const Retention &retention(int m) const { return retention_laws[m]; }
-    const bool has_retention;
-
     // rate-and-state friction parameters
     #pragma acc routine seq
     double d_a(int e) const;
@@ -216,7 +210,6 @@ private:
     double_vec porosity, hydraulic_perm, fluid_rho0;
     double_vec fluid_alpha, fluid_bulk_modulus, fluid_visc;
     double_vec biot_coeff, bulk_modulus_s;
-    std::vector<Retention> retention_laws;
 
     // rate-and-state friction
     double_vec direct_a, evolution_b, characteristic_velocity, characteristic_distance;

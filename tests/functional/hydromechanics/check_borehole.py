@@ -64,7 +64,7 @@ def config(h, steps):
                       bulk_modulus=f"[{m['bulk']!r}]", shear_modulus=f"[{m['shear']!r}]", biot_coeff=f"[{m['biot']!r}]",
                       porosity=f"[{m['porosity']!r}]", fluid_bulk_modulus=f"[{m['fluid_bulk']!r}]",
                       bulk_modulus_s=f"[{m['grain_bulk']!r}]", hydraulic_perm=f"[{m['permeability']!r}]",
-                      fluid_visc=f"[{m['viscosity']!r}]", fluid_alpha='[0]', retention_model='[0]')
+                      fluid_visc=f"[{m['viscosity']!r}]", fluid_alpha='[0]')
     return cfg
 
 

@@ -22,18 +22,9 @@ def main():
             expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10,
                         message='Invalid hydraulic properties for material 0')
         extra = [
-            ('ic', {'water_table_z': 'nan'}),
-            ('ic', {'water_table_z': 'inf'}),
-            ('ic', {'water_table_z': '-inf'}),
             ('bc', {'hbc_z1': '4'}),
             ('bc', {'num_hbc_schedule': '2', 'hbc_schedule_time_in_yr': '[1,0]',
                     'hbc_schedule_ratio': '[1,1]'}),
-            ('mat', {'retention_model': '[4]'}),
-            ('mat', {'retention_model': '[1]', 'retention_alpha': '[0]'}),
-            ('mat', {'retention_model': '[1]', 'retention_n': '[1]'}),
-            ('mat', {'retention_model': '[2]', 'retention_n': '[0]'}),
-            ('mat', {'retention_model': '[3]', 'residual_saturation': '[1]'}),
-            ('mat', {'retention_model': '[1]', 'porosity': '[0]'}),
         ]
         for section, updates in extra:
             cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')

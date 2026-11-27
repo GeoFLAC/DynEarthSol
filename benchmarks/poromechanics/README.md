@@ -2,9 +2,8 @@
 
 Inputs, analytical references and study runners live here. The complete theory,
 benchmark comparisons, application figures and figure scripts live in the
-[DES manual](https://geoflac.github.io/des3d/). Figure sources are in des3d's
-`docs/benchmarks/poromechanics/img/_src/` and
-`docs/tutorial/groundwater-slopes/img/_src/`; set `DES_DIR` to this checkout.
+[DES manual](https://geoflac.github.io/des3d/). Set `DES_DIR` to this checkout when using its
+`docs/benchmarks/poromechanics/img/_src/` figure scripts.
 The [implementation notes](https://geoflac.github.io/des3d/docs/theory/poromechanics) describe the solver.
 Generated study results are ignored by Git. Run and check them on a compute host.
 
@@ -16,7 +15,6 @@ make -j2 ndims=3
 python3 tests/functional/hydromechanics/check_theis_reference.py -v
 python3 tests/functional/hydromechanics/check_terzaghi_reference.py -v
 python3 tests/functional/hydromechanics/check_averaged_aquifer_reference.py -v
-python3 tests/functional/hydromechanics/check_unsaturated_reference.py -v
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol2d benchmarks/poromechanics/results/wells-2d
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmarks/poromechanics/results/wells-3d --ndims 3
 python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline
@@ -104,13 +102,3 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
   for an infinite aquifer or finite annulus, with numerical Laplace inversion
   for the finite case. Bear-Corapcioglu is a limiting case. See the
   [derivation and storage convention](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer).
-- `unsaturated_reference.py`: retention laws, conservative explicit column
-  updates and transient/steady infiltration references. The
-  [unsaturated formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics#partly-saturated-flow) describes
-  retention, element-aware Bishop coupling and their separate reference
-  checks, including the U0-U9 levels.
-  `check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY [--ndims 3]` runs transient,
-  steady, mechanics-mode and fixed/remeshed restart checks. The fixtures
-  explicitly disable heat for these isothermal comparisons.
-
-The manual figure scripts read saved unsaturated 2D/3D profiles.

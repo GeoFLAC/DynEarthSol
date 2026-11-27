@@ -94,10 +94,6 @@ from numpy.linalg  import eigh
 from fractions import Fraction
 from Dynearthsol import Dynearthsol
 
-# Fields that a frame holds only under some fluid-flow options.
-OPTIONAL_ELEM_FIELDS = ('saturation', 'effective saturation', 'relative permeability',
-                        'bulk density')
-
 # Save in ASCII or encoded binary.
 # Some old VTK programs cannot read binary VTK files.
 output_in_binary = True
@@ -424,7 +420,6 @@ def process_single_frame(args):
         convert_field(des, frame, 'density', fvtu)
         convert_field(des, frame, 'material', fvtu)
         convert_field(des, frame, 'viscosity', fvtu)
-        convert_optional_fields(des, frame, OPTIONAL_ELEM_FIELDS, fvtu)
         
         # element number for debugging
         vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
@@ -872,15 +867,6 @@ def convert_field(des, frame, name, fvtu):
     else:
         vtk_dataarray(fvtu, field, name)
     return
-
-
-def convert_optional_fields(des, frame, names, fvtu):
-    '''Convert those of names that this frame holds.'''
-    for name in names:
-        try:
-            convert_field(des, frame, name, fvtu)
-        except KeyError:
-            pass
 
 
 def vtk_dataarray(f, data, data_name=None, data_comps=None):

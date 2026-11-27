@@ -1076,9 +1076,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Initial pressure: 0 hydrostatic/excess, 1 linear x profile between prescribed pressure faces, 2 uniform.")
         ("ic.pore_pressure_value", opt::value<double>(&p.ic.pore_pressure_value)->default_value(0),
          "Uniform initial pressure in Pa for pore_pressure_option=2.")
-        ("ic.water_table_z", opt::value<double>(&p.ic.water_table_z)->default_value(0.0),
-         "Height of the initial hydrostatic water table (m): p = -rho_f*g*(z - water_table_z), "
-         "negative (suction) above it. The default 0 is the original surface.\n")
          ("ic.has_body_force_adjustment", opt::value<bool>(&p.ic.has_body_force_adjustment)->default_value(false),
          "Conducting PT loop to get initial stress field from inital guess")
         ("ic.initial_stress_option", opt::value<int>(&p.ic.initial_stress_option)->default_value(0),
@@ -1307,17 +1304,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Biot-Willis coefficient (HM coupling coeff) '[d0, d1, d2, ...]' (no unit)")
         ("mat.bulk_modulus_s", opt::list()->default_value("[37e9]"),
          "Bulk modulus of the solid grains or minerals '[d0, d1, d2, ...]' (Pa)")
-        ("mat.retention_model", opt::list()->default_value("[0]"),
-         "Retention law of the materials '[m0, m1, ...]': 0 saturated, "
-         "1 van Genuchten-Mualem, 2 Brooks-Corey-Burdine, 3 Gardner exponential.")
-        ("mat.retention_alpha", opt::list()->default_value("[1e-4]"),
-         "Retention alpha of the materials '[d0, d1, ...]' (1/Pa); "
-         "1/alpha is the Brooks-Corey air-entry pressure.")
-        ("mat.retention_n", opt::list()->default_value("[2]"),
-         "Retention exponent '[d0, d1, ...]': van Genuchten n > 1, "
-         "or the Brooks-Corey pore-size index > 0. Unused by Gardner.")
-        ("mat.residual_saturation", opt::list()->default_value("[0]"),
-         "Residual saturation of the materials '[d0, d1, ...]', 0 <= Sr < 1.")
         // for rate-and-state friction
         ("mat.direct_a", opt::list()->default_value("[0.020]"),
          "rate-and-state friction parameter a '[d0, d1, d2, ...]' (-)")
@@ -1543,17 +1529,10 @@ static void check_mpi_support(const Param& p)
             die(EXIT_CONFIG_VALUE);
         }
     }
-    // Saturated pore pressure, wells, fluid point sources and hydraulic
-    // boundaries run distributed. The coupled models below advance fields that
-    // only the serial kernels update.
-    const auto any_nonzero = [](const int_vec& v) {
-        return std::any_of(v.begin(), v.end(), [](int x) { return x != 0; });
-    };
     const int stress_bc[] = {p.bc.stress_bc_x0, p.bc.stress_bc_x1, p.bc.stress_bc_y0,
                              p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
     struct Feature { const char* name; bool used; };
     const Feature features[] = {
-        {"mat.retention_model", any_nonzero(p.mat.retention_model)},
         {"bc.vbc_z1 = 8", p.bc.vbc_z1 == 8},
         {"bc.stress_bc_* = 4", std::find(std::begin(stress_bc), std::end(stress_bc), 4) != std::end(stress_bc)},
     };
@@ -2041,8 +2020,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
         }
 
-        if (!std::isfinite(p.ic.water_table_z))
-            die(EXIT_CONFIG_VALUE, "ic.water_table_z must be finite.");
         if (p.ic.initial_stress_option != 0 &&
             p.ic.initial_stress_option != 1) {
             die(EXIT_CONFIG_VALUE,
@@ -2448,33 +2425,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                         "and nonnegative finite shear_modulus and hydraulic_perm.");
                 }
             }
-        }
-        get_numbers(vm, "mat.retention_model", p.mat.retention_model, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.retention_alpha", p.mat.retention_alpha, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.retention_n", p.mat.retention_n, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.residual_saturation", p.mat.residual_saturation, p.mat.nmat, nmat_key, true);
-        {
-            bool active = false;
-            for (int m = 0; m < p.mat.nmat; ++m) {
-                const int model = p.mat.retention_model[m];
-                if (model < 0 || model > 3)
-                    die(EXIT_CONFIG_VALUE, "mat.retention_model must be 0, 1, 2 or 3.");
-                if (model == 0) continue;
-                active = true;
-                const double a = p.mat.retention_alpha[m], n = p.mat.retention_n[m];
-                const double sr = p.mat.residual_saturation[m];
-                if (!(a > 0 && std::isfinite(a)) || !(sr >= 0 && sr < 1) ||
-                    (model == 1 && !(n > 1 && std::isfinite(n))) ||
-                    (model == 2 && !(n > 0 && std::isfinite(n))) ||
-                    !(p.mat.porosity[m] > 0)) {
-                    std::cerr << "Invalid retention properties for material " << m << ".\n";
-                    die(EXIT_CONFIG_VALUE,
-                        "Retention laws require finite alpha > 0, 0 <= residual_saturation < 1, "
-                        "porosity > 0, and retention_n > 1 (van Genuchten) or > 0 (Brooks-Corey).");
-                }
-            }
-            if (active && !p.control.has_hydraulic_diffusion)
-                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 requires has_hydraulic_diffusion=true.");
         }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);

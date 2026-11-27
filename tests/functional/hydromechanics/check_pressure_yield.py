@@ -61,13 +61,13 @@ def config(ndims, h, steps, mode='pt', scaling=1e5, pt_option=None):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
     bc.update(stress_bc_z1='3', stress_val_z1=repr(-Q), hbc_z1='2', hbc_pressure=f'[0,0,0,0,0,{DP!r}]', num_hbc_schedule='2',
               hbc_schedule_time_in_yr=f'[0, {DURATION/YEAR2SEC!r}]', hbc_schedule_ratio='[0, 1]')
-    cfg['ic'].update(water_table_z='0', pore_pressure_option='0', weakzone_option='0')
+    cfg['ic'].update(pore_pressure_option='0', weakzone_option='0')
     m = MAT
     cfg['mat'].update(rheology_type='elasto-plastic', rho0=f"[{m['rho_solid']!r}]", bulk_modulus=f"[{m['bulk']!r}]",
                       shear_modulus=f"[{m['shear']!r}]", biot_coeff=f"[{m['biot']!r}]", porosity=f"[{m['porosity']!r}]",
                       fluid_bulk_modulus=f"[{m['fluid_bulk']!r}]", bulk_modulus_s=f"[{m['grain_bulk']!r}]",
                       hydraulic_perm=f"[{m['permeability']!r}]", fluid_visc=f"[{m['viscosity']!r}]",
-                      fluid_rho0=f"[{m['rho_fluid']!r}]", fluid_alpha='[0]', retention_model='[0]',
+                      fluid_rho0=f"[{m['rho_fluid']!r}]", fluid_alpha='[0]',
                       cohesion0=f"[{m['cohesion']!r}]", cohesion1=f"[{m['cohesion']!r}]",
                       friction_angle0=f"[{m['friction']!r}]", friction_angle1=f"[{m['friction']!r}]",
                       dilation_angle0='[0]', dilation_angle1='[0]', max_tension='1e9')

@@ -2101,9 +2101,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         ConstConnAccessor conn = (*var.connectivity)[e];
         int rejection = 0;
 
-        // Centroid interpolations, each gated on the branch that reads it: ungated they cost
-        // 2 + NDIMS nodal gathers per element per step in every run. Absolute pressure
-        // is needed by Bishop increments and the effective-stress strength criterion.
         double dpp = 0.0;
         double pore_strength_pressure = 0;
         const bool increment = has_hydraulic_diffusion;
@@ -2117,7 +2114,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             // Initial equilibrium must test skeleton strength too; it only
             // suppresses consumption of pending pressure increments.
             const double alpha = var.mat->alpha_biot(e);
-            if (increment) dpp = pressure.bishop * alpha;
+            if (increment) dpp = pressure.raw * alpha;
             if (strength) pore_strength_pressure = pressure.strength * alpha;
         }
 

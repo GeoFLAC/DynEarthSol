@@ -199,28 +199,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
     bin.write_array(*var.ppressure, "pore pressure", var.ppressure->size());
     if (param_.control.has_hydraulic_diffusion && var.fluid_balance)
         bin.write_aux_array(*var.fluid_balance, "fluid balance", var.fluid_balance->size());
-    if (param_.control.has_hydraulic_diffusion && var.mat->has_retention) {
-        double_vec saturation(var.nelem), effective_saturation(var.nelem), relperm(var.nelem), density(var.nelem);
-#ifndef ACC
-        #pragma omp parallel for default(none) shared(var, saturation, effective_saturation, relperm, density)
-#endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
-        for (int e = 0; e < var.nelem; ++e) {
-            ConstConnAccessor conn = (*var.connectivity)[e];
-            const int_vec &markers = (*var.elemmarkers)[e];
-            double se;
-            const double s = element_mean_saturation(*var.mat, markers, conn, *var.ppressure, &se);
-            const double kr = element_mean_kr(*var.mat, markers, conn, *var.ppressure);
-            saturation[e] = s;
-            effective_saturation[e] = se;
-            relperm[e] = kr;
-            density[e] = hydraulic_bulk_density(*var.mat, e, s);
-        }
-        bin.write_cell_array(saturation, "saturation", saturation.size());
-        bin.write_cell_array(effective_saturation, "effective saturation", effective_saturation.size());
-        bin.write_cell_array(relperm, "relative permeability", relperm.size());
-        bin.write_cell_array(density, "bulk density", density.size());
-    }
     bin.write_cell_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
 
     bin.write_cell_array(*var.plstrain, "plastic strain", var.plstrain->size());

@@ -88,8 +88,7 @@ def config(h, steps, duration):
     cfg['mat'].update(bulk_modulus=f"[{MAT['bulk']}]", shear_modulus=f"[{MAT['shear']}]",
                       biot_coeff=f"[{MAT['biot']}]", porosity=f"[{MAT['porosity']}]",
                       fluid_bulk_modulus=f"[{MAT['fluid_bulk']}]", bulk_modulus_s=f"[{MAT['grain_bulk']}]",
-                      hydraulic_perm=f"[{MAT['permeability']}]", fluid_visc=f"[{MAT['viscosity']}]",
-                      retention_model='[0]')
+                      hydraulic_perm=f"[{MAT['permeability']}]", fluid_visc=f"[{MAT['viscosity']}]")
     return cfg
 
 

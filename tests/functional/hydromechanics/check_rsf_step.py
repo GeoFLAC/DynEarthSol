@@ -4,7 +4,7 @@
 The material-strength cell (check_pore_strength.py) imposes normal
 extensions +e and -e on every node, so stress follows the constitutive law
 alone: principal shear t = 2 G e until yield, then the Mohr-Coulomb load
-t_y = c cos(phi) + (C - q) sin(phi) at confinement C and Bishop pressure q.
+t_y = c cos(phi) + (C - q) sin(phi) at confinement C and Biot-weighted pore pressure q.
 With EP-RSF, tan(phi) = mu follows
 
     mu = mu_0 + a ln(V/V_0) + b ln(V_0 theta/D_c),   d(theta)/dt = 1 - V theta/D_c   (aging law),
@@ -36,7 +36,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import check_pore_strength as ps
 
-cell = ps.cell
+from Dynearthsol import Dynearthsol, scan_frames
+
 G, COHESION, C, P, BIOT = ps.G, ps.COHESION, 1e6, 8e5, 1.0
 A, B, DC = .01, .015, 1e-3
 MU0 = math.tan(ps.PHI)
@@ -51,7 +52,7 @@ from des_case import provenance, run_des, write_json
 def configs(refine):
     dt = 1.0/refine
     n1, n2 = int(T1*refine), int(T2*refine)
-    base = ps.config(2, 'elasto-plastic-rate-state-friction', C, P, BIOT, 0)
+    base = ps.config(2, 'elasto-plastic-rate-state-friction', C, P, BIOT)
     base['sim'].update(max_steps=str(n1), output_step_interval='1', checkpoint_frame_interval='1',
                        has_initial_checkpoint='true', max_time_in_yr='1')
     base['control'].update(fixed_dt=repr(dt), rsf_slip_rate_projection_option='1')
@@ -90,7 +91,7 @@ def continuum(t):
 
 
 def read(folder, model_name, after=0.0):
-    model = cell.Dynearthsol(str(folder/model_name)); rows = cell.scan_frames(str(folder/model_name))
+    model = Dynearthsol(str(folder/model_name)); rows = scan_frames(str(folder/model_name))
     out = []
     for row in rows:
         if row['time'] <= after + 1e-9: continue      # a restart also saves its starting frame

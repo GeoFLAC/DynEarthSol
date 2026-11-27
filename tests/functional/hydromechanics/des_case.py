@@ -133,15 +133,6 @@ def restart_check(executable, cfg_or_path, case, steps, restart_frame, require_r
     return run_solver(command, log=case.parent/(case.name+'.log'), env=env, check=True, timeout=timeout)
 
 
-def retention_options(*laws):
-    """[mat] retention lists for one unsaturated_reference.Retention law per material."""
-    from unsaturated_reference import MODELS
-    return dict(retention_model=json.dumps([MODELS.index(law.model)+1 for law in laws]),
-                retention_alpha=json.dumps([law.alpha for law in laws]),
-                residual_saturation=json.dumps([law.sr for law in laws]),
-                retention_n=json.dumps([law.n if law.n is not None else 2.0 for law in laws]))
-
-
 def layer_strain(coord, conn, ezz, h, origin, height):
     """Mean element ezz of each layer of thickness h in a structured column, counted from z = origin."""
     distance = np.abs(coord[conn][:, :, -1].mean(axis=1) - origin)

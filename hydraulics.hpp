@@ -76,84 +76,19 @@ inline double hydraulic_diffusivity(const Param &param, const MatProps &mat, int
     return mat.perm(e) / mat.mu_fluid(e) / hydraulic_storage(param, mat, e);
 }
 
-// Bulk density with the pores filled to saturation sat. Gravity passes the
-// element saturation; mass and wave-speed estimates keep the saturated default.
+// Bulk density of the saturated solid and fluid mixture.
 #pragma acc routine seq
-inline double hydraulic_bulk_density(const MatProps &mat, int e, double sat = 1)
+inline double hydraulic_bulk_density(const MatProps &mat, int e)
 {
     const double phi = mat.phi(e);
-    return mat.rho(e) * (1 - phi) + mat.rho_fluid_reference(e) * phi * sat;
-}
-
-// Marker-weighted relative permeability of an element's materials at pressure p.
-#pragma acc routine seq
-inline double element_kr(const MatProps &mat, const int_vec &markers, double p)
-{
-    if (mat.nmat == 1) return retention_kr(mat.retention(0), p);
-    double kr = 0;
-    int total = 0;
-    for (int m = 0; m < mat.nmat; ++m) {
-        if (markers[m] == 0) continue;
-        kr += markers[m] * retention_kr(mat.retention(m), p);
-        total += markers[m];
-    }
-    return kr / total;
-}
-
-// Marker-weighted effective saturation Se of an element's materials at
-// pressure p; sat, if given, receives their saturation S = Sr + (1-Sr)*Se.
-// Bishop's chi = Se, so the element's Bishop pressure is Se*p. Both are
-// exactly 1 where every present law is saturated.
-#pragma acc routine seq
-inline double element_se(const MatProps &mat, const int_vec &markers, double p, double *sat = nullptr)
-{
-    double se = 0, s = 0;
-    int total = 0;
-    for (int m = 0; m < mat.nmat; ++m) {
-        if (markers[m] == 0) continue;
-        const Retention &r = mat.retention(m);
-        const double se_m = retention_se(r, p);
-        se += markers[m] * se_m;
-        s += markers[m] * retention_sat_of_se(r, se_m);
-        total += markers[m];
-    }
-    if (sat) *sat = s / total;
-    return se / total;
-}
-
-// Element means of the nodal saturation S and effective saturation Se
-// (Bishop's chi), and of the relative permeability kr: one averaging rule for
-// the body force, the Darcy flux, the pressure step and the output.
-#pragma acc routine seq
-inline double element_mean_saturation(const MatProps &mat, const int_vec &markers,
-                                      ConstConnAccessor conn, const double_vec &p,
-                                      double *se_mean = nullptr)
-{
-    double s = 0, se = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        double sat;
-        se += element_se(mat, markers, p[conn[j]], &sat);
-        s += sat;
-    }
-    if (se_mean) *se_mean = se / NODES_PER_ELEM;
-    return s / NODES_PER_ELEM;
-}
-
-#pragma acc routine seq
-inline double element_mean_kr(const MatProps &mat, const int_vec &markers,
-                              ConstConnAccessor conn, const double_vec &p)
-{
-    double kr = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) kr += element_kr(mat, markers, p[conn[j]]);
-    return kr / NODES_PER_ELEM;
+    return mat.rho(e) * (1 - phi) + mat.rho_fluid_reference(e) * phi;
 }
 
 struct ElementPressure {
-    double raw, bishop, strength;
+    double raw, strength;
 };
 
 // The hydraulic residual and constitutive increment use opposite signs.
-// Keep each subtraction order, including the saturated raw-pressure path.
 #pragma acc routine seq
 template <bool residual>
 inline ElementPressure element_pressure(const Variables &var, int e,
@@ -161,10 +96,7 @@ inline ElementPressure element_pressure(const Variables &var, int e,
                                         bool increment, bool strength)
 {
     ConstConnAccessor conn = (*var.connectivity)[e];
-    const int_vec &markers = (*var.elemmarkers)[e];
-    const bool retention = increment && var.mat->has_retention;
-    ElementPressure value = {0, 0, 0};
-    bool saturated = true;
+    ElementPressure value = {0, 0};
     #pragma acc loop seq
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
         const int n = conn[j];
@@ -172,17 +104,8 @@ inline ElementPressure element_pressure(const Variables &var, int e,
             if constexpr (residual) value.raw -= dp[n] / NODES_PER_ELEM;
             else value.raw += dp[n] / double(NODES_PER_ELEM);
         }
-        if (!retention && !strength) continue;
-        const double se = element_se(*var.mat, markers, p[n]);
-        if (strength) value.strength += se * p[n] / NODES_PER_ELEM;
-        if (!retention) continue;
-        const double old = p[n] + dp[n];
-        const double se_old = element_se(*var.mat, markers, old);
-        if (se != 1 || se_old != 1) saturated = false;
-        if constexpr (residual) value.bishop += (se * p[n] - se_old * old) / NODES_PER_ELEM;
-        else value.bishop += (se_old * old - se * p[n]) / double(NODES_PER_ELEM);
+        if (strength) value.strength += p[n] / NODES_PER_ELEM;
     }
-    if (saturated) value.bishop = value.raw;
     return value;
 }
 

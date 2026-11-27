@@ -16,7 +16,6 @@ from pathlib import Path
 import sys
 
 import numpy as np
-from scipy.optimize import brentq
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks/poromechanics'), str(ROOT/'tests/functional')]
@@ -125,57 +124,6 @@ def exact_continuation(exe, folder, cfg, source):
     return compare_continuation(folder, str(source), resumed)
 
 
-def retention_check(exe, folder, ndims, replay=False):
-    """Independent scalar content inversion for uniform Gardner wetting.
-
-    This checks the implemented strain-driven retention rate and raw pressure
-    buffer, not a finite nonlinear porosity/deformation mass law.
-    """
-    cfg = configuration('pt', 10)
-    initial, coefficient = -5000., 2e-4
-    cfg['ic']['pore_pressure_value'] = repr(initial)
-    cfg['mat'].update(retention_model='[3]', retention_alpha=f'[{coefficient}]', residual_saturation='[0]')
-    model = Dynearthsol(str(folder/'column')) if replay else run_model(exe, folder, cfg, 'column')
-    assert int(model.ndims) == ndims
-    rows = scan_frames(str(folder/'column'))
-    x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
-    volume = simplex_volumes(x, conn)
-    lag = ALPHA**2/(BULK+(SHEAR/3 if ndims == 2 else 0))
-    scale = SPEED*DURATION*volume.sum()
-    reference, previous_increment, previous_time = initial, 0., 0.
-    previous = np.full(len(x), initial)
-    source, worst_budget, worst_pressure, plastic = 0., 0., 0., 0.
-    history = []
-    for row in rows:
-        frame, time = row['frame'], row['time']
-        p = model.read_field(frame, 'pore pressure')
-        if frame:
-            de = -SPEED*(time-previous_time)
-            se = math.exp(coefficient*reference)
-            increment = brentq(lambda d: (STORAGE+lag)*d + PHI*se*math.expm1(coefficient*d) +
-                               ALPHA*se*de - lag*previous_increment, -1000, 1000, xtol=1e-12)
-            reference += increment
-            previous_increment = increment
-            source += ALPHA*de*float(volume @ np.exp(coefficient*previous[conn]).mean(axis=1))
-        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment')
-        content = float(volume @ (STORAGE*(p[conn].mean(axis=1)-initial) +
-                                  PHI*(np.exp(coefficient*p[conn]).mean(axis=1)-math.exp(coefficient*initial))))
-        pending = -lag*float(volume @ dp[conn].mean(axis=1))
-        worst_budget = max(worst_budget, abs(content+source+pending)/scale)
-        worst_pressure = max(worst_pressure, float(np.max(abs(p-reference)))/abs(initial))
-        plastic = max(plastic, float(model.read_field(frame, 'plastic strain').max()))
-        history.append([time, reference, float(p.mean()), content, source, pending])
-        previous, previous_time = p, time
-    assert plastic > 1e-5 and np.max(previous) < 0, (plastic, previous.max())
-    assert worst_budget < 1e-8 and worst_pressure < 1e-9, (worst_budget, worst_pressure)
-    np.savetxt(folder/'history.csv', history, delimiter=',', comments='',
-               header='time_s,reference_pressure_Pa,mean_pressure_Pa,retention_content_m3,strain_source_m3,pending_split_m3')
-    return dict(case='pt-gardner', dimension=ndims, frames=len(rows),
-                max_rate_budget_error_over_imposed_volume=worst_budget,
-                max_pressure_error_over_initial_scale=worst_pressure, max_plastic_strain=plastic,
-                scope='Uniform nonlinear retention rate and fixed-stress pressure buffer; no finite porosity-remapping claim.')
-
-
 def edge_return(axial, lateral, nphi, npsi):
     """Sum of two equal lateral flow multipliers at the compression edge."""
     lame = BULK-2*SHEAR/3
@@ -258,9 +206,7 @@ def main():
         for index, previous in enumerate(report['cases']):
             name = previous['case']; folder = output/name
             dim = previous['dimension']
-            if name == 'pt-gardner':
-                current = retention_check(exe, folder, dim, replay=True)
-            elif name == 'pt-rsf':
+            if name == 'pt-rsf':
                 current = rsf_check(exe, folder, dim, replay=True)
             else:
                 method = 'pt' if name.startswith('pt-') else 'explicit'
@@ -304,9 +250,6 @@ def main():
         report['cases'].append(item)
         write_json(output/'summary.json', report)
         print(json.dumps(item), flush=True)
-    retained = output/'pt-gardner'; retained.mkdir()
-    report['cases'].append(retention_check(exe, retained, args.ndims))
-    print(json.dumps(report['cases'][-1]), flush=True)
     rsf = output/'pt-rsf'; rsf.mkdir()
     report['cases'].append(rsf_check(exe, rsf, args.ndims))
     print(json.dumps(report['cases'][-1]), flush=True)

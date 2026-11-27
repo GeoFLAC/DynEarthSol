@@ -51,10 +51,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   using shared-node connectivity and a communication volume objective; meshes with
   no more elements than ranks use recursive coordinate bisection, and a one-rank
   GPU run keeps every element on its rank.
-- Same-input slope and rainfall replays check the plastic fluid-source
-  correction against the existing fixed-slip results. An independent
-  saturated content checker detects defects hidden by a small pressure
-  residual and includes the pending PT increment at nonzero restarts.
+- The saturated fluid-content check includes the pending PT pressure increment
+  when integrating from a checkpoint.
 
 - Terzaghi load-history superposition and prescribed material-regime
   studies check consolidation and recovery after partial unloading, with
@@ -83,10 +81,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Explicit hydraulic transport supports scheduled pressure/flux boundaries and
   a checkpointed fluid-balance diagnostic.
   Large fixed timesteps use stable hydraulic substeps.
-- Explicit unsaturated (Richards) transport, selected per material by
-  `mat.retention_model` (van Genuchten-Mualem, Brooks-Corey-Burdine or Gardner),
-  and an initial hydrostatic water table, `ic.water_table_z`. Saturated
-  materials and the default inputs give unchanged results.
 
 - Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
   through a screen with a shared rate schedule. Each step applies the exact
@@ -96,11 +90,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   to finite well/domain radii and compressible fluid/grains, with standalone
   NumPy/SciPy checks. A reproducible thin-slab DES comparison reports pressure
   and strain errors within its small-strain slab assumptions.
-
-- Standalone unsaturated retention and infiltration references exercise a
-  conservative explicit column update. Production transport is integrated;
-  element-aware Bishop coupling and saturation-dependent density have
-  separate material and coupled-drainage reference checks.
 
 - Reproducible hydromechanics figures compare existing DES 2D/3D Terzaghi
   runs with analytical pressure and settlement, and show Theis reference
@@ -354,8 +343,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - Fixed-property saturated remeshing preserves global linear Biot excess
   content and its pending pressure buffer separately. Geometric domain
-  transfer and prescribed-pressure reactions have their own report;
-  retentive mass remains separate work.
+  transfer and prescribed-pressure reactions have their own report.
 
 - Explicit and GVS restarts execute a quality/remesh stage pending at the
   checkpoint, preserving continuation when that stage changes the mesh.

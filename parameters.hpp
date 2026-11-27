@@ -462,7 +462,6 @@ struct IC {
     double excess_pore_pressure;
     int pore_pressure_option;
     double pore_pressure_value;
-    double water_table_z;  // height of the initial hydrostatic water table (m)
     bool has_body_force_adjustment;
     int initial_stress_option;
     double_vec initial_stress;
@@ -537,13 +536,7 @@ struct Mat {
     double_vec biot_coeff;  // Biot-Willis coefficient
     bool derive_biot_coeff_from_bulk_moduli;
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
-    // Unsaturated retention: 0 saturated, 1 van Genuchten-Mualem,
-    // 2 Brooks-Corey-Burdine, 3 Gardner
-    int_vec retention_model;
-    double_vec retention_alpha;      // 1/Pa
-    double_vec retention_n;          // van Genuchten n or Brooks-Corey index
-    double_vec residual_saturation;
-  
+
     // rate-and-state friction parameters
     double_vec direct_a;
     double_vec evolution_b;

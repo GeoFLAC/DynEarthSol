@@ -95,7 +95,7 @@ void schedule_ratios(const BC &bc, double start, double stop,
         schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, stop, stop) : 1.0;
 }
 
-// Darcy mobility k/mu, before relative permeability.
+// Darcy mobility k/mu.
 #pragma acc routine seq
 inline double hydraulic_mobility(const MatProps &mat, int e)
 {
@@ -110,21 +110,8 @@ inline double hydraulic_fixed_stress_lag(const MatProps &mat, int e)
     return alpha*alpha*hydraulic_mean_stress_compliance(mat,e);
 }
 
-// Element scratch slot (after the nodal residuals) holding V*phi/(N*markers):
-// times a material's marker count it is that material's pore weight at a node.
-const int pore_slot = NODES_PER_ELEM;
-
-// Bishop fixed-stress slots: D = mean(p - p_old), E = mean(Se*p - Se_old*p_old)
-// of the last physical step. Retain E=D for a wet step through later suction.
-const int pressure_d_slot = NODES_PER_ELEM + 1;
-const int bishop_e_slot = NODES_PER_ELEM + 2;
-
-// Retention laws in the fixed-stress branch with pressure feedback.
-inline bool has_bishop_correction(const Param &param, const Variables &var)
-{
-    return var.mat->has_retention && param.control.has_poroelastic_pressure_feedback &&
-           !hydraulic_strain_form(param);
-}
+// Mean p - p_old of the previous physical step, after the nodal residual slots.
+const int pressure_d_slot = NODES_PER_ELEM;
 
 // A plastic return breaks the elastic relation between mean stress and
 // volume change. The source then reads the accepted projected strain and keeps
@@ -135,8 +122,6 @@ inline bool has_plastic_source(const Param &param)
            !hydraulic_strain_form(param) && (param.mat.rheol_type & MatProps::rh_plastic);
 }
 
-// Save D and E before clearing the pending increment. The source adds
-// L*(chi*E - D)/dt, L = alpha^2*compliance: a lag that vanishes as dt shrinks.
 void pressure_increments(const Variables &var, const double_vec &ppressure, const double_vec &dppressure,
                          elem_cache &work)
 {
@@ -148,29 +133,8 @@ void pressure_increments(const Variables &var, const double_vec &ppressure, cons
     for (int e = 0; e < owned; ++e) {
         const auto value = element_pressure<true>(var,e,ppressure,dppressure,true,false);
         work[e][pressure_d_slot] = value.raw;
-        work[e][bishop_e_slot] = value.bishop;
     }
 }
-
-// The (element, material) entries of one node for advance_content.
-struct PorePatch
-{
-    const MatProps &mat;
-    const int_vec2D &markers;
-    const elem_cache &work;
-    const int *patch;
-    int count;
-    #pragma acc routine seq
-    int size() const { return count * mat.nmat; }
-    #pragma acc routine seq
-    const Retention &law(int k) const { return mat.retention(k % mat.nmat); }
-    #pragma acc routine seq
-    double weight(int k) const
-    {
-        const int e = patch[k / mat.nmat];
-        return work[e][pore_slot] * markers[e][k % mat.nmat];
-    }
-};
 
 } // namespace
 
@@ -473,7 +437,7 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         const int side = pressure_boundary(i, var);
         if (side >= 0 && var.hbc_types[side] == 2) continue;
         // Pressure is compression-positive; z increases upward.
-        ppressure[i] = -rho_fluid * gravity * (z - param.ic.water_table_z);
+        ppressure[i] = -rho_fluid * gravity * z;
 
         // Add excess pore pressure for non-boundary nodes
         if (side < 0) ppressure[i] += loading_efficiency * loading;
@@ -515,19 +479,16 @@ static void pressure_step(const Param &param, const Variables &var,
 #endif
 
     double diff_max_local = 0, source = 0;
-    const bool has_retention = var.mat->has_retention;
-    const bool strain_form = hydraulic_strain_form(param);
     const bool plastic_source = has_plastic_source(param);
-    const bool strain_source = strain_form || plastic_source;
+    const bool strain_source = hydraulic_strain_form(param) || plastic_source;
     const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        firstprivate(dt, has_retention, strain_form, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source)
+        firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source)
 #endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, has_retention, strain_form, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source) async
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source) async
     for (int e = 0; e < mpi_ee; e++) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
         ElemCacheAccessor tr = tmp_result[e];
         double current_mean_stress = trace(stress[e])/NDIMS;
         double mean_stress_change = current_mean_stress - old_mean_stress[e];
@@ -539,20 +500,7 @@ static void pressure_step(const Param &param, const Variables &var,
         // Darcy mobility k/mu in pressure form, well-defined when gravity is zero;
         // it is algebraically equivalent to the head form
         //   (k * gamma_w / mu) * grad(p / gamma_w + z).
-        double mobility = hydraulic_mobility(*var.mat, e);
-        // Bishop chi_e: the mean of the element's nodal Se, the same chi as in the
-        // effective stress (rheology.cxx); exactly 1 when saturated.
-        double chi = 1;
-        if (has_retention) {
-            // kr is the mean of the nodal values; it is exactly 1 when saturated.
-            const int_vec &markers = (*var.elemmarkers)[e];
-            int total = 0;
-            mobility *= element_mean_kr(*var.mat, markers, conn, ppressure);
-            element_mean_saturation(*var.mat, markers, conn, ppressure, &chi);
-            for (int m = 0; m < var.mat->nmat; ++m) total += markers[m];
-            tr[pore_slot] = (*var.volume)[e] * var.mat->phi(e) / (NODES_PER_ELEM * total);
-        }
-        const double kv_pressure = mobility * (*var.volume)[e];
+        const double kv_pressure = hydraulic_mobility(*var.mat, e) * (*var.volume)[e];
 
         const double diff_e = hydraulic_diffusivity(param, *var.mat, e);
         diff_max_local = std::max(diff_max_local, diff_e);
@@ -564,20 +512,11 @@ static void pressure_step(const Param &param, const Variables &var,
             pe = alpha_b * (*var.edvoldt)[e] * (*var.volume)[e] / NODES_PER_ELEM;
         else if (param.control.has_poroelastic_pressure_feedback)
             pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM / var.dt;
-        if (chi != 1) pe *= chi;
-        // Bishop fixed-stress correction L*(chi*E - D), frozen for the physical step
-        // (pressure_increments). An exact zero is skipped, so a saturated element
-        // adds no term.
         if (plastic_source) {
             // The strain source already includes the plastic volume change;
             // only the previous raw pressure increment belongs to the buffer.
             pe -= hydraulic_fixed_stress_lag(*var.mat, e) * tr[pressure_d_slot] * (*var.volume)[e] /
                   (NODES_PER_ELEM * var.dt);
-        } else if (has_retention && param.control.has_poroelastic_pressure_feedback && !strain_form) {
-            const double correction = chi * tr[bishop_e_slot] - tr[pressure_d_slot];
-            if (correction != 0)
-                pe += hydraulic_fixed_stress_lag(*var.mat, e) * correction * (*var.volume)[e] /
-                      NODES_PER_ELEM / var.dt;
         }
         source += pe * NODES_PER_ELEM * dt;
         double grad[NDIMS][NODES_PER_ELEM];
@@ -618,14 +557,13 @@ static void pressure_step(const Param &param, const Variables &var,
             tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
     });
     double stored = 0, wells = 0, boundary = -prescribed_flux;
-    int invalid = 0;
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) \
-        firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, has_retention, mpi_ne) \
-        reduction(+:stored, wells, boundary) reduction(|:invalid)
+        firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, mpi_ne) \
+        reduction(+:stored, wells, boundary)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) reduction(|:invalid) firstprivate(has_points, mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) firstprivate(has_points, mpi_ne)
     for (int n = 0; n < mpi_ne; n++) {
         tdot[n] = 0.0;
         {
@@ -646,21 +584,8 @@ static void pressure_step(const Param &param, const Variables &var,
             increment = tdot[n] * dt / mass;
         else if (side >= 0 && var.hbc_types[side] == 2)
             increment = p0 - param.bc.hbc_pressure[side] * pressure_ratio;
-        double next = p0 - increment, change = -mass * increment;
-        if (has_retention) {
-            // Below the patch's saturation threshold the content, not the
-            // pressure, is advanced; saturated nodes keep the line above.
-            const PorePatch pore = {*var.mat, *var.elemmarkers, tmp_result,
-                                    var.support.patch(n), var.support.size(n)};
-            if (std::min(p0, next) < patch_p_sat(pore)) {
-                if (side < 0 && mass > 0) {
-                    next = advance_content(pore, mass, p0, -(tdot[n] * dt), invalid);
-                    increment = p0 - next;
-                }
-                change = content_change(pore, mass, p0, next);
-            }
-        }
-        ppressure[n] = next;
+        const double change = -mass * increment;
+        ppressure[n] = p0 - increment;
         dppressure[n] += increment;
         stored += change;
         if (has_wells) wells += well_ratio * (*var.fluid_source)[n] * dt;
@@ -670,8 +595,6 @@ static void pressure_step(const Param &param, const Variables &var,
     }
 
     #pragma acc wait
-    if (mpi_any(var, invalid))
-        die_together(EXIT_RUNTIME_NAN, "Unsaturated content update did not converge; check the pressure state.");
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
         double sums[] = {stored, source, wells, boundary};
@@ -731,7 +654,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
     if (var.mat->hydro_step_limit == 0)
         var.mat->hydro_step_limit = pressure_step_limit(var, work);
     // Before the pending increment is cleared below.
-    if (has_bishop_correction(param, var) || has_plastic_source(param))
+    if (has_plastic_source(param))
         pressure_increments(var, p, dp, work);
     const double limit = var.mat->hydro_step_limit;
     #pragma acc wait
@@ -777,7 +700,7 @@ void remap_content(const Param &param, const Variables &var, int e, int j, doubl
 } // namespace
 
 ContentRemap::ContentRemap(const Param &param, const Variables &var) :
-    linear(param.control.has_hydraulic_diffusion && !var.mat->has_retention &&
+    linear(param.control.has_hydraulic_diffusion &&
            (!param.control.has_poroelastic_pressure_feedback ||
             (param.mat.rheol_type & MatProps::rh_elastic)))
 {

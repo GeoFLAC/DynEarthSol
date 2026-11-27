@@ -185,8 +185,6 @@ double ref_pressure(const Param& param, double z)
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
-  has_retention(std::any_of(p.mat.retention_model.begin(), p.mat.retention_model.end(),
-                            [](int m) { return m != retention_saturated; })),
   is_plane_strain(p.mat.is_plane_strain),
   visc_min(p.mat.visc_min),
   visc_max(p.mat.visc_max),
@@ -242,12 +240,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     fluid_visc = p.mat.fluid_visc;
     biot_coeff = p.mat.biot_coeff;
     bulk_modulus_s = p.mat.bulk_modulus_s;
-    // An empty list (a Param not built by the input reader) means saturated.
-    for (int m = 0; m < nmat; ++m)
-        retention_laws.push_back(p.mat.retention_model.empty()
-            ? Retention{retention_saturated, 0, 0, 0}
-            : Retention{p.mat.retention_model[m], p.mat.retention_alpha[m],
-                        p.mat.retention_n[m], p.mat.residual_saturation[m]});
     // Rate-and-state friction parameters
     direct_a = p.mat.direct_a;
     evolution_b = p.mat.evolution_b;

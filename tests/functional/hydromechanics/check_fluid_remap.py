@@ -139,7 +139,7 @@ def main():
                             exact_restart_payloads=exact, remeshes=len(remeshes)))
         print('PASS fluid remap', case, flush=True)
     write_json(output/'summary.json', dict(passed=True, cases=records,
-        scope='Fixed-property saturated linear Biot inventories; not evolving-storage/unsaturated qualification'))
+        scope='Fixed-property linear Biot inventories'))
 
 
 if __name__ == '__main__':
