@@ -78,28 +78,6 @@ void init_var(const Param& param, Variables& var)
 
     // XXX: Hard coded boundary flag. If the order of ibound?? is changed
     //      in the future, the following lines have to be updated as well.
-    var.vbc_types[0] = param.bc.vbc_x0;
-    var.vbc_types[1] = param.bc.vbc_x1;
-    var.vbc_types[2] = param.bc.vbc_y0;
-    var.vbc_types[3] = param.bc.vbc_y1;
-    var.vbc_types[4] = param.bc.vbc_z0;
-    var.vbc_types[5] = param.bc.vbc_z1;
-    var.vbc_types[6] = param.bc.vbc_n0;
-    var.vbc_types[7] = param.bc.vbc_n1;
-    var.vbc_types[8] = param.bc.vbc_n2;
-    var.vbc_types[9] = param.bc.vbc_n3;
-
-    var.vbc_values[0] = param.bc.vbc_val_x0;
-    var.vbc_values[1] = param.bc.vbc_val_x1;
-    var.vbc_values[2] = param.bc.vbc_val_y0;
-    var.vbc_values[3] = param.bc.vbc_val_y1;
-    var.vbc_values[4] = param.bc.vbc_val_z0;
-    var.vbc_values[5] = param.bc.vbc_val_z1;
-    var.vbc_values[6] = param.bc.vbc_val_n0;
-    var.vbc_values[7] = param.bc.vbc_val_n1;
-    var.vbc_values[8] = param.bc.vbc_val_n2;
-    var.vbc_values[9] = param.bc.vbc_val_n3;
-
     var.vbc_vertical_div_x0[0] = 0.;
     var.vbc_vertical_div_x0[1] = param.bc.vbc_val_division_x0_min;
     var.vbc_vertical_div_x0[2] = param.bc.vbc_val_division_x0_max;
@@ -124,22 +102,6 @@ void init_var(const Param& param, Variables& var)
     var.hbc_types[3] = param.bc.hbc_y1;
     var.hbc_types[4] = param.bc.hbc_z0;
     var.hbc_types[5] = param.bc.hbc_z1;
-
-    var.stress_bc_types[0] = param.bc.stress_bc_x0;
-    var.stress_bc_types[1] = param.bc.stress_bc_x1;
-    var.stress_bc_types[2] = param.bc.stress_bc_y0;
-    var.stress_bc_types[3] = param.bc.stress_bc_y1;
-    var.stress_bc_types[4] = param.bc.stress_bc_z0;
-    var.stress_bc_types[5] = param.bc.stress_bc_z1;
-
-    var.stress_bc_values[0] = param.bc.stress_val_x0;
-    var.stress_bc_values[1] = param.bc.stress_val_x1;
-    var.stress_bc_values[2] = param.bc.stress_val_y0;
-    var.stress_bc_values[3] = param.bc.stress_val_y1;
-    var.stress_bc_values[4] = param.bc.stress_val_z0;
-    var.stress_bc_values[5] = param.bc.stress_val_z1;
-
-    var.vbc_val_z1_loading_period = param.bc.vbc_val_z1_loading_period;
 
     // for regular mesh
     var.nx = std::round(param.mesh.xlength/param.mesh.resolution) + 1;
@@ -207,7 +169,7 @@ void init(const Param& param, Variables& var)
     *var.volume_old = *var.volume;
     // Must precede apply_vbcs: it is the only writer of edge_vec/edge_slot, which
     // apply_vbcs reads for any node on two boundaries at once.
-    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
+    create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
     apply_vbcs(param, var, *var.vel); // Global-velocity scaling needs boundary conditions before compute_mass.
     // The RSF state variable is initialized below; skip its bound for this
     // bootstrap call. main() recomputes dt after state initialization.
@@ -638,15 +600,37 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
-    // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
-    create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
+    if (bin_chkpt.has_array("boundary normals")) {
+        // The run keeps the normals of its starting mesh, even where a boundary bends; so
+        // does its restart. Checkpoints without them recompute them from the mesh.
+        double_vec normals(nbdrytypes * NDIMS);
+        bin_chkpt.read_array(normals, "boundary normals");
+        for (int i=0; i<nbdrytypes; ++i)
+            for (int d=0; d<NDIMS; ++d) (*var.bnormals)[i][d] = normals[i*NDIMS + d];
+        create_boundary_edges(param, var, var.edge_vec, var.edge_slot);
+    }
+    else
+        create_boundary_normals(param, var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    // PT checkpoints carry the accepted velocity. The legacy boundary map can
-    // change it (notably on oblique boundaries); the next PT solve imposes its
-    // own constraints at the next physical time.
-    if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
+    // Checkpoints carry the velocity the run's boundary conditions left, and those conditions
+    // as in force at their time. Applying the same conditions again would move the edge nodes
+    // of an n boundary once more, since its edge map is not a projection, so the restart
+    // applies its own only at the nodes where they give that velocity another value than the
+    // checkpoint's do; the first step then moves the mesh with them and strains it.
+    // Checkpoints without that record apply them everywhere. PT checkpoints carry the
+    // accepted velocity.
+    if (!param.control.has_PT) {
+        if (bin_chkpt.has_array("boundary condition control count")) {
+            int count = 0;
+            bin_chkpt.read_scalar(count, "boundary condition control count");
+            double_vec saved(count);
+            bin_chkpt.read_array(saved, "boundary condition controls");
+            apply_changed_vbcs(param, var, saved, *var.vel);
+        }
+        else
+            apply_vbcs(param, var, *var.vel);
+    }
 
     if (param.ic.is_restarting_weakzone) {
         std::cout << "  Creating new weakzone...\n";
@@ -705,13 +689,26 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
     }
 
-    // Unchanged controls retain the saved next interval and velocity scale.
-    // Changed controls must use the same timestep/mass pair as a fresh stage.
+    const bool has_saved_speed = bin_chkpt.has_array("max_vbc_val");
+    if (has_saved_speed) {
+        double saved_speed = 0;
+        bin_chkpt.read_scalar(saved_speed, "max_vbc_val");
+        if (!std::isfinite(saved_speed))
+            die(EXIT_IO_RESTART, "Invalid boundary speed in checkpoint.");
+        dt_controls_changed |= saved_speed != var.max_vbc_val;
+    }
+
+    // Build the mass with the same velocity scale used to select the next interval.
     if (dt_controls_changed ||
         (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
-        compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
+    else if (!has_saved_speed && param.control.fixed_dt == 0) {
+        // The saved interval may have been selected with a different velocity scale.
+        var.dt = std::min(var.dt, compute_dt(param, var));
+    }
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass,
+                 *var.hmass, *var.ymass, *var.tmp_result);
 
     if (param.monitor.enabled) {
         const int fields = bin_chkpt.has_array("monitor point count") +

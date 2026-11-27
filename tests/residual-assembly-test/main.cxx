@@ -143,14 +143,7 @@ static void build_mesh(Fixture& m) {
     m.var.tmp_result = &m.tmp_result;
     m.var.strain_rate = &m.strain_rate;
 
-    for (int i = 0; i < nbdrytypes; ++i) {
-        m.var.vbc_types[i] = 0;
-        m.var.vbc_values[i] = 0.0;
-    }
-    for (int i = 0; i < nbdrytypes_hydro; ++i) {
-        m.var.stress_bc_types[i] = 0;
-        m.var.stress_bc_values[i] = 0.0;
-    }
+    convert_bc_codes(m.param);  // every code and value 0
     m.param.control.gravity = 0.0;
     m.param.control.damping_option = 0;
     m.param.control.damping_factor = 0.0;
@@ -239,8 +232,9 @@ static void test_traction() {
     const double T = 0.9;
     m->var.bfacets[iboundx0] = new std::vector<std::pair<int,int>>;
     m->var.bfacets[iboundx0]->push_back(std::make_pair(0, 0));
-    m->var.stress_bc_types[iboundx0] = 1;
-    m->var.stress_bc_values[iboundx0] = T;
+    m->param.bc.stress_bc_x0 = 1;
+    m->param.bc.stress_val_x0 = T;
+    convert_bc_codes(m->param);
     m->param.ic.has_body_force_adjustment = false;
 
     run_update_force(*m);
@@ -328,7 +322,10 @@ static void test_body_force() {
     m->var.log_table = m->var.tan_table = m->var.sin_table = &m->lookup;
     // Suppress gravity-induced boundary tractions to isolate the body load.
     // Neumann tractions are exercised separately, using the real BC routine.
-    for (int i=0; i<nbdrytypes; ++i) m->var.vbc_types[i] = 1;
+    m->param.bc.vbc_x0 = m->param.bc.vbc_x1 = m->param.bc.vbc_y0 = m->param.bc.vbc_y1 = 1;
+    m->param.bc.vbc_z0 = m->param.bc.vbc_z1 = 1;
+    m->param.bc.vbc_n0 = m->param.bc.vbc_n1 = m->param.bc.vbc_n2 = m->param.bc.vbc_n3 = 1;
+    convert_bc_codes(m->param);
     auto& p = m->param.mat;
     p.nmat = 1;
     p.rheol_type = MatProps::rh_elastic;
@@ -362,7 +359,8 @@ static void test_body_force() {
     m->param.bc.has_winkler_foundation = true;
     m->param.mesh.zlength = 1;
     m->var.compensation_pressure = 40000;
-    m->var.vbc_types[iboundz0] = 0;
+    m->param.bc.vbc_z0 = 0;
+    convert_bc_codes(m->param);
     m->var.bfacets[iboundz0] = new std::vector<std::pair<int,int>>{{0,NDIMS}};
     m->var.bnodes[iboundz0] = new int_vec;
     for (int l=0;l<NODES_PER_FACET;++l)
@@ -399,6 +397,39 @@ static void test_body_force() {
                 check("trial loads preserve coordinates",m->coord[n][d],coords[k++]);
         }
     }
+
+    // Water loading on a side with more facets than the mesh has elements, every facet of
+    // both: the load is the sum of the loads of each facet alone.
+    std::printf("[support load on more facets than elements]\n");
+    m->param.bc.has_winkler_foundation = false;
+    m->param.control.has_hydraulic_diffusion = false;
+    m->param.bc.has_water_loading = true;
+    m->param.bc.sea_water_density = 1000;
+    m->param.control.surf_base_level = 10;
+    m->param.bc.vbc_z1 = 0;
+    convert_bc_codes(m->param);
+    m->var.bnodes[iboundz1] = new int_vec;
+    for (int n=0;n<m->var.nnode;++n) m->var.bnodes[iboundz1]->push_back(n);
+    std::vector<std::pair<int,int>> every;
+    for (int e=0;e<m->var.nelem;++e)
+        for (int f=0;f<FACETS_PER_ELEM;++f) every.push_back({e,f});
+    auto load = [&](const std::vector<std::pair<int,int>>& facets) {
+        m->var.bfacets[iboundz1] = new std::vector<std::pair<int,int>>(facets);
+        update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped);
+        delete m->var.bfacets[iboundz1];
+        std::vector<double> f;
+        for (int n=0;n<m->var.nnode;++n) for (int d=0;d<NDIMS;++d) f.push_back(m->force_undamped[n][d]);
+        return f;
+    };
+    const std::vector<double> dry = load({}), all = load(every);
+    std::vector<double> sum(dry.size(), 0.0);
+    for (const auto& facet : every) {
+        const std::vector<double> one = load({facet});
+        for (std::size_t k=0;k<sum.size();++k) sum[k] += one[k] - dry[k];
+    }
+    for (std::size_t k=0;k<sum.size();++k)
+        check("support load of every facet",all[k]-dry[k],sum[k]);
+    delete m->var.bnodes[iboundz1];
     delete m->var.bfacets[iboundz0];
     delete m->var.bnodes[iboundz0];
 #endif
@@ -419,7 +450,7 @@ static void test_constraints() {
     m->var.bcflag = flags;
     m->var.bnormals = normals;
     m->var.time = 0;
-    m->var.vbc_val_z1_loading_period = 1;
+    m->param.bc.vbc_val_z1_loading_period = 1;
     m->param.bc.vbc_period_x0_time_in_yr = {0,1};
     m->param.bc.vbc_period_x1_time_in_yr = {0,1};
     m->param.bc.vbc_period_x0_ratio = {1,1};
@@ -435,9 +466,9 @@ static void test_constraints() {
         std::printf("  scenario %d\n", scenario);
         m->param.bc.vbc_x0 = scenario == 2 ? 1 : 0;
         m->param.bc.vbc_val_x0 = 2;
-        m->var.vbc_types[iboundx0] = m->param.bc.vbc_x0;
-        m->var.vbc_types[iboundn0] = scenario == 3 ? 11 : (scenario == 4 ? 3 : 1);
-        m->var.vbc_values[iboundn0] = 3;
+        m->param.bc.vbc_n0 = scenario == 3 ? 11 : (scenario == 4 ? 3 : 1);
+        m->param.bc.vbc_val_n0 = 3;
+        convert_bc_codes(m->param);
         for (int n=0;n<m->var.nnode;++n)
             (*flags)[n] = scenario == 0 ? 0 : (1U << iboundn0) | (scenario == 2 ? BOUNDX0 : 0);
         build_velocity_constraints(m->param,m->var,*c);
@@ -484,6 +515,7 @@ static void test_constraints() {
         int& code = axis == 0 ? m->param.bc.vbc_x0 : m->param.bc.vbc_y0;
         for (int type : {1,3,4,5,6,7}) {
             code = type;
+            convert_bc_codes(m->param);
             for (int n=0;n<m->var.nnode;++n) (*flags)[n] = axis == 0 ? BOUNDX0 : BOUNDY0;
             for (bool homogeneous : {false,true}) {
                 for (int n=0;n<m->var.nnode;++n)
@@ -502,6 +534,7 @@ static void test_constraints() {
             }
         }
         code = 0;
+        convert_bc_codes(m->param);
     }
 #endif
     delete c; delete normals; delete flags; delete m;
@@ -739,7 +772,8 @@ static void test_material_trials() {
                 for(int n=0;n<nn;++n)
                     for(int k=0;k<m->var.support.size(n);++k)
                         (*volume_n)[n]+=m->volume[m->var.support.patch(n)[k]];
-                m->var.vbc_val_z1_loading_period=1;
+                m->param.bc.vbc_val_z1_loading_period=1;
+                convert_bc_codes(m->param);
                 m->param.bc.vbc_period_x0_time_in_yr={0,1};
                 m->param.bc.vbc_period_x1_time_in_yr={0,1};
                 m->param.bc.vbc_period_x0_ratio={1,1};

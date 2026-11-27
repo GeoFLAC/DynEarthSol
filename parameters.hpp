@@ -1,6 +1,7 @@
 #ifndef DYNEARTHSOL3D_PARAMETERS_HPP
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <utility>
@@ -281,6 +282,38 @@ struct Control {
 
 };
 
+// One side's velocity and stress conditions, from the integer codes or the letters.
+// Components are in the side's frame (n, t_h, t_v): n is the outward normal,
+// t_h = up x n (+x on the top and bottom) and t_v = n x t_h. 2D keeps the in-plane
+// pair: (n, t_v) on x walls and n boundaries, (n, t_h) on z walls. The other members
+// reproduce how the codes behave.
+struct SideBC {
+    char type[NDIMS];            // 'v': velocity held at value; 't': traction; 'f': free
+    double value[NDIMS];         // along the frame axis: m/s for 'v', Pa for 't' (outward positive)
+    bool normal_follows_period;  // normal value times the period table (2D: and depth profile)
+    bool taper;                  // 2D x0 code 3: normal value tapers off near the bottom
+    bool horizontal_normal;      // n boundaries 11, 13: n is the horizontal part of the normal
+    bool support;                // a normal not held ('f' or 't') carries the lithostatic, Winkler
+                                 // or water load
+    double max_speed;            // the largest held value, which find_max_vbc takes
+    double release_time;         // in s; the side is free after it (bc.vbc_val_z1_loading_period)
+    int stress_axis;             // stress_bc_*: adds stress_value * normal[axis]; -1 for none
+    double stress_value;         // Pa
+};
+
+// The frame of each side wall and z side as signed global axes: +-(axis + 1), so -1 is -x.
+// 2D global axes are x and z.
+#ifdef THREED
+const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, -2, 3}, {1, 2, 3}, {-2, 1, 3}, {2, -1, 3},
+                                                 {-3, 1, -2}, {3, 1, 2}};
+#else
+const int side_frame[nbdrytypes_hydro][NDIMS] = {{-1, 2}, {1, 2}, {0, 0}, {0, 0}, {-2, 1}, {2, 1}};
+#endif
+
+// The global axis of component d of side i's frame, and its sign.
+inline int frame_axis(int i, int d) { return std::abs(side_frame[i][d]) - 1; }
+inline double frame_sign(int i, int d) { return side_frame[i][d] < 0 ? -1. : 1.; }
+
 struct BC {
     double surface_temperature;
     double mantle_temperature;
@@ -375,7 +408,33 @@ struct BC {
     double stress_val_y1;
     double stress_val_z0;
     double stress_val_z1;
+
+    // The text of vbc_*: an integer code (also in vbc_* above), or one letter per component
+    // of the side's frame, whose values vbc_val_* then lists. Empty: use the integer code.
+    std::string vbc_text[nbdrytypes];
+    double vbc_component_values[nbdrytypes][NDIMS];
+
+    SideBC side[nbdrytypes];  // filled from the codes above by validate_parameters()
 };
+
+// Each side's name and input fields, in side order: x0, x1, y0, y1, z0, z1, then n0 to n3.
+// The lateral values cover the side walls, the stress codes and values the z sides too.
+const char *const side_name[nbdrytypes] = {"x0", "x1", "y0", "y1", "z0", "z1", "n0", "n1", "n2", "n3"};
+int BC::*const side_vbc_code[nbdrytypes] = {&BC::vbc_x0, &BC::vbc_x1, &BC::vbc_y0, &BC::vbc_y1,
+                                             &BC::vbc_z0, &BC::vbc_z1, &BC::vbc_n0, &BC::vbc_n1,
+                                             &BC::vbc_n2, &BC::vbc_n3};
+double BC::*const side_vbc_value[nbdrytypes] = {&BC::vbc_val_x0, &BC::vbc_val_x1, &BC::vbc_val_y0,
+                                                &BC::vbc_val_y1, &BC::vbc_val_z0, &BC::vbc_val_z1,
+                                                &BC::vbc_val_n0, &BC::vbc_val_n1, &BC::vbc_val_n2,
+                                                &BC::vbc_val_n3};
+double BC::*const side_vbc_lateral[4] = {&BC::vbc_val_x0_l, &BC::vbc_val_x1_l, &BC::vbc_val_y0_l,
+                                         &BC::vbc_val_y1_l};
+int BC::*const side_stress_code[nbdrytypes_hydro] = {&BC::stress_bc_x0, &BC::stress_bc_x1,
+                                                     &BC::stress_bc_y0, &BC::stress_bc_y1,
+                                                     &BC::stress_bc_z0, &BC::stress_bc_z1};
+double BC::*const side_stress_value[nbdrytypes_hydro] = {&BC::stress_val_x0, &BC::stress_val_x1,
+                                                         &BC::stress_val_y0, &BC::stress_val_y1,
+                                                         &BC::stress_val_z0, &BC::stress_val_z1};
 
 struct IC {
     int mattype_option;
@@ -894,12 +953,7 @@ struct Variables {
 
     // the recorded column of each restored side wall, SIDEWALL_* order (SideProfile)
     SideProfile side_profile[NSIDEWALL];
-    int vbc_types[nbdrytypes];
     int hbc_types[nbdrytypes_hydro];
-    int stress_bc_types[nbdrytypes_hydro];
-    double vbc_values[nbdrytypes];
-    double stress_bc_values[nbdrytypes];
-    double vbc_val_z1_loading_period;
 
     // Unit vector along the edge where two boundaries meet, NDIMS doubles per pair in
     // edge_vec. edge_slot[i*nbdrytypes + j] with i < j indexes it, and is -1 when that

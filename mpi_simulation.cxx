@@ -223,23 +223,18 @@ void metadata(MpiState& state, Variables& var) {
     ARCHIVE(bottom_temperature);
     ARCHIVE(nnode);
     ARCHIVE(nelem);
-    ARCHIVE(vbc_val_z1_loading_period);
     ARCHIVE(PT_initial_residual_max);
     ARCHIVE(PT_skip_scale_update);
     ARCHIVE(PT_force_residual_valid);
     ARCHIVE(info_display_next_step);
+    // The velocity and stress BCs are param.bc.side, which every rank reads from the input.
     for (int i=0; i<nbdrytypes; ++i) {
-        state.value(var.vbc_types[i]);
-        state.value(var.vbc_values[i]);
         state.value(var.bnodes[i]);
         state.value(var.bfacets[i]);
     }
-    // init_var() sets the stress BCs of the six walls only.
-    for (int i=0; i<nbdrytypes_hydro; ++i) {
+    // init_var() sets the hydraulic BCs of the six walls only.
+    for (int i=0; i<nbdrytypes_hydro; ++i)
         state.value(var.hbc_types[i]);
-        state.value(var.stress_bc_types[i]);
-        state.value(var.stress_bc_values[i]);
-    }
     for (int i=0; i<nbdrytypes*nbdrytypes; ++i) state.value(var.edge_slot[i]);
     ARCHIVE(bnormals);
     ARCHIVE(bcflag);
@@ -364,7 +359,6 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     COPY(PT_skip_scale_update);
     COPY(PT_force_residual_valid);
     COPY(info_display_next_step);
-    COPY(vbc_val_z1_loading_period);
     COPY(edge_vec);
     COPY(vbc_vertical_div_x0);
     COPY(vbc_vertical_div_x1);
@@ -391,8 +385,6 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     select(global.bcflag, var.bcflag, partition.nodes);
     copy(global.bnormals, var.bnormals);
     for (int i=0; i<nbdrytypes; ++i) {
-        var.vbc_types[i] = global.vbc_types[i];
-        var.vbc_values[i] = global.vbc_values[i];
         if (!var.bnodes[i]) var.bnodes[i] = new int_vec;
         var.bnodes[i]->clear();
         for (int n : *global.bnodes[i]) {
@@ -415,11 +407,8 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
             var.surfinfo.edvacc_surf->push_back((*global.surfinfo.edvacc_surf)[g]);
     }
     select(global.surfinfo.dhacc, var.surfinfo.dhacc, partition.nodes);
-    for (int i=0; i<nbdrytypes_hydro; ++i) {
+    for (int i=0; i<nbdrytypes_hydro; ++i)
         var.hbc_types[i] = global.hbc_types[i];
-        var.stress_bc_types[i] = global.stress_bc_types[i];
-        var.stress_bc_values[i] = global.stress_bc_values[i];
-    }
     std::copy(global.edge_slot, global.edge_slot + nbdrytypes*nbdrytypes, var.edge_slot);
     // Copy each support in GLOBAL element order, including full stars of owned nodes.
     var.support.idx_data.assign(var.nnode+1, 0);

@@ -8,6 +8,7 @@
 #include "constants.hpp"
 #include "parameters.hpp"
 #include "binaryio.hpp"
+#include "bc.hpp"
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
@@ -455,10 +456,24 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
     bin.write_scalar(var.dt, "dt");
+    bin.write_scalar(var.max_vbc_val, "max_vbc_val");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 
     bin.write_scalar(var.last_remesh_time, "last_remesh_time");
+    {
+        // The boundary normals of the starting mesh, which a restart keeps.
+        double_vec normals(nbdrytypes * NDIMS);
+        for (int i=0; i<nbdrytypes; ++i)
+            for (int d=0; d<NDIMS; ++d) normals[i*NDIMS + d] = (*var.bnormals)[i][d];
+        bin.write_aux_array(normals, "boundary normals", normals.size());
+    }
+    if (!param.control.has_PT) {
+        // The run's velocity boundary conditions in force now, which a restart compares.
+        const double_vec vbc = vbc_controls(param, var);
+        bin.write_scalar(static_cast<int>(vbc.size()), "boundary condition control count");
+        bin.write_aux_array(vbc, "boundary condition controls", vbc.size());
+    }
     const double_vec controls = dt_controls(param);
     bin.write_scalar(1, "dt controls version");
     bin.write_aux_array(controls, "dt controls", controls.size());

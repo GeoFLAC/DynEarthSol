@@ -1,0 +1,17 @@
+# A 10 km box whose top east corner is cut by an oblique boundary n0 (64),
+# which meets x1 (2) and z1 (32).
+5 2 0 0
+0 0 -10000
+1 10000 -10000
+2 10000 -2500
+3 7500 0
+4 0 0
+5 1
+0 0 1 16
+1 1 2 2
+2 2 3 64
+3 3 4 32
+4 4 0 1
+0
+1
+0 5000 -5000 0 2e+06

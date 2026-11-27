@@ -22,7 +22,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[3]
 # Output fields the current executables write that a reference from an earlier commit may lack.
-ADDED_FIELDS = {"dv surface acc facets"}
+ADDED_FIELDS = {"dv surface acc facets", "max_vbc_val"}
 
 
 def command_text(command):
@@ -326,6 +326,53 @@ def main():
                     compare_physical_hdf5(reference, current, frame, kind=kind, group=group)
             results["checks"].append(dict(case=label, ranks=ranks, bit_exact=True, timing=timing))
             print(f"{label}: ranks={ranks}: bit-exact", flush=True)
+
+    # The per-side BC table, which every rank reads from the input: letters with a velocity,
+    # a traction and an oblique n boundary on the cut-corner box of tests/functional/bc, the
+    # Winkler and water supports, and a restart that changes x0's velocity, which applies it
+    # where it changes and keeps the boundary normals of the checkpoint.
+    for ndims in ((2, 3) if args.serial3d else (2,)):
+        suffix = "" if ndims == 2 else "3d"
+        free, zeros = "f" * (ndims - 1), ", 0" * (ndims - 1)
+        cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        cfg.optionxform = str
+        cfg.read(ROOT / "examples/defaults.cfg")
+        cfg["sim"].update(modelname="result", max_steps="20", max_time_in_yr="1e20",
+                          output_step_interval="10", output_time_interval_in_yr="1e20",
+                          checkpoint_frame_interval="1", has_marker_output="yes",
+                          is_outputting_averaged_fields="no")
+        cfg["mesh"].update(meshing_option="90", meshing_elem_shape="0",
+                           poly_filename=str(ROOT / f"tests/functional/bc/cut-corner-{ndims}d.poly"),
+                           xlength="10000", ylength="10000", zlength="10000", resolution="2500",
+                           remeshing_option="0", quality_check_step_interval="1000")
+        cfg["bc"].update(vbc_x0="v" + free, vbc_val_x0=f"[1e-9{zeros}]",
+                         vbc_x1="t" + free, vbc_val_x1=f"[-2e4{zeros}]",
+                         vbc_n0="v" + free, vbc_val_n0=f"[-1e-9{zeros}]",
+                         has_winkler_foundation="yes", has_water_loading="yes")
+        if ndims == 3:
+            cfg["bc"].update(vbc_y0="v" + free, vbc_val_y0=f"[0{zeros}]",
+                             vbc_y1="v" + free, vbc_val_y1=f"[0{zeros}]")
+        label = f"bc-table-{ndims}d"
+        reference, _ = run(label + "-parent", cfg, executables["serial" + suffix])
+        for ranks in (r for r in args.ranks if r > 1):
+            current, timing = run(f"{label}-mpi{ranks}", cfg, executables["mpi" + suffix], ranks)
+            exact = all([compare(reference, current, frame, env) for frame in range(3)])
+            for frame in range(3):
+                compare_physical_hdf5(reference, current, frame, kind="chkpt", group="/")
+            results["checks"].append(dict(case=label, ranks=ranks, bit_exact=exact, timing=timing))
+            print(f"{label}: ranks={ranks}: {'bit-exact' if exact else 'within regression tolerance'}",
+                  flush=True)
+        cfg["bc"]["vbc_val_x0"] = f"[2e-9{zeros}]"
+        cfg["sim"].update(is_restarting="yes", restarting_from_modelname=str(reference / "result"),
+                          restarting_from_frame="1")
+        restarted, _ = run(label + "-restart-parent", cfg, executables["serial" + suffix])
+        ranks = max(args.ranks)
+        current, timing = run(f"{label}-restart-mpi{ranks}", cfg, executables["mpi" + suffix], ranks)
+        exact = compare(restarted, current, 2, env)
+        compare_physical_hdf5(restarted, current, 2, kind="chkpt", group="/")
+        results["checks"].append(dict(case=label + "-restart", ranks=ranks, bit_exact=exact, timing=timing))
+        print(f"{label}: restart with x0 changed on {ranks} ranks: "
+              f"{'bit-exact' if exact else 'within regression tolerance'}", flush=True)
 
     # Averaging maintains persistent local accumulators across remeshing.
     # Compare all output frames in both dimensions, including the initial one.

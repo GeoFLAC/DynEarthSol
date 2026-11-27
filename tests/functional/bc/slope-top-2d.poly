@@ -1,0 +1,15 @@
+# A 10 km box whose top z1 (32) rises from z = 0 at x = 0 to 1 km at x = 10 km,
+# so a stress BC on x loads it.
+4 2 0 0
+0 0 -10000
+1 10000 -10000
+2 10000 1000
+3 0 0
+4 1
+0 0 1 16
+1 1 2 2
+2 2 3 32
+3 3 0 1
+0
+1
+0 5000 -5000 0 2e+06

@@ -77,7 +77,8 @@ global management state. Ownership is rebuilt after every MMG remesh. See the
 [architecture guide](../../../doc/mpi.md) for central operations and scaling limits.
 
 `run_mpi.py` defaults to ranks 1/2/3/4/6/8 and also checks hybrid OpenMP,
-averaging across remeshing and empty partitions.
+averaging across remeshing, empty partitions, and the per-side BC table (letters,
+tractions, an oblique boundary and a restart that changes a condition).
 No extra simulation cfg parameter is needed. The `[mpi][partition]` log rows
 report each rank's ownership ([reading the MPI log](../../../doc/mpi.md#reading-the-mpi-log)).
 
