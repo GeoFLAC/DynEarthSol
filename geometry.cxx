@@ -2367,11 +2367,9 @@ static void integrate(const Simplex &piece, const Shape &old, const Shape &curre
 
 #ifdef THREED
 // The old simplex clipped by the half-spaces of the current one, face by face.
-// A vertex within tolerance[plane] of a plane lies on it: it stays in its faces
-// and joins that plane's cap, and only an edge from a vertex strictly inside to
-// one strictly outside is cut. A face lying in the plane is left to the cap, so
-// nearly coincident faces of the two simplices are counted once. Cap points
-// within merge[d] of each other in every direction d are one point.
+// Vertices within tolerance of a plane are kept. The cap follows the cut edges
+// between kept and discarded vertices, so the kept faces and the cap bound
+// the clipped volume.
 static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
                            const Shape &current_shape, const Real tolerance[N],
                            const Real merge[NDIMS], Real scale)
@@ -2402,32 +2400,41 @@ static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
     for (int plane = 0; plane < N; ++plane) {
         next.count = 0;
         cap.count = 0;
+        bool inside = false, outside = false;
         for (int f = 0; f < poly.count; ++f) {
             const Face &face = poly.face[f];
             Real value[MAX_VERTEX];
             int side[MAX_VERTEX];
-            bool flat = true;
             for (int j = 0; j < face.count; ++j) {
                 value[j] = current_shape.at(plane,face.vertex[j]);
                 side[j] = value[j] > tolerance[plane] ? 1 : value[j] < -tolerance[plane] ? -1 : 0;
-                if (side[j] == 0) add_to_cap(face.vertex[j]);
-                flat &= side[j] == 0;
+                inside |= side[j] > 0;
+                outside |= side[j] < 0;
             }
-            if (flat) continue;
             clipped.count = 0;
             for (int j = 0; j < face.count; ++j) {
                 const int k = (j+1)%face.count;
-                if (side[j] >= 0) append(clipped,face.vertex[j]);
-                if (side[j]*side[k] >= 0) continue;
-                const Real t = value[j]/(value[j]-value[k]);
+                const bool keep_j = side[j] >= 0;
+                if (keep_j) append(clipped,face.vertex[j]);
+                if (keep_j == (side[k] >= 0)) continue;
+                const int kept = keep_j ? j : k;
+                const int removed = keep_j ? k : j;
+                if (side[kept] == 0) {
+                    add_to_cap(face.vertex[kept]);
+                    continue;
+                }
+                const Real t = value[kept]/(value[kept]-value[removed]);
                 Point crossing;
+                // Both faces sharing this edge interpolate from the kept end.
                 for (int d = 0; d < NDIMS; ++d)
-                    crossing[d] = face.vertex[j][d]+t*(face.vertex[k][d]-face.vertex[j][d]);
+                    crossing[d] = face.vertex[kept][d]+t*(face.vertex[removed][d]-face.vertex[kept][d]);
                 append(clipped,crossing);
                 add_to_cap(crossing);
             }
             if (clipped.count >= NDIMS) next.face[next.count++] = clipped;
         }
+        if (!outside) continue;
+        if (!inside) return {};
         if (cap.count >= NDIMS) {
             Point center{}, normal, u{}, v;
             for (int k = 0; k < cap.count; ++k)

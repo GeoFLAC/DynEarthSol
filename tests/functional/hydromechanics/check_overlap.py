@@ -95,8 +95,7 @@ def main():
             pairs.append((a, b))
             expected.append(reference_volume(a, b))
             # A tetrahedron that an MMG remesh kept, against its copy in the new mesh,
-            # whose coordinates differ in the last place; and random tetrahedra at
-            # the same depth against copies moved by up to 4 units in the last place.
+            # whose coordinates differ in the last place.
             a = np.array([[.74999998381665256, .7500000118555008, -10.],
                           [.50000001072470324, 1., -10.],
                           [.50000000223933372, .50000003478627963, -10.],
@@ -107,16 +106,20 @@ def main():
                           [.48439412002364579, .74985644147022801, -9.8441598611665153]])
             pairs.append((a, b))
             expected.append(abs(np.linalg.det(a[1:]-a[0]))/6)
-            for _ in range(40):
-                a = rng.normal(size=(4, 3))*.3+[0., 0., -10.]
-                if abs(np.linalg.det(a[1:]-a[0])) < 1e-3:
-                    continue
-                b = a.copy()
-                for index, steps in np.ndenumerate(rng.integers(-4, 5, size=a.shape)):
-                    for _ in range(abs(steps)):
-                        b[index] = np.nextafter(b[index], np.sign(steps)*np.inf)
-                pairs.append((a, b))
-                expected.append(abs(np.linalg.det(a[1:]-a[0]))/6)
+            # Repeat the perturbation far from the origin, where a coordinate ulp
+            # can move a vertex across the clipping tolerance of its local face.
+            for origin, ulps in (([0., 0., -10.], 4), ([600., -300., -60.], 2)):
+                for _ in range(40):
+                    a = rng.normal(size=(4, 3))*.3+origin
+                    det = abs(np.linalg.det(a[1:]-a[0]))
+                    if det < 1e-3:
+                        continue
+                    b = a.copy()
+                    for index, steps in np.ndenumerate(rng.integers(-ulps, ulps+1, size=a.shape)):
+                        for _ in range(abs(steps)):
+                            b[index] = np.nextafter(b[index], np.sign(steps)*np.inf)
+                    pairs.append((a, b))
+                    expected.append(det/6)
             # A sliver 1e-9 thick in x against itself, and unit tetrahedra 1e-6 apart
             # in x: neither overlap may change with the depth z.
             sliver = np.array([[0., 0., 0.], [1e-9, 0., 0.], [0., 1., 0.], [0., 0., 1.]])
