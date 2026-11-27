@@ -28,7 +28,6 @@ def main():
             ('bc', {'hbc_z1': '4'}),
             ('bc', {'num_hbc_schedule': '2', 'hbc_schedule_time_in_yr': '[1,0]',
                     'hbc_schedule_ratio': '[1,1]'}),
-            ('control', {'has_thermal_pressurization': 'true', 'has_thermal_diffusion': 'false'}),
             ('mat', {'retention_model': '[4]'}),
             ('mat', {'retention_model': '[1]', 'retention_alpha': '[0]'}),
             ('mat', {'retention_model': '[1]', 'retention_n': '[1]'}),

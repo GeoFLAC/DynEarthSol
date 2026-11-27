@@ -1003,24 +1003,6 @@ void initial_temperature(const Param &param, const Variables &var,
     case 3:
         radiogenic_heat_and_adiabat(param, var, temperature, radiogenic_source, ms, elemmarkers, markers_in_elem);
         break;
-    case 4:
-    case 5:
-        for (int n = 0; n < var.nnode; ++n) {
-            const auto x = (*var.coord)[n];
-            const double dx = (x[0]-param.ic.temp_anomaly_xcenter)/param.ic.temp_anomaly_xsemi_axis;
-            const double dz = (x[NDIMS-1]-param.ic.temp_anomaly_zcenter)/param.ic.temp_anomaly_zsemi_axis;
-            double r2 = dx*dx+dz*dz;
-#ifdef THREED
-            const double dy = (x[1]-param.ic.temp_anomaly_ycenter)/param.ic.temp_anomaly_ysemi_axis;
-            r2 += dy*dy;
-#endif
-            double t = param.ic.temp_background;
-            if (param.ic.temperature_option == 5)  // steady conduction across the layer
-                t = param.bc.surface_temperature - (param.bc.mantle_temperature -
-                    param.bc.surface_temperature) * x[NDIMS-1] / param.mesh.zlength;
-            temperature[n] = t+param.ic.temp_anomaly_amplitude*std::exp(-r2);
-        }
-        break;
     case 90:
         read_external_temperature_from_comsol(param, var, *var.temperature);
         break;

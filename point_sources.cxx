@@ -49,7 +49,7 @@ bool compute_point_shape_weights(const Variables &var, int e,
 }
 
 double injection_rate_for_step(const Injection& injection,
-                               double step_start, double step_end, int point_id, bool peak_rate)
+                               double step_start, double step_end, int point_id)
 {
     const double source_start = injection.start_time[point_id];
     const double source_end = injection.end_time[point_id];
@@ -62,7 +62,7 @@ double injection_rate_for_step(const Injection& injection,
         base_rate = injection.total_amount[point_id] /
                     (source_end - source_start);
     }
-    return peak_rate ? base_rate : base_rate * overlap / (step_end - step_start);
+    return base_rate * overlap / (step_end - step_start);
 }
 
 bool source_totals_match(long double actual, long double expected,
@@ -151,7 +151,6 @@ SourcePositions source_positions(const Variables &var)
     #pragma acc wait
     SourcePositions at;
     owner_positions(var, var.fluid_points, at.fluid);
-    owner_positions(var, var.heat_points, at.heat);
     well_screen_positions(var, at.wells);
     return at;
 }
@@ -160,23 +159,20 @@ void place_sources(const Param &param, Variables &var, const SourcePositions *at
 {
     #pragma acc wait
     place_point_sources(param.injection, var, var.fluid_points, at ? &at->fluid : nullptr);
-    place_point_sources(param.heat_injection, var, var.heat_points, at ? &at->heat : nullptr);
     place_well_screens(param, var, at ? &at->wells : nullptr);
     assemble_well_source(param, var);
 }
 
-// Visit each current-mesh contribution once. The rate has volume/time units
-// for fluid sources and energy/time units for heat sources.
-using PointSourceSink = void (*)(int point, int node, double rate, void *context);
-static void deposit_point_sources(const Injection &injection, const PointSourceOwners &owners,
-                                  const Variables &var, double start, double stop,
-                                  PointSourceSink sink, void *context,
-                                  const double_vec *scale, bool peak_rate)
+void assemble_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                            const Variables &var, double start, double stop, double_vec &source)
 {
     // The previous substep can still be reading this derived source array.
     // Finish device work before any host rewrite or current-mesh lookup.
     #pragma acc wait
+    std::fill(source.begin(),source.end(),0.0);
     if (!injection.enabled) return;
+    if (source.size() != static_cast<std::size_t>(var.nnode))
+        die(EXIT_INTERNAL_ASSERT,"Point-source vector size does not match the current mesh node count.");
     if (!std::isfinite(stop - start) || !(stop > start)) {
         die(EXIT_RUNTIME_NAN,
             "Point-source integration interval must be finite and positive.");
@@ -184,6 +180,7 @@ static void deposit_point_sources(const Injection &injection, const PointSourceO
     if (owners.element.size() != std::size_t(injection.num_points))
         die(EXIT_INTERNAL_ASSERT, "Point sources were not placed in the mesh.");
 
+    // Visit each current-mesh contribution once.
     for (int p = 0; p < injection.num_points; ++p) {
         // The owner is an element of the whole mesh; a compute rank holds it
         // as an owned or ghost element, or not at all.
@@ -193,8 +190,7 @@ static void deposit_point_sources(const Injection &injection, const PointSourceO
         double q[NDIMS];
         point_position(injection, p, q);
 
-        const double source_rate = (scale ? (*scale)[p] : 1.0) *
-            injection_rate_for_step(injection, start, stop, p, peak_rate);
+        const double source_rate = injection_rate_for_step(injection, start, stop, p);
         if (!std::isfinite(source_rate)) {
             point_source_error(EXIT_RUNTIME_NAN, p, q, var,
                                "produced a non-finite rate");
@@ -205,7 +201,9 @@ static void deposit_point_sources(const Injection &injection, const PointSourceO
         long double distributed_rate = 0.0L;
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             const double contribution = source_rate * mapped_weights[i];
-            sink(p,conn[i],contribution,context);
+            source[conn[i]] += contribution;
+            if (!std::isfinite(source[conn[i]]))
+                die(EXIT_RUNTIME_NAN,"Point source overflowed a nodal source value.");
             distributed_rate += static_cast<long double>(contribution);
         }
 
@@ -216,75 +214,30 @@ static void deposit_point_sources(const Injection &injection, const PointSourceO
                                "did not conserve its requested nodal source total");
         }
     }
-}
 
-namespace {
-struct PointSourceAssembly {
-    double_vec &source;
-    double_vec *weighted;
-    const double_vec *point_weight;
-};
-
-void add_point_source(int point, int node, double rate, void *context)
-{
-    auto &assembly = *static_cast<PointSourceAssembly *>(context);
-    assembly.source[node] += rate;
-    if (!std::isfinite(assembly.source[node]))
-        die(EXIT_RUNTIME_NAN,"Point source overflowed a nodal source value.");
-    if (assembly.weighted) {
-        auto &value = (*assembly.weighted)[node];
-        value += rate * (*assembly.point_weight)[point];
-        if (!std::isfinite(value))
-            die(EXIT_RUNTIME_NAN,"Point source overflowed a weighted nodal source value.");
+    long double assembled_total = 0, requested_total = 0, absolute_rate_total = 0;
+    std::size_t active_contributions = 0;
+    for (int p = 0; p < injection.num_points; ++p) {
+        const double rate = injection_rate_for_step(injection,start,stop,p);
+        requested_total += rate;
+        absolute_rate_total += std::abs(rate);
+        if (rate != 0) active_contributions += NODES_PER_ELEM;
     }
-}
-} // namespace
-
-void assemble_point_sources(const Injection &injection, const PointSourceOwners &owners,
-                            const Variables &var, double start, double stop, double_vec &source,
-                            const double_vec *scale, bool peak_rate,
-                            double_vec *weighted, const double_vec *point_weight)
-{
-    #pragma acc wait
-    if ((weighted == nullptr) != (point_weight == nullptr) || weighted == &source ||
-        (weighted && (weighted->size() != source.size() ||
-                      point_weight->size() != static_cast<std::size_t>(injection.num_points))))
-        die(EXIT_INTERNAL_ASSERT,"Weighted point source requires distinct matching output and point-weight arrays.");
-    std::fill(source.begin(),source.end(),0.0);
-    if (weighted) std::fill(weighted->begin(),weighted->end(),0.0);
-    if (!injection.enabled) return;
-    if (source.size() != static_cast<std::size_t>(var.nnode))
-        die(EXIT_INTERNAL_ASSERT,"Point-source vector size does not match the current mesh node count.");
-    PointSourceAssembly assembly{source,weighted,point_weight};
-    deposit_point_sources(injection,owners,var,start,stop,add_point_source,&assembly,scale,peak_rate);
-    for (int field = 0; field < (weighted ? 2 : 1); ++field) {
-        long double assembled_total = 0, requested_total = 0, absolute_rate_total = 0;
-        std::size_t active_contributions = 0;
-        for (int p = 0; p < injection.num_points; ++p) {
-            double rate = (scale ? (*scale)[p] : 1.0)*
-                injection_rate_for_step(injection,start,stop,p,peak_rate);
-            if (field) rate *= (*point_weight)[p];
-            requested_total += rate;
-            absolute_rate_total += std::abs(rate);
-            if (rate != 0) active_contributions += NODES_PER_ELEM;
+    // Owned nodes only: each node is counted once over the ranks.
+    for (int n = 0; n < mpi_node_end(var); ++n) {
+        if (!std::isfinite(source[n])) {
+            die(EXIT_RUNTIME_NAN,
+                "Point-source assembly produced a non-finite nodal value.");
         }
-        // Owned nodes only: each node is counted once over the ranks.
-        const double_vec &nodal = field ? *weighted : source;
-        for (int n = 0; n < mpi_node_end(var); ++n) {
-            if (!std::isfinite(nodal[n])) {
-                die(EXIT_RUNTIME_NAN,
-                    "Point-source assembly produced a non-finite nodal value.");
-            }
-            assembled_total += static_cast<long double>(nodal[n]);
-        }
+        assembled_total += static_cast<long double>(source[n]);
+    }
 #ifdef USEMPI
-        if (var.mpi && var.mpi->in_kernel())
-            assembled_total = var.mpi->sum(static_cast<double>(assembled_total));
+    if (var.mpi && var.mpi->in_kernel())
+        assembled_total = var.mpi->sum(static_cast<double>(assembled_total));
 #endif
-        if (!source_totals_match(assembled_total, requested_total,
-                                 absolute_rate_total, active_contributions)) {
-            die_together(EXIT_INTERNAL_ASSERT,
-                "Point-source nodal total does not equal the requested active rate.");
-        }
+    if (!source_totals_match(assembled_total, requested_total,
+                             absolute_rate_total, active_contributions)) {
+        die_together(EXIT_INTERNAL_ASSERT,
+            "Point-source nodal total does not equal the requested active rate.");
     }
 }

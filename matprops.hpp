@@ -16,9 +16,7 @@ public:
 
     const int rheol_type;
     const int nmat;
-    const bool fluid_thermal_advection;
     double hydro_step_limit = 0; // rebuilt after storage/mesh changes, not checkpointed
-    double thermal_step_limit = 0; // rebuilt after capacity/mesh changes, not checkpointed
 
     #pragma acc routine seq
     double bulkm(int e) const;
@@ -32,10 +30,6 @@ public:
     #pragma acc routine seq
     double cp(int e) const;
     #pragma acc routine seq
-    double cp_fluid(int e) const;
-    #pragma acc routine seq
-    double thermal_capacity(int e) const;
-    #pragma acc routine seq
     double k(int e) const;
 
     // hydraulic parameter function
@@ -45,8 +39,6 @@ public:
     double perm(int e) const;
     #pragma acc routine seq
     double alpha_fluid(int e) const;
-    #pragma acc routine seq
-    double alpha_solid(int e) const;
     #pragma acc routine seq
     double beta_fluid(int e) const;
     // Constant material reference density for Darcy gravity and mixture weight.
@@ -209,7 +201,6 @@ private:
     // bumped by each mutation site would go stale the first time one is added.
     int_vec cache_markers;
     double_vec heat_capacity, therm_cond;
-    double_vec fluid_heat_capacity;
     double_vec pls0, pls1;
     double_vec cohesion0, cohesion1;
     double_vec friction_angle0, friction_angle1;

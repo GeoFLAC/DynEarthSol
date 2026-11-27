@@ -3,7 +3,6 @@
 
 #include "parameters.hpp"
 #include "matprops.hpp"
-#include "fields.hpp"
 
 // phi*fluid + (alpha - phi)*solid: a fluid and a grain property weighted by
 // the pore fraction and the rest of the Biot coefficient.
@@ -30,60 +29,19 @@ inline double hydraulic_inverse_biot_modulus(const MatProps &mat, int e)
     return pore_weighted(mat.phi(e), mat.alpha_biot(e), mat.beta_fluid(e), mat.beta_mineral(e));
 }
 
-// Temperature baseline belongs to the physical step, not to constitutive trials.
-#pragma acc routine seq
-inline double hydraulic_temperature_change(const Variables &var, int e)
-{
-    if (!var.old_temperature) return 0;
-    double change = 0;
-    for (int i = 0; i < NODES_PER_ELEM; ++i) {
-        const int n = (*var.connectivity)[e][i];
-        change += ((*var.temperature)[n]-(*var.old_temperature)[n])/NODES_PER_ELEM;
-    }
-    return change;
-}
-
-// Temperature changes the fluid weight when heat is transported.
-#pragma acc routine seq
-inline bool hydraulic_buoyancy(const Param &param)
-{
-    return param.control.has_thermal_diffusion || param.control.has_fluid_thermal_advection;
-}
-
-// Darcy drive with Boussinesq density rho_f0*(1 - alpha_f*(T - T0)). The
-// Dirichlet conduction profile is a nodal potential; element means use only
-// its temperature departure, keeping conduction at rest. T0 is surface_temperature.
+// Darcy drive grad p + rho_f*g*e_z.
 #pragma acc routine seq
 inline void hydraulic_drive(const Param &param, const Variables &var, const double_vec &pressure,
                             int e, const double grad[NDIMS][NODES_PER_ELEM], double drive[NDIMS])
 {
     const double weight = var.mat->rho_fluid_reference(e) * param.control.gravity;
-    const bool buoyant = hydraulic_buoyancy(param) && weight != 0 && var.mat->alpha_fluid(e) != 0;
-    if (!buoyant) {
-        // Without thermal buoyancy: grad p + rho_f*g*e_z.
-        for (int d = 0; d < NDIMS; ++d) {
-            drive[d] = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                const int n = (*var.connectivity)[e][j];
-                drive[d] += grad[d][j] * (pressure[n] + weight*(*var.coord)[n][NDIMS-1]);
-            }
+    for (int d = 0; d < NDIMS; ++d) {
+        drive[d] = 0;
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            const int n = (*var.connectivity)[e][j];
+            drive[d] += grad[d][j] * (pressure[n] + weight*(*var.coord)[n][NDIMS-1]);
         }
-        return;
     }
-    const double buoy = var.mat->alpha_fluid(e) * weight;
-    double slope = 0, excess = 0;
-    if (param.bc.tbc[iboundz0] == 1 && param.bc.tbc[iboundz1] == 1)
-        slope = (thermal_boundary_value(param, iboundz0) - thermal_boundary_value(param, iboundz1)) /
-                param.mesh.zlength;
-    for (int d = 0; d < NDIMS; ++d) drive[d] = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = (*var.connectivity)[e][j];
-        const double z = (*var.coord)[n][NDIMS-1];
-        const double potential = pressure[n] + weight*z + 0.5*buoy*slope*z*z;
-        for (int d = 0; d < NDIMS; ++d) drive[d] += grad[d][j] * potential;
-        excess += (*var.temperature)[n] - (param.bc.surface_temperature - slope*z);
-    }
-    drive[NDIMS-1] -= buoy * excess / NODES_PER_ELEM;
 }
 
 // Fixed-stress pressure storage, in 1/Pa. Geometry supplies volume/shape weight.
@@ -237,11 +195,6 @@ void reset_hydraulic_assembly(const Param &param, Variables &var);
 // Seed the transport timestep before the first step and after material/remesh
 // changes. The pressure update also refreshes this bound from current properties.
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
-// Physical Darcy volume flux (m/s); retention and gravity conventions
-// match pressure assembly. Reuse caller-owned gradients when supplied.
-#pragma acc routine seq
-void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
-                            const double (*gradient)[NODES_PER_ELEM] = nullptr);
 // Fix the well screens in the material of the whole mesh (var.well_pieces): the
 // configured vertical screens, or, after a remesh, the previous pieces from the
 // positions of their ends (2*NDIMS per piece, see well_screen_positions).
@@ -252,8 +205,8 @@ void well_screen_positions(const Variables &var, double_vec &ends);
 // The pieces move with the mesh, so it changes only when they are placed.
 void assemble_well_source(const Param &param, const Variables &var);
 
-// One exact-overlap transfer for fluid inventories and pending shear energy.
-// The linear model applies a storage-weighted correction.
+// One exact-overlap transfer for the fluid inventories. The linear model
+// applies a storage-weighted correction.
 class ContentRemap {
 public:
     ContentRemap(const Param &param, const Variables &var);
@@ -261,14 +214,12 @@ public:
                   const conn_t &old_connectivity);
     void restore(const Param &param, Variables &var) const;
 private:
-    bool linear, active;
+    bool linear;
     elem_cache old_content;
     shapefn outside;
     double total[2] = {};
     double magnitude[2] = {};
     double mapped[2] = {};
-    double_vec heat_density, mapped_heat;
-    double heat_total = 0;
 };
 
 // Hydraulic state changes belong to initialization or accepted physical steps;

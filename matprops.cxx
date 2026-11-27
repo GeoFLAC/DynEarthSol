@@ -185,7 +185,6 @@ double ref_pressure(const Param& param, double z)
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
-  fluid_thermal_advection(p.control.has_fluid_thermal_advection),
   has_retention(std::any_of(p.mat.retention_model.begin(), p.mat.retention_model.end(),
                             [](int m) { return m != retention_saturated; })),
   is_plane_strain(p.mat.is_plane_strain),
@@ -213,7 +212,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     visc_activation_energy = p.mat.visc_activation_energy;
     visc_activation_volume = p.mat.visc_activation_volume;
     heat_capacity = p.mat.heat_capacity;
-    fluid_heat_capacity = p.mat.fluid_heat_capacity;
     therm_cond = p.mat.therm_cond;
     pls0 = p.mat.pls0;
     pls1 = p.mat.pls1;
@@ -332,7 +330,7 @@ MatProps::~MatProps()
 {
     #pragma acc exit data delete(rho0,alpha,bulk_modulus,shear_modulus,visc_exponent)
     #pragma acc exit data delete(visc_coefficient,visc_activation_energy,visc_activation_volume)
-    #pragma acc exit data delete(heat_capacity,fluid_heat_capacity,therm_cond,pls0,pls1,cohesion0)
+    #pragma acc exit data delete(heat_capacity,therm_cond,pls0,pls1,cohesion0)
     #pragma acc exit data delete(friction_angle0,friction_angle1,dilation_angle0,dilation_angle1)
 
     // Deleting hydraulic properties
@@ -847,11 +845,6 @@ double MatProps::perm(int e) const
     return harmonic_mean(hydraulic_perm, elemmarkers[e]);
 }
 
-double MatProps::alpha_solid(int e) const
-{
-    return arithmetic_mean(alpha, elemmarkers[e]);
-}
-
 double MatProps::alpha_fluid(int e) const
 {
     return arithmetic_mean(fluid_alpha, elemmarkers[e]);
@@ -866,19 +859,6 @@ double MatProps::beta_fluid(int e) const
 double MatProps::rho_fluid_reference(int e) const
 {
     return arithmetic_mean(fluid_rho0, elemmarkers[e]);
-}
-
-double MatProps::cp_fluid(int e) const
-{
-    return arithmetic_mean(fluid_heat_capacity, elemmarkers[e]);
-}
-
-double MatProps::thermal_capacity(int e) const
-{
-    const double solid = rho(e) * cp(e);
-    if (!fluid_thermal_advection) return solid;
-    const double pore = phi(e);
-    return (1-pore)*solid + pore*rho_fluid_reference(e)*cp_fluid(e);
 }
 
 double MatProps::mu_fluid(int e) const

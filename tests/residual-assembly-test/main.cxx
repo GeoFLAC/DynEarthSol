@@ -1,7 +1,7 @@
 // Focused tests of real DES routines: force assembly in update_force and its
 // undamped output, PT velocity constraints and residual norm, material trials and
-// Mohr-Coulomb returns, the 3x3 eigensolver, and hydraulic, thermal and
-// point-source updates.
+// Mohr-Coulomb returns, the 3x3 eigensolver, and hydraulic and point-source
+// updates.
 // Modes: -DBASE (5-arg update_force) / -DB0 (6-arg, with the force_undamped output).
 // Mesh: two elements sharing node 0, identical constant stress -> cancellation at node 0.
 // Force cases: cancellation, Neumann traction, damping exclusion, body force.
@@ -58,7 +58,7 @@ struct Fixture {
     elem_cache tmp_result;
     double_vec volume;
     double_vec temperature, pressure, pressure_increment, lookup;
-    double_vec thermal_mass, heat_source, old_temperature, hydraulic_mass;
+    double_vec hydraulic_mass;
     double_vec volume_rate, balance;
     uint_vec boundary_flags;
     tensor_t strain_rate, strain;
@@ -693,12 +693,6 @@ static void test_material_trials() {
             tensor_t* strain=f.strain;
             double_vec *yy=f.yy, *dp=f.dp, *visc=f.visc, *pls=f.pls, *dpls=f.dpls,
                        *friction=f.friction, *state=f.state;
-            auto* heat = new double_vec(ne,7.);
-            auto* pending_heat = new double_vec(ne,17.);
-            m->var.shear_heat = heat;
-            m->var.pending_heat = pending_heat;
-            m->param.control.has_shear_heating = true;
-            auto& p=m->param.mat;
             auto* baseline=new MechanicalState(ne);
             baseline->capture(m->var);
             if (model==MatProps::rh_elastic || model==MatProps::rh_ep) {
@@ -716,26 +710,6 @@ static void test_material_trials() {
                     check("initial pending pressure preserved",m->pressure_increment[n],-10);
                 }
             }
-            {
-                MatProps *original_mat = m->var.mat;
-                p.alpha = {1e-5};
-                m->var.mat = new MatProps(m->param,m->var);
-                auto* old_temperature = new double_vec(nn,299.);
-                m->var.old_temperature = old_temperature;
-                baseline->restore(m->var);
-                update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
-                              m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
-                #pragma acc wait
-                for(int e=0;e<ne;++e) {
-                    check("reversible thermal and pressure shifts do not heat",(*heat)[e],0);
-                    check("thermal trial retains pending energy",(*pending_heat)[e],17);
-                }
-                delete m->var.mat;
-                m->var.mat = original_mat;
-                m->var.old_temperature = nullptr;
-                delete old_temperature;
-                p.alpha = {0};
-            }
             for (int trial=0;trial<5;++trial) {
                 baseline->restore(m->var);
                 update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
@@ -749,8 +723,6 @@ static void test_material_trials() {
                     if(NDIMS==2) check("plane strain pressure yy",(*yy)[e],-10*alpha);
                     check("pressure trace",(*dp)[e],-30*alpha);
                     check("plastic history",(*pls)[e],0);
-                    check("pressure-only increment has no shear heat",(*heat)[e],0);
-                    check("constitutive trial retains pending energy",(*pending_heat)[e],17);
                     check("plastic increment",(*dpls)[e],0);
                     check("state unchanged",(*state)[e],10);
                     // Deliberately contaminate every snapshot scalar to check restore.
@@ -814,32 +786,6 @@ static void test_material_trials() {
                     check("initial RSF frozen state",theta,10);
                     check("initial RSF independent of pseudo velocity",anphi,first_strength);
                 }
-            }
-
-            if (model==MatProps::rh_elastic && alpha==0.6) {
-                p.alpha={3e-5};
-                f.set_material();
-                auto& old_temperature=m->old_temperature;
-                old_temperature.assign(nn,290);
-                m->var.old_temperature=&old_temperature;
-                m->pressure_increment.assign(nn,0);
-                for(int trial=0;trial<3;++trial) {
-                    baseline->restore(m->var);
-                    m->strain_rate.resize(ne,0.0);
-                    for(int e=0;e<ne;++e) for(int d=0;d<NSTR;++d) m->strain_rate[e][d]=0;
-                    m->pressure_increment.assign(nn,0);
-                    update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
-                                  m->strain_rate,m->pressure,m->pressure_increment,m->vel,*friction,*state,true);
-                    #pragma acc wait
-                    for(int e=0;e<ne;++e) {
-                        for(int d=0;d<NDIMS;++d) check("thermal trial fixed-strain stress",m->stress[e][d],-3e5);
-                        if(NDIMS==2) check("thermal plane-strain out-of-plane stress",(*yy)[e],-3e5);
-                    }
-                }
-                m->var.old_temperature=nullptr; p.alpha={0};
-                f.set_material();
-                baseline->restore(m->var);
-                m->pressure_increment.assign(nn,-10);
             }
 
             // A real failed solve must restore history after numerical updates,
@@ -914,8 +860,6 @@ static void test_material_trials() {
                         check("rollback delta_plstrain exact",after->delta_plstrain[e]==baseline->delta_plstrain[e],1);
                         check("rollback dyn_fric_coeff exact",after->dyn_fric_coeff[e]==baseline->dyn_fric_coeff[e],1);
                         check("rollback state_variable exact",after->state_variable[e]==baseline->state_variable[e],1);
-                        check("rollback heating power exact",after->shear_heat[e]==baseline->shear_heat[e],1);
-                        check("failed PT does not deposit heat",(*pending_heat)[e],17);
                     }
                     for(int n=0;n<nn;++n) {
                         for(int d=0;d<NDIMS;++d)
@@ -935,7 +879,7 @@ static void test_material_trials() {
                 delete after; delete ntmp; delete etmp; delete volume_n;
                 delete flags; delete normals;
             }
-            delete baseline; delete heat; delete pending_heat;
+            delete baseline;
         }
     }
 }
@@ -1886,39 +1830,6 @@ static void test_darcy_gravity_limit() {
         m->param.control.gravity=0;
     }
     {
-        p.alpha={3e-5}; p.fluid_alpha={2e-4}; p.biot_coeff={0.6};
-        reset_material(*m);
-        auto& old_temperature=m->old_temperature;
-        old_temperature.assign(nn,273);
-        m->var.old_temperature=&old_temperature;
-        m->temperature.assign(nn,283); m->pressure.assign(nn,0);
-        std::fill(mass->begin(),mass->end(),0.0);
-        std::fill(m->stress.data(),m->stress.data()+ne*NSTR,0.0);
-        const double storage=hydraulic_storage(*m->var.mat,0);
-        for(int e=0;e<ne;++e) for(int j=0;j<NODES_PER_ELEM;++j)
-            (*mass)[m->connectivity[e][j]]+=storage*m->volume[e]/NODES_PER_ELEM;
-        m->var.dt=0.1; m->param.control.gravity=0;
-        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
-                             *rate,m->tmp_result,m->stress,*old_mean);
-        const double beta=0.2*2e-4+(0.6-0.2)*3e-5;
-        const double thermal=beta-0.6e9*3e-5*hydraulic_mean_stress_compliance(*m->var.mat,0);
-        for(int n=0;n<nn;++n)
-            check("sealed fixed-stress thermal pressure",m->pressure[n],thermal*10/storage);
-        auto& balance=m->balance; balance.assign(5,0); m->var.fluid_balance=&balance;
-        m->pressure.assign(nn,0);
-        std::fill(flags->begin(),flags->end(),BOUNDZ1); m->var.hbc_types[iboundz1]=1;
-        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
-                             *rate,m->tmp_result,m->stress,*old_mean);
-        double volume=0;
-        for(int e=0;e<ne;++e) volume+=m->volume[e];
-        check("drained thermal pressure remains prescribed",m->pressure[0],0);
-        check("drained thermal outflow",balance[3],-thermal*10*volume);
-        m->var.fluid_balance=nullptr;
-        std::fill(flags->begin(),flags->end(),0); m->var.hbc_types[iboundz1]=0;
-        m->var.old_temperature=nullptr;
-        p.alpha={0}; p.fluid_alpha={0};
-    }
-    {
         const bool feedback=m->param.control.has_poroelastic_pressure_feedback;
         m->param.control.has_poroelastic_pressure_feedback=true;
         p.biot_coeff={.6};
@@ -1962,111 +1873,8 @@ static void test_darcy_gravity_limit() {
     delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
 }
 
-static void test_thermal_subcycling() {
-    std::printf("[Explicit heat eigenmode, conservation and capacity changes]\n");
-    auto* m = new Fixture();
-    build_mesh(*m);
-    const int nn = m->var.nnode, ne = m->var.nelem;
-    bind_fields(*m, 273);
-    auto& source = m->heat_source;
-    auto& capacity = m->thermal_mass;
-    auto& old_temperature = m->old_temperature;
-    auto& flags = m->boundary_flags;
-    source.assign(ne, 0); capacity.resize(nn);
-    old_temperature.assign(nn, 273); flags.assign(nn, 0);
-    m->var.radiogenic_source = &source;
-    m->var.tmass = &capacity;
-    m->var.bcflag = &flags;
-    m->var.old_temperature = &old_temperature;
-    auto& p = m->param.mat;
-    p.nmat=1; p.rheol_type=MatProps::rh_elastic;
-    p.rho0={1}; p.alpha={0}; p.porosity={0.2};
-    p.bulk_modulus={1e9}; p.shear_modulus={1e9};
-    p.visc_exponent={1}; p.visc_coefficient={1};
-    p.biot_coeff={1}; p.heat_capacity={1}; p.therm_cond={1};
-    p.fluid_bulk_modulus={2e9}; p.hydraulic_perm={1e-12}; p.bulk_modulus_s={37e9};
-    p.fluid_visc={1e-3}; p.fluid_rho0={1};
-    m->param.control.has_thermal_diffusion = true;
-    reset_material(*m);
-    for (int n=0; n<nn; ++n)
-        capacity[n] = m->volume[0] * (n == 0 ? 2 : 1) / NODES_PER_ELEM;
-    // On two reflected unit simplices (-NDIMS,1,...,1) is an exact
-    // lumped heat eigenvector with eigenvalue (NDIMS+1)^2.
-    const double lambda = NODES_PER_ELEM * NODES_PER_ELEM;
-    const double bound = 1.0 / (2 * NDIMS * NODES_PER_ELEM);
-    m->var.dt = 3.5 * bound;
-    for (int n=0; n<nn; ++n) m->temperature[n] += n == 0 ? -NDIMS : 1;
-    update_temperature(m->param, m->var, m->temperature, m->tmp_result);
-    #pragma acc wait
-    check("heat row bound", m->var.mat->thermal_step_limit, bound);
-    const double decay = std::pow(1 - lambda * m->var.dt / 4, 4);
-    double heat = 0;
-    for (int n=0; n<nn; ++n) {
-        check("subcycled heat eigenmode", m->temperature[n], 273 + decay*(n == 0 ? -NDIMS : 1));
-        check("thermal pressurization baseline untouched", old_temperature[n], 273);
-        heat += capacity[n] * (m->temperature[n] - 273);
-    }
-    check("insulated heat conservation", heat, 0);
-    double previous_error = 0;
-    for (int steps : {10, 20, 40}) {
-        m->var.dt = 0.01 / steps;
-        for (int n=0; n<nn; ++n) m->temperature[n] = 273 + (n == 0 ? -NDIMS : 1);
-        for (int i=0; i<steps; ++i)
-            update_temperature(m->param, m->var, m->temperature, m->tmp_result);
-        #pragma acc wait
-        const double error = std::abs(m->temperature[0] - (273 - NDIMS*std::exp(-lambda*0.01)));
-        if (previous_error > 0) check("heat first-order temporal convergence", previous_error/error > 1.9 && previous_error/error < 2.1, 1);
-        previous_error = error;
-    }
-    // The same invalidation used after remesh/material refresh must rebuild
-    // the capacity-dependent bound; it must not be serialized as history.
-    double_vec volume_n(nn), mass(nn), hmass(nn), ymass(nn);
-    compute_mass(m->param, m->var, 0.01, volume_n, mass, capacity, hmass, ymass, m->tmp_result);
-    #pragma acc wait
-    check("heat cache invalidated by mass assembly", m->var.mat->thermal_step_limit, 0);
-    for (auto& value : capacity) value *= 2;
-    flags[0] = BOUNDZ1;
-    m->param.bc.surface_temperature = 280;
-    m->var.dt = 3.5 * bound;
-    update_temperature(m->param, m->var, m->temperature, m->tmp_result);
-    #pragma acc wait
-    check("heat bound follows changed capacity", m->var.mat->thermal_step_limit, 2*bound);
-    check("subcycled prescribed surface temperature", m->temperature[0], 280);
-    delete m->var.mat;
-    delete m;
-}
-
-static void test_heat_remap() {
-    std::printf("[Pending heat follows retained material]\n");
-    for (int mode = 0; mode < 3; ++mode) {
-        auto *m = new Fixture(); build_mesh(*m);
-        m->param.control.has_hydraulic_diffusion = false;
-        const array_t old_coordinate(m->coord);
-        const conn_t old_connectivity(m->connectivity);
-        double_vec energy(m->var.nelem,0);
-        energy[0] = 2; energy[1] = 7;
-        m->var.pending_heat = &energy;
-        ContentRemap remap(m->param,m->var);
-        m->var.nelem = 1;
-        m->connectivity.resize(1);
-        if (mode == 1)
-            for (int n = 0; n < m->var.nnode; ++n)
-                for (int d = 0; d < NDIMS; ++d) m->coord[n][d] *= .5;
-        if (mode == 2)
-            for (int n = 0; n < m->var.nnode; ++n)
-                for (int d = 0; d < NDIMS; ++d) m->coord[n][d] += 10;
-        remap.transfer(m->var,old_coordinate,old_connectivity);
-        remap.restore(m->param,m->var);
-        check("pending heat uses current cell count",energy.size(),1);
-        const double retained = mode == 0 ? 2 : (mode == 1 ? 2*std::pow(.5,NDIMS) : 0);
-        check("removed material does not return its heat",energy[0],retained);
-        m->var.pending_heat = nullptr;
-        delete m;
-    }
-}
-
 static void test_strain_pressure(bool scaled = false) {
-    std::printf("[Strain-driven storage, heating and subcycling: %s mass]\n",
+    std::printf("[Strain-driven storage and subcycling: %s mass]\n",
                 scaled ? "scaled" : "physical");
     auto* m = new Fixture(); build_mesh(*m);
     const int nn=m->var.nnode, ne=m->var.nelem;
@@ -2080,7 +1888,6 @@ static void test_strain_pressure(bool scaled = false) {
     p.bulk_modulus_s={37e9}; p.fluid_rho0={1000}; p.fluid_alpha={2e-4};
     p.hydraulic_perm={0}; p.fluid_visc={1e-3};
     m->param.control.has_hydraulic_diffusion=true;
-    m->param.control.has_thermal_pressurization=true;
     m->param.control.is_quasi_static=scaled;
     m->param.control.inertial_scaling=1e5;
     p.visc_min=1e30;
@@ -2088,14 +1895,13 @@ static void test_strain_pressure(bool scaled = false) {
     reset_material(*m);
     double_vec mass(nn),volume_n(nn),tmass(nn),ymass(nn),rate(nn),old_mean(ne,-2e5);
     auto& hmass=m->hydraulic_mass;
-    auto& old_temperature=m->old_temperature;
     auto& vol_rate=m->volume_rate;
     auto& balance=m->balance;
     auto& flags=m->boundary_flags;
-    hmass.resize(nn); old_temperature.assign(nn,273);
+    hmass.resize(nn);
     vol_rate.resize(ne); balance.resize(5); flags.assign(nn,0);
     m->var.hmass=&hmass; m->var.bcflag=&flags; m->var.dt=2;
-    m->var.edvoldt=&vol_rate; m->var.old_temperature=&old_temperature;
+    m->var.edvoldt=&vol_rate;
     m->var.fluid_balance=&balance;
     for(int e=0;e<ne;++e) {
         vol_rate[e]=(e+1)*1e-7;
@@ -2103,13 +1909,11 @@ static void test_strain_pressure(bool scaled = false) {
     }
     compute_mass(m->param,m->var,.01,volume_n,mass,tmass,hmass,ymass,m->tmp_result);
     const double storage=.2/2e9+.4/37e9;
-    const double beta=.2*2e-4+.4*3e-5;
-    const double heat=beta*(m->temperature[0]-273);
     check("physical pressure capacity",hydraulic_storage(m->param,*m->var.mat,0)/storage,1);
     double expected_total=0;
     double_vec nodal_change(nn,0),nodal_volume(nn,0);
     for(int e=0;e<ne;++e) {
-        const double change=(heat-.6*m->var.dt*vol_rate[e])*m->volume[e];
+        const double change=-.6*m->var.dt*vol_rate[e]*m->volume[e];
         expected_total+=change;
         for(int j=0;j<NODES_PER_ELEM;++j) {
             const int n=m->connectivity[e][j];
@@ -2126,136 +1930,13 @@ static void test_strain_pressure(bool scaled = false) {
         #pragma acc wait
         for(int n=0;n<nn;++n) {
             const double dp=nodal_change[n]/(storage*nodal_volume[n]);
-            check("physical pressure strain/heating increment",m->pressure[n],5e4+dp);
+            check("physical pressure strain increment",m->pressure[n],5e4+dp);
             check("raw increment reset and integrated once",m->pressure_increment[n],-dp);
         }
         check("physical fluid content",balance[0]/expected_total,1);
         check("physical fluid balance",balance[4]/expected_total,0);
     }
     delete m->var.mat; delete m;
-}
-
-static void test_fluid_heat_transport() {
-    std::printf("[Darcy heat transport, mixed capacity and bounded substeps]\n");
-    auto* m = new Fixture(); build_mesh(*m);
-    const int nn=m->var.nnode, ne=m->var.nelem;
-    bind_fields(*m,300);
-    auto& capacity=m->thermal_mass;
-    auto& sources=m->heat_source;
-    auto& flags=m->boundary_flags;
-    capacity.resize(nn); sources.assign(ne,0); flags.assign(nn,0);
-    double_vec volume_n(nn),mass(nn),hmass(nn),ymass(nn);
-    m->var.tmass=&capacity; m->var.bcflag=&flags; m->var.radiogenic_source=&sources;
-    auto& p=m->param.mat;
-    p.nmat=1; p.rheol_type=MatProps::rh_elastic;
-    p.rho0={2500}; p.alpha={0}; p.porosity={.2}; p.biot_coeff={1};
-    p.bulk_modulus={1e9}; p.shear_modulus={1e9};
-    p.visc_exponent={1}; p.visc_coefficient={1};
-    p.heat_capacity={1000}; p.therm_cond={0}; p.fluid_bulk_modulus={2e9};
-    p.bulk_modulus_s={37e9}; p.fluid_rho0={1200}; p.fluid_heat_capacity={4000};
-    p.fluid_alpha={0}; p.hydraulic_perm={1e-12}; p.fluid_visc={1e-3};
-    m->param.control.has_hydraulic_diffusion=true;
-    m->param.control.has_fluid_thermal_advection=true;
-    reset_material(*m);
-    compute_mass(m->param,m->var,.01,volume_n,mass,capacity,hmass,ymass,m->tmp_result);
-    #pragma acc wait
-    const double cv=.8*2500*1000+.2*1200*4000;
-    check("rock/water thermal capacity",m->var.mat->thermal_capacity(0)/cv,1);
-    double total_volume=0;
-    for(double v:m->volume) total_volume+=v;
-    double total_capacity=0;
-    for(double v:capacity) total_capacity+=v;
-    check("assembled mixed thermal mass",total_capacity/(cv*total_volume),1);
-    for(double gravity : {0.,10.}) {
-        m->param.control.gravity=gravity;
-        for(int n=0;n<nn;++n) {
-            const auto x=m->coord[n];
-            m->pressure[n]=1e5*x[0]+(2e4-1200*gravity)*x[NDIMS-1];
-            m->temperature[n]=300+2*x[0]+3*x[NDIMS-1];
-        }
-        double expected_q[NDIMS];
-        double gradient[NDIMS]={};gradient[0]=1e5;gradient[NDIMS-1]=2e4;
-        for(int d=0;d<NDIMS;++d) expected_q[d]=-1e-9*gradient[d];
-        for(int e=0;e<ne;++e) {
-            double q[NDIMS];hydraulic_element_flux(m->param,m->var,e,q);
-            for(int d=0;d<NDIMS;++d)
-                check("pressure/gravity physical Darcy flux",q[d],expected_q[d]);
-        }
-        const double_vec before=m->temperature;
-        m->var.dt=.25;
-        update_temperature(m->param,m->var,m->temperature,m->tmp_result);
-        #pragma acc wait
-        double energy=0;
-        for(int n=0;n<nn;++n) energy+=capacity[n]*(m->temperature[n]-before[n]);
-        const double reference=-m->var.dt*1200*4000*(2*expected_q[0]+3*expected_q[NDIMS-1])*total_volume;
-        check("integrated affine heat-advection energy",energy/reference,1);
-        m->temperature.assign(nn,300);
-        m->var.dt=10*m->var.mat->thermal_step_limit;
-        update_temperature(m->param,m->var,m->temperature,m->tmp_result);
-        #pragma acc wait
-        for(double t:m->temperature) check("advection preserves constant temperature",t,300);
-        for(int n=0;n<nn;++n) m->temperature[n]=n%2 ? 320:280;
-        update_temperature(m->param,m->var,m->temperature,m->tmp_result);
-        #pragma acc wait
-        for(double t:m->temperature)
-            check("advection substeps preserve temperature bounds",t>=280-1e-10&&t<=320+1e-10,1);
-    }
-    // An inactive mantle-temperature setting cannot drive uniform, static water.
-    // Also exercise explicit thermal boundary values that differ from defaults.
-    m->param.mesh.zlength=1;
-    m->param.bc.surface_temperature=300;
-    m->param.bc.mantle_temperature=400;
-    m->param.control.gravity=10;
-    p.fluid_alpha={.001};
-    reset_material(*m);
-    for (bool fixed_ends : {false,true}) {
-        m->param.bc.tbc[iboundz0]=m->param.bc.tbc[iboundz1]=fixed_ends ? 1:0;
-        m->param.bc.tbc_value[iboundz0]=360;
-        m->param.bc.tbc_value[iboundz1]=320;
-        const double slope=fixed_ends ? 40:0;
-        const double top=fixed_ends ? 320:300;
-        const double weight=1200*10;
-        for (int n=0;n<nn;++n) {
-            const double z=m->coord[n][NDIMS-1];
-            m->temperature[n]=top-slope*z;
-            m->pressure[n]=-weight*(1-.001*(top-300))*z-.5*weight*.001*slope*z*z;
-        }
-        for (int e=0;e<ne;++e) {
-            double q[NDIMS];
-            hydraulic_element_flux(m->param,m->var,e,q);
-            for (int d=0;d<NDIMS;++d)
-                check(fixed_ends ? "active thermal boundary conduction at rest":
-                                  "inactive thermal boundary hydrostatic rest",q[d]*1e9,0);
-        }
-    }
-
-    // At zero flow, enabling advection must retain the ordinary conduction
-    // operator, including positive off-diagonals on an obtuse simplex. Hold
-    // the mixed thermal mass fixed when comparing the two update paths.
-    p.fluid_alpha={0}; p.therm_cond={10};
-    m->param.control.gravity=0;
-    m->param.control.has_thermal_diffusion=true;
-    m->param.bc.tbc[iboundz0]=m->param.bc.tbc[iboundz1]=0;
-    reset_material(*m);
-    m->pressure.assign(nn,0);
-    for (int n=0;n<nn;++n) {
-        m->coord[n][0]-=1.5*m->coord[n][NDIMS-1];
-        m->temperature[n]=300+2*m->coord[n][0]+3*m->coord[n][NDIMS-1];
-    }
-    compute_mass(m->param,m->var,.01,volume_n,mass,capacity,hmass,ymass,m->tmp_result);
-    const double_vec initial=m->temperature;
-    m->var.dt=1;
-    m->param.control.has_fluid_thermal_advection=false;
-    update_temperature(m->param,m->var,m->temperature,m->tmp_result);
-    #pragma acc wait
-    const double_vec conduction=m->temperature;
-    m->temperature=initial;
-    m->param.control.has_fluid_thermal_advection=true;
-    update_temperature(m->param,m->var,m->temperature,m->tmp_result);
-    #pragma acc wait
-    for (int n=0;n<nn;++n)
-        check("zero-flow heat operator on obtuse elements",m->temperature[n],conduction[n]);
-    delete m->var.mat;delete m;
 }
 
 static void test_point_sources() {
@@ -2275,28 +1956,6 @@ static void test_point_sources() {
         const double expected=n==0 ? 2*c+2.8 : n<=NDIMS ? 3*c : -c;
         check("point barycentric rates and shared-node ownership",rate[n],expected);
     }
-    const double_vec inflow={1,0,1}, temperature={300,0,400};
-    assemble_point_sources(source,owners,m->var,0,1,rate,&inflow,true);
-    for(int n=0;n<m->var.nnode;++n)
-        check("active inlet rate bounds partial source windows",rate[n],
-              n==0 ? 5*c+7 : n<=NDIMS ? 5*c : 0);
-    assemble_point_sources(source,owners,m->var,0,1,rate,&temperature,true);
-    for(int n=0;n<m->var.nnode;++n)
-        check("temperature-weighted active inlet rate",rate[n],
-              n==0 ? 1500*c+2800 : n<=NDIMS ? 1500*c : 0);
-    source.temperature={300,273,400};
-    double_vec heat(m->var.nnode,0),separate_rate(m->var.nnode,0),separate_heat(m->var.nnode,0);
-    for (bool peak : {false,true}) {
-        assemble_point_sources(source,owners,m->var,0,1,separate_rate,&inflow,peak);
-        assemble_point_sources(source,owners,m->var,0,1,separate_heat,&temperature,peak);
-        assemble_point_sources(source,owners,m->var,0,1,rate,&inflow,peak,&heat,&source.temperature);
-        for(int n=0;n<m->var.nnode;++n) {
-            check("shared point map preserves inlet volume",rate[n],separate_rate[n]);
-            check("shared point map preserves weighted inlet",heat[n],separate_heat[n]);
-        }
-    }
-    assemble_point_sources(source,owners,m->var,.81,1.4,rate,&inflow,true);
-    for(double v:rate) check("inactive inlets do not constrain heat steps",v,0);
     const double breaks[]={0,.13,.47,.81,1.4};
     for(int i=0;i<4;++i) {
         assemble_point_sources(source,owners,m->var,breaks[i],breaks[i+1],rate);
@@ -2308,10 +1967,6 @@ static void test_point_sources() {
     assemble_point_sources(source,owners,m->var,0,1.4,rate);
     for(int n=0;n<m->var.nnode;++n)
         check("rate/total-amount equivalence",rate[n]*1.4,integrated[n]);
-    assemble_point_sources(source,owners,m->var,0,1.4,rate,&inflow,true);
-    for(int n=0;n<m->var.nnode;++n)
-        check("total-amount inlet has the same active rate bound",rate[n],
-              n==0 ? 5*c+7 : n<=NDIMS ? 5*c : 0);
     // The points are fixed in the material: they move with the mesh, away from
     // their configured coordinates.
     for(int n=0;n<m->var.nnode;++n) for(int d=0;d<NDIMS;++d) m->coord[n][d]+=10;
@@ -2336,12 +1991,9 @@ int main(int argc, char** argv) {
         test_rejected_jump(std::strcmp(argv[1],"--reject-mc-cap-jump")==0);
         return 1;  // check.sh requires status 54 from update_stress
     }
-    test_heat_remap();
     test_point_sources();
-    test_fluid_heat_transport();
     test_strain_pressure();
     test_strain_pressure(true);
-    test_thermal_subcycling();
     test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();

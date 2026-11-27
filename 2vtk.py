@@ -94,9 +94,9 @@ from numpy.linalg  import eigh
 from fractions import Fraction
 from Dynearthsol import Dynearthsol
 
-# Fields that a frame holds only under some fluid-flow or shear-heating options.
+# Fields that a frame holds only under some fluid-flow options.
 OPTIONAL_ELEM_FIELDS = ('saturation', 'effective saturation', 'relative permeability',
-                        'bulk density', 'shear heating', 'pending shear heat')
+                        'bulk density')
 
 # Save in ASCII or encoded binary.
 # Some old VTK programs cannot read binary VTK files.

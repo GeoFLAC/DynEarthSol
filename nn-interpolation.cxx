@@ -741,15 +741,6 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
             }
         }
 
-        if (!is_surface && var.shear_heat) {
-            #pragma acc wait
-            double_vec *power = new double_vec(var.nelem);
-            inject_field(idx, is_changed, idx_changed, elems_vec, ratios_vec,
-                         *var.shear_heat, *power, var.nelem);
-            #pragma acc wait
-            delete var.shear_heat;
-            var.shear_heat = power;
-        }
         nn_interpolate_elem_fields(var, rs, idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
     }
 

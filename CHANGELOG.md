@@ -51,11 +51,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   using shared-node connectivity and a communication volume objective; meshes with
   no more elements than ranks use recursive coordinate bisection, and a one-rank
   GPU run keeps every element on its rank.
-- `control.has_shear_heating` integrates the nonelastic heating proposed in
-  [#88](https://github.com/GeoFLAC/DynEarthSol/pull/88), including plastic
-  earthquake deformation and EP-RSF. Accepted energy survives timestep
-  changes, remeshing and restart; the default remains off.
-
 - Same-input slope and rainfall replays check the plastic fluid-source
   correction against the existing fixed-slip results. An independent
   saturated content checker detects defects hidden by a small pressure
@@ -69,13 +64,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   physical mixture inertia at scalings 1e4–1e6, preserving physical state
   and distinguishing artificial kinetic energy from heat.
 
-- Selected hydromechanics review pages for coupled water content, sealed
-  thermal pressurization and fluid conservation through plastic yielding,
-  with shared schematics, derivations and portable every-step tables.
-
-- Heated material-cell references check thermal pressurization and closed
-  heat balance, quantify PT's pressure lag, and isolate the missing retained
-  fluid capacity in the open-system energy budget.
+- Selected hydromechanics review pages for coupled water content and fluid
+  conservation through plastic yielding, with shared schematics, derivations
+  and portable every-step tables.
 
 - A coupled inflow/drainage column checks fluid content from pressure and
   strain, quantifies the PT coupling lag, and verifies water budgets through
@@ -84,19 +75,11 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A rigid frictionless top platen (`bc.vbc_z1=8`) and normal surface stress
   on arbitrary facets (`bc.stress_bc_*=4`) support Mandel and Cryer
   consolidation benchmarks.
-- Hydraulic and thermal transport include Boussinesq fluid buoyancy from
-  `mat.fluid_alpha`; `ic.temperature_option=5` initializes linear conduction
-  with a Gaussian perturbation. Zero-flow heat transport preserves ordinary
-  Galerkin conduction, including on obtuse elements.
-- Scheduled fluid and heat point sources support signed rates or total
-  amounts, exact partial-step schedules, mesh-aware distribution and
-  independent volume/heat balance checks. Existing wells retain their
-  extraction-positive convention. Point sources and well screens move with
-  the material, as monitor points do, through remeshing and restarts.
-- Optional groundwater heat advection uses Darcy flux and mixed solid/fluid
-  heat capacity, with prescribed thermal boundaries and stable substeps even
-  for a fixed outer timestep. A schematic and analytical Ogata–Banks comparison
-  document its constant-capacity transport scope.
+- Scheduled fluid point sources support signed rates or total amounts,
+  exact partial-step schedules, mesh-aware distribution and independent
+  volume balance checks. Existing wells retain their extraction-positive
+  convention. Point sources and well screens move with the material, as
+  monitor points do, through remeshing and restarts.
 - Explicit hydraulic transport supports scheduled pressure/flux boundaries and
   a checkpointed fluid-balance diagnostic.
   Large fixed timesteps use stable hydraulic substeps.
@@ -104,8 +87,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   `mat.retention_model` (van Genuchten-Mualem, Brooks-Corey-Burdine or Gardner),
   and an initial hydrostatic water table, `ic.water_table_z`. Saturated
   materials and the default inputs give unchanged results.
-- Optional thermal pressurization couples fluid/solid expansion to accepted
-  physical steps.
 
 - Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
   through a screen with a shared rate schedule. Each step applies the exact
@@ -374,7 +355,7 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Fixed-property saturated remeshing preserves global linear Biot excess
   content and its pending pressure buffer separately. Geometric domain
   transfer and prescribed-pressure reactions have their own report;
-  retentive mass and thermal energy remain separate work.
+  retentive mass remains separate work.
 
 - Explicit and GVS restarts execute a quality/remesh stage pending at the
   checkpoint, preserving continuation when that stage changes the mesh.
@@ -429,9 +410,7 @@ For a release, the full auto-generated list of merged pull requests is in its
   Older nonzero-step coupled quasistatic checkpoints need their matching solver.
 
 
-- Heat diffusion uses bounded explicit substeps even with a large fixed
-  physical timestep, preventing a thermal instability from breaking mechanics.
-  Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
+- Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
 
 - Hydrostatic initialization, Darcy gravity, saturated mixture weight, dynamic
   mass and foundation loads honor `mat.fluid_rho0` instead of assuming
@@ -458,10 +437,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Explicit and GVS checkpoints retain the regular output schedule, avoiding
   extra frames after restart. All methods save the configured cadence; an
   interval changed on restart begins a new schedule at that step and time.
-
-- Inlet-temperature subcycling bounds the active injection rate, preventing
-  a short source pulse from overshooting its prescribed temperature through
-  a small whole-step average rate.
 
 - PT logs distinguish the selected starting residual (`initial`) from the
   first warm trial (`warm_initial`) used for convergence scaling, and report

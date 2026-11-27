@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Qualify signed fluid/heat schedules by independent closed-box balances.
+"""Qualify signed fluid schedules by independent closed-box balances.
 
-The analytical references are integrated fluid volume and sensible heat,
-not a fitted spatial point-source profile. Fixed-mesh restart must preserve
+The analytical reference is the integrated fluid volume, not a fitted
+spatial point-source profile. Fixed-mesh restart must preserve
 every saved/checkpoint physical payload. A lifted column remeshed at every
 step checks that point sources and a well screen move with the material, as
 monitor points do, and continue exactly on restart.
@@ -27,6 +27,9 @@ from des_case import digest, expect_exit, read_config, reset_boundaries, restart
 from des_test_utils import checkpoint_array, fields, lumped_volumes, physical_differences, runtime_key
 
 
+RATES=[8e-8,-3e-8]
+
+
 def config():
     cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(modelname='fresh',max_steps='4',output_step_interval='1',
@@ -34,18 +37,15 @@ def config():
     cfg['mesh'].update(resolution='.25',largest_size='.25',smallest_size='.25')
     cfg['control'].update(gravity='0',has_PT='false',is_quasi_static='true',inertial_scaling='1e11',
         has_moving_mesh='false',has_thermal_diffusion='false',fixed_dt='1',
-        has_poroelastic_pressure_feedback='false',has_fluid_thermal_advection='false')
-    cfg['ic'].update(temperature_option='4',temp_background='300',temp_anomaly_amplitude='0',
-                     has_body_force_adjustment='false',pore_pressure_option='2',pore_pressure_value='0')
-    reset_boundaries(cfg['bc'], vbc='1', hbc='0', tbc='0')
+        has_poroelastic_pressure_feedback='false')
+    cfg['ic'].update(has_body_force_adjustment='false',pore_pressure_option='2',pore_pressure_value='0')
+    reset_boundaries(cfg['bc'], vbc='1', hbc='0')
     cfg['bc'].update(stress_bc_z1='0',stress_val_z1='0')
-    cfg['mat'].update(rho0='[2500]',alpha='[0]',heat_capacity='[1000]',therm_cond='[0]',
-                     hydraulic_perm='[0]',fluid_heat_capacity='[4000]',fluid_alpha='[0]')
-    for group,rates in (('injection',[8e-8,-3e-8]),('heat_injection',[4000,-1500])):
-        cfg[group]=dict(enabled='true',num_points='2',points_x='[0.37,0.61]',points_y='[0.43,0.57]',
-            points_z='[-0.53,-0.41]',points_unit='m',rate_model='constant_rate',rate=json.dumps(rates),
-            start_time_in_yr=json.dumps([.25/YEAR2SEC,.8/YEAR2SEC]),
-            end_time_in_yr=json.dumps([2.75/YEAR2SEC,2.1/YEAR2SEC]))
+    cfg['mat'].update(rho0='[2500]',alpha='[0]',hydraulic_perm='[0]')
+    cfg['injection']=dict(enabled='true',num_points='2',points_x='[0.37,0.61]',points_y='[0.43,0.57]',
+        points_z='[-0.53,-0.41]',points_unit='m',rate_model='constant_rate',rate=json.dumps(RATES),
+        start_time_in_yr=json.dumps([.25/YEAR2SEC,.8/YEAR2SEC]),
+        end_time_in_yr=json.dumps([2.75/YEAR2SEC,2.1/YEAR2SEC]))
     return cfg
 
 
@@ -62,22 +62,16 @@ def check_balance(folder,cfg):
     # 1/(K+G/3), rather than the three-dimensional 1/K.
     bulk=mat('bulk_modulus')+(mat('shear_modulus')/3 if dim==2 else 0)
     sb=mat('porosity')/mat('fluid_bulk_modulus')+(mat('biot_coeff')-mat('porosity'))/mat('bulk_modulus_s')+mat('biot_coeff')**2/bulk
-    capacity=mat('rho0')*mat('heat_capacity')
-    if cfg.getboolean('control','has_fluid_thermal_advection'):
-        capacity=(1-mat('porosity'))*capacity+mat('porosity')*mat('fluid_rho0')*mat('fluid_heat_capacity')
-    p0=model.read_field(0,'pore pressure');t0=model.read_field(0,'temperature')
+    p0=model.read_field(0,'pore pressure')
     report=[]
     for row in scan_frames(str(folder/'fresh')):
-        p=model.read_field(row['frame'],'pore pressure');temp=model.read_field(row['frame'],'temperature')
-        assert np.isfinite(p).all() and np.isfinite(temp).all()
-        fluid=float(np.dot(nodal*sb,p-p0));energy=float(np.dot(nodal*capacity,temp-t0))
-        expected_fluid=amount(row['time'],[8e-8,-3e-8]) if cfg.getboolean('injection','enabled') else 0.
+        p=model.read_field(row['frame'],'pore pressure')
+        assert np.isfinite(p).all()
+        fluid=float(np.dot(nodal*sb,p-p0))
+        expected_fluid=amount(row['time'],RATES)
         if cfg.getint('bc','num_wells',fallback=0):expected_fluid-=5e-9*row['time']
-        expected_energy=amount(row['time'],[4000,-1500]) if cfg.getboolean('heat_injection','enabled') else 0.
         np.testing.assert_allclose(fluid,expected_fluid,rtol=3e-12,atol=1e-18)
-        np.testing.assert_allclose(energy,expected_energy,rtol=3e-10,atol=1e-6)
-        report.append(dict(time_s=row['time'],fluid_m3=fluid,expected_fluid_m3=expected_fluid,
-                           heat_J=energy,expected_heat_J=expected_energy))
+        report.append(dict(time_s=row['time'],fluid_m3=fluid,expected_fluid_m3=expected_fluid))
     return report
 
 
@@ -127,15 +121,14 @@ def material(exe,out,dim):
     cfg['control'].update(fixed_dt=str(dt),has_thermal_diffusion='true',gravity='0',PT_absolute_tolerance='1e-8')
     cfg['bc'].update(vbc_val_z0=str(lift),num_wells='1',well_x=f'[{bottom[0]}]',well_y=f'[{bottom[1]}]',
                      well_z_bottom=f'[{bottom[2]}]',well_z_top=f'[{top[2]}]',well_rate=f'[{well_rate}]')
-    for group,rate in (('injection',f'[{point_rate}]'),('heat_injection','[100]')):
-        cfg[group]=dict(enabled='true',num_points='1',points_x=f'[{point[0]}]',points_y=f'[{point[1]}]',
-                        points_z=f'[{point[2]}]',rate=rate,rate_model='constant_rate')
+    cfg['injection']=dict(enabled='true',num_points='1',points_x=f'[{point[0]}]',points_y=f'[{point[1]}]',
+                          points_z=f'[{point[2]}]',rate=f'[{point_rate}]',rate_model='constant_rate')
     starts=[point,bottom,top]
     cfg['monitor']=dict(enabled='true',step_interval='1',num_points='3',point_type='particle',
                         points_x=json.dumps([q[0] for q in starts]),points_y=json.dumps([q[1] for q in starts]),
                         points_z=json.dumps([q[2] for q in starts]))
     if dim==2:
-        for section in ('injection','heat_injection','monitor'):del cfg[section]['points_y']
+        for section in ('injection','monitor'):del cfg[section]['points_y']
         del cfg['bc']['well_y']
     restart_check(exe,cfg,out/'remesh',steps,1,require_remesh=True)
     folder=out/'remesh';model=Dynearthsol(str(folder/'fresh'));nodes=dim+1
@@ -146,7 +139,7 @@ def material(exe,out,dim):
             for row in csv.DictReader(stream):
                 if int(row['row'])==0:
                     tracked[i,int(row['step'])]=np.array([float(row['query_'+a]) for a in axes])
-    names=['fluid point elements','fluid point weights','heat point elements','heat point weights',
+    names=['fluid point elements','fluid point weights',
            'well piece elements','well piece starts','well piece ends']
     gap=0.
     for frame in model.frames:
@@ -155,10 +148,9 @@ def material(exe,out,dim):
            for name in names}
         where=lambda element,weights:weights[:nodes]@x[conn[element]]
         found=[where(a['fluid point elements'][0],a['fluid point weights']),
-               where(a['heat point elements'][0],a['heat point weights']),
                where(a['well piece elements'][0],a['well piece starts'][:nodes]),
                where(a['well piece elements'][-1],a['well piece ends'][-nodes:])]
-        for source,monitor in zip(found,(0,0,1,2)):
+        for source,monitor in zip(found,(0,1,2)):
             gap=max(gap,float(np.max(np.abs(source-tracked[monitor,frame]))))
         if frame:
             b=model.read_field(frame,'fluid balance')
@@ -179,38 +171,30 @@ def main():
     exe,out=args.executable.resolve(),args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     shutil.copy2(Path(__file__),out/'runner.py')
     result=dict(executable_sha256=digest(exe),checks={},runner_sha256=digest(Path(__file__)))
-    modes=['combined','total-amount','half-step','subcycled','heat-only','fluid-only','mixed-capacity',
+    modes=['fluid-only','total-amount','half-step','subcycled',
            'millimetres','centimetres','kilometres','point-and-well']
     if dim==2:modes.append('legacy-coordinate')
     for mode in modes:
         cfg=config()
         # The two-coordinate legacy alias is tested in 2D after probing a base run.
         if mode=='total-amount':
-            for group,rates in (('injection',[8e-8,-3e-8]),('heat_injection',[4000,-1500])):
-                cfg[group].update(rate_model='total_amount',total_amount=json.dumps((np.array(rates)*[2.5,1.3]).tolist()),
-                                  duration_in_yr=json.dumps([2.5/YEAR2SEC,1.3/YEAR2SEC]))
-                del cfg[group]['end_time_in_yr']
+            cfg['injection'].update(rate_model='total_amount',total_amount=json.dumps((np.array(RATES)*[2.5,1.3]).tolist()),
+                                    duration_in_yr=json.dumps([2.5/YEAR2SEC,1.3/YEAR2SEC]))
+            del cfg['injection']['end_time_in_yr']
         if mode=='half-step':cfg['control']['fixed_dt']='.5';cfg['sim']['max_steps']='8'
-        if mode=='subcycled':
-            cfg['control']['has_thermal_diffusion']='true'
-            cfg['mat'].update(hydraulic_perm='[1e-10]',therm_cond='[1e6]')
-        if mode=='heat-only':cfg['injection']['enabled']='false';cfg['control']['has_hydraulic_diffusion']='false'
-        if mode=='fluid-only':cfg['heat_injection']['enabled']='false'
-        if mode=='mixed-capacity':cfg['control']['has_fluid_thermal_advection']='true'
+        if mode=='subcycled':cfg['mat']['hydraulic_perm']='[1e-10]'
         if mode=='point-and-well':
             cfg['bc'].update(num_wells='1',well_x='[0.5]',well_y='[0.5]',
                 well_z_top='[-0.2]',well_z_bottom='[-0.8]',well_rate='[5e-9]')
         if mode in ('millimetres','centimetres','kilometres'):
             unit,scale={'millimetres':('mm',1000),'centimetres':('cm',100),'kilometres':('km',.001)}[mode]
-            for group in ('injection','heat_injection'):
-                cfg[group]['points_unit']=unit
-                for name in ('points_x','points_y','points_z'):
-                    cfg[group][name]=json.dumps((np.array(json.loads(cfg[group][name]))*scale).tolist())
+            cfg['injection']['points_unit']=unit
+            for name in ('points_x','points_y','points_z'):
+                cfg['injection'][name]=json.dumps((np.array(json.loads(cfg['injection'][name]))*scale).tolist())
         # The solver rejects ambiguous legacy-y and modern-z source coordinates in 2D.
         if dim==2:
-            for group in ('injection','heat_injection'):
-                del cfg[group]['points_y']
-                if mode=='legacy-coordinate':cfg[group]['points_y']=cfg[group].pop('points_z')
+            del cfg['injection']['points_y']
+            if mode=='legacy-coordinate':cfg['injection']['points_y']=cfg['injection'].pop('points_z')
         folder=out/mode;run(exe,folder,cfg)
         assert Dynearthsol(str(folder/'fresh')).ndims==dim
         records=check_balance(folder,cfg);payloads=restart(exe,folder,cfg)
@@ -224,24 +208,19 @@ def main():
         'nan-rate':('injection','rate','[nan]'),
         'bad-duration':('injection','duration_in_yr','[0]'),
         'nan-time':('injection','start_time_in_yr','[nan]'),
-        'bad-rate-model':('injection','rate_model','unknown'),
-        'negative-heat-capacity':('mat','heat_capacity','[-1]')}
+        'bad-rate-model':('injection','rate_model','unknown')}
     for name,(section,key,value) in invalid.items():
         cfg=config()
-        if dim==2:
-            for group in ('injection','heat_injection'):del cfg[group]['points_y']
+        if dim==2:del cfg['injection']['points_y']
         if name=='bad-duration':del cfg['injection']['end_time_in_yr']
         cfg[section][key]=value
         run(exe,out/name,cfg,11);result['checks'][name]=True
-    for source in ('injection','heat_injection'):
-        cfg=config()
-        if dim==2:
-            for group in ('injection','heat_injection'):del cfg[group]['points_y']
-        cfg[source]['points_x']='[0,0]'
-        if source=='injection':cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
-        else:cfg['bc'].update(tbc_x0='1',tbc_val_x0='300')
-        run(exe,out/(source+'-fixed-node'),cfg,51)
-        result['checks'][source+'-fixed-node']=True
+    cfg=config()
+    if dim==2:del cfg['injection']['points_y']
+    cfg['injection']['points_x']='[0,0]'
+    cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
+    run(exe,out/'injection-fixed-node',cfg,51)
+    result['checks']['injection-fixed-node']=True
     result['checks']['remesh']=material(exe,out,dim)
     assert digest(exe)==result['executable_sha256']
     write_json(out/'summary.json',result)

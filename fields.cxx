@@ -9,7 +9,6 @@
 #include "mpi_simulation.hpp"
 #include "hydraulics.hpp"
 #include "utils.hpp"
-#include "point_sources.hpp"
 
 // Nodal point-source fields, sized to the current mesh.
 static void allocate_source_fields(const Param &param, Variables &var)
@@ -17,12 +16,6 @@ static void allocate_source_fields(const Param &param, Variables &var)
     const int n = var.nnode;
     delete var.fluid_point_source;
     var.fluid_point_source = param.injection.enabled ? new double_vec(n,0) : nullptr;
-    delete var.heat_source;
-    var.heat_source = param.heat_injection.enabled ? new double_vec(n,0) : nullptr;
-    delete var.inflow_rate;
-    delete var.inflow_heat;
-    var.inflow_rate = param.injection.temperature.empty() ? nullptr : new double_vec(n,0);
-    var.inflow_heat = param.injection.temperature.empty() ? nullptr : new double_vec(n,0);
 }
 
 void allocate_variables(const Param &param, Variables& var)
@@ -40,12 +33,6 @@ void allocate_variables(const Param &param, Variables& var)
 
     allocate_hydraulic_state(var);
     allocate_source_fields(param, var);
-    if (param.control.has_thermal_pressurization)
-        var.old_temperature = new double_vec(var.nnode);
-    if (param.control.has_shear_heating) {
-        var.shear_heat = new double_vec(e, 0);
-        var.pending_heat = new double_vec(e, 0);
-    }
 
     {
         // these fields are reallocated during remeshing interpolation
@@ -151,198 +138,23 @@ void reallocate_variables(const Param& param, Variables& var)
     delete var.mat;
     var.mat = new MatProps(param, var);
 
-    apply_temperature_bcs(param, var, *var.temperature);
-
 }
 
 
-namespace {
-// Galerkin transport with symmetric graph diffusion for advection; rows sum
-// to zero. Zero flow retains ordinary Galerkin conduction on obtuse elements.
-#pragma acc routine seq
-void thermal_transport_operator(const Param &param, const Variables &var, int e,
-                                double a[NODES_PER_ELEM][NODES_PER_ELEM])
+void update_temperature(const Param &param, const Variables &var,
+                        double_vec &temperature, elem_cache &tmp_result)
 {
-    double g[NDIMS][NODES_PER_ELEM];
-    get_shape_gradients(var, e, g);
-    double q[NDIMS];
-    hydraulic_element_flux(param, var, e, q, g);
-    const double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
-    const double cv = var.mat->rho_fluid_reference(e)*var.mat->cp_fluid(e)*
-        (*var.volume)[e]/NODES_PER_ELEM;
-    double c[NODES_PER_ELEM];  // lumped advection; the same for every test node
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        c[j] = 0;
-        for (int d = 0; d < NDIMS; ++d) c[j] += cv*q[d]*g[d][j];
-    }
-    for (int i = 0; i < NODES_PER_ELEM; ++i)
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            a[i][j] = c[j];
-            for (int d = 0; d < NDIMS; ++d) a[i][j] += kv*g[d][i]*g[d][j];
-        }
-    for (int i = 0; i < NODES_PER_ELEM; ++i)
-        for (int j = i+1; j < NODES_PER_ELEM; ++j) {
-            // Clip positive couplings, but by no more than advection adds.
-            const double diffusion = std::max(0.0, std::min(std::max(a[i][j], a[j][i]),
-                                                            std::max(c[i], c[j])));
-            a[i][j] -= diffusion; a[j][i] -= diffusion;
-            a[i][i] += diffusion; a[j][j] += diffusion;
-        }
-}
-} // namespace
-
-#pragma acc routine seq
-bool prescribed_temperature(const Param &param, const Variables &var, int n, double &value)
-{
-    const uint flags[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i)
-        if (param.bc.tbc[i] == 1 && ((*var.bcflag)[n] & flags[i])) {
-            value = thermal_boundary_value(param,i);
-            return true;
-        }
-    return false;
-}
-
-void apply_temperature_bcs(const Param &param, const Variables &var, double_vec &temperature)
-{
-    if (!param.bc.custom_temperature_boundary) return;
-    const uint flags[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int n = 0; n < var.nnode; ++n) {
-        bool fixed = false;
-        double value = 0;
-        for (int i = 0; i < 6; ++i) {
-            if (param.bc.tbc[i] != 1 || !((*var.bcflag)[n] & flags[i])) continue;
-            const double next = thermal_boundary_value(param, i);
-            if (!std::isfinite(next) || (fixed && std::abs(next-value) > 1e-12*std::max(1.0, std::abs(value))))
-                die(EXIT_CONFIG_VALUE, "Intersecting temperature boundaries require equal finite values.");
-            fixed = true; value = next;
-        }
-        if (fixed) temperature[n] = value;
-    }
-}
-
-// Volumetric heat capacity of the injected fluid, from the reference material.
-static double inflow_capacity(const Param &param)
-{
-    const int m = param.mat.mattype_ref;
-    return param.mat.fluid_rho0[m] * param.mat.fluid_heat_capacity[m];
-}
-
-// Fluid injected at a prescribed temperature over [start, stop]: the nodal
-// injected volume rate Q_n and its temperature-weighted sum. Extraction leaves
-// at the local temperature, which the advective transport already carries, so
-// extracting points are left out.
-static void assemble_inflow(const Param &param, const Variables &var, double start, double stop,
-                            bool peak_rate = false)
-{
-    const Injection &source = param.injection;
-    double_vec injecting(source.num_points);
-    for (int p = 0; p < source.num_points; ++p) {
-        const double strength = source.rate_model == injection_rate_total_amount ?
-            source.total_amount[p] : source.rate[p];
-        injecting[p] = strength > 0 ? 1.0 : 0.0;
-    }
-    assemble_point_sources(source, var.fluid_points, var, start, stop, *var.inflow_rate, &injecting, peak_rate,
-                           var.inflow_heat, &source.temperature);
-}
-
-static double temperature_step_limit(const Param &param, const Variables &var, elem_cache &work)
-{
-    // Absolute element rows bound the assembled lumped diffusion operator.
-    // Half the forward-Euler spectral bound leaves a stability margin.
-    // These kernels run off the async queue: let it finish with work and the
-    // masses first.
-    #pragma acc wait
-    const int mpi_ee = mpi_element_end(var);
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, work) firstprivate(mpi_ee)
-#endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ee)
-    for (int e = 0; e < mpi_ee; ++e) {
-        if (param.control.has_fluid_thermal_advection) {
-            double a[NODES_PER_ELEM][NODES_PER_ELEM];
-            thermal_transport_operator(param, var, e, a);
-            for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                double row = 0;
-                for (int j = 0; j < NODES_PER_ELEM; ++j) row += std::abs(a[i][j]);
-                work[e][i] = row;
-            }
-            continue;
-        }
-        double g[NDIMS][NODES_PER_ELEM];
-        get_shape_gradients(var, e, g);
-        const double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
-        for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double row = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                double a = 0;
-                for (int d = 0; d < NDIMS; ++d) a += g[d][i] * g[d][j];
-                row += std::abs(a);
-            }
-            work[e][i] = kv * row;
-        }
-    }
-    // Ghost elements take their rows from the ranks that own them.
-    mpi_sync(var, work, MpiEntity::Element, NODES_PER_ELEM);
-    // Injected fluid relaxes the node towards its temperature at rate rho_f c_f Q_n.
-    const double capacity = var.inflow_rate ? inflow_capacity(param) : 0.0;
-    return nodal_step_limit(var, work, *var.tmass, std::numeric_limits<double>::max(),
-                            var.inflow_rate, capacity);
-}
-
-double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
-                        double limit, const double_vec *inflow, double capacity)
-{
-    const int mpi_ne = mpi_node_end(var);
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(var, work, mass) firstprivate(inflow, capacity, mpi_ne) reduction(min:limit)
-#endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ne) reduction(min:limit)
-    for (int n = 0; n < mpi_ne; ++n) {
-        double row = 0;
-        const int *patch = var.support.patch(n), *local = var.support.local(n);
-        for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
-        if (inflow) row += capacity * (*inflow)[n];
-        if (row > 0 && mass[n] > 0)
-            limit = std::min(limit, mass[n] / row);
-    }
-    #pragma acc wait
 #ifdef USEMPI
-    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&limit, 1);
+    if (var.mpi && var.mpi->dispatch(MpiOp::Temperature, var, 0.0)) return;
 #endif
-    return limit;
-}
-
-static void temperature_step(const Param &param, const Variables &var,
-                             double_vec &temperature, elem_cache &tmp_result,
-                             double dt, double time)
-{
     const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
     const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
-    if (param.heat_injection.enabled) {
-        assemble_point_sources(param.heat_injection,var.heat_points,var,time-dt,time,*var.heat_source);
-        for (int n=0; n<var.nnode; ++n) {
-            double prescribed = 0;
-            if ((*var.heat_source)[n] != 0 &&
-                (prescribed_temperature(param,var,n,prescribed) ||
-                 !((*var.tmass)[n]>0 && std::isfinite((*var.tmass)[n]))))
-                die(EXIT_RUNTIME_LOOKUP, "A heat point source reaches a fixed-temperature node or nonpositive heat capacity.");
-        }
-    }
-    const double capacity = var.inflow_rate ? inflow_capacity(param) : 0.0;
-    if (var.inflow_rate) {
-        assemble_inflow(param, var, time-dt, time);
-        for (int n=0; n<var.nnode; ++n) {
-            double prescribed = 0;
-            if ((*var.inflow_rate)[n] != 0 && prescribed_temperature(param,var,n,prescribed))
-                die(EXIT_RUNTIME_LOOKUP, "Fluid injected at a temperature reaches a fixed-temperature node.");
-        }
-    }
+
 #ifdef NPROF
     nvtxRangePush(__FUNCTION__);
 #endif
 #ifndef ACC
-    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne,dt,capacity)
+    #pragma omp parallel default(none) shared(param,var,temperature,tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
     {
 #ifndef ACC
@@ -354,32 +166,16 @@ static void temperature_step(const Param &param, const Variables &var,
 
             ConstConnAccessor conn = (*var.connectivity)[e];
             ElemCacheAccessor tr = tmp_result[e];
-            double kv = param.control.has_thermal_diffusion ? var.mat->k(e)*(*var.volume)[e] : 0;
+            double kv = var.mat->k(e) *  (*var.volume)[e]; // thermal conductivity * volume
             double rh = (*var.radiogenic_source)[e] * (*var.volume)[e] * var.mat->rho(e) / NODES_PER_ELEM;
-            if (param.control.has_fluid_thermal_advection) rh *= 1-var.mat->phi(e);
-            // Integrate the previous accepted energy, not its old power times
-            // this step's possibly different dt. Each substep consumes its share.
-            if (var.pending_heat) rh += (*var.pending_heat)[e] / (NODES_PER_ELEM * var.dt);
-            double transport[NODES_PER_ELEM][NODES_PER_ELEM];
-            if (param.control.has_fluid_thermal_advection)
-                thermal_transport_operator(param, var, e, transport);
 #ifdef THREED
             double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-            if (!param.control.has_fluid_thermal_advection)
-                get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
+            get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
 #else
             double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-            if (!param.control.has_fluid_thermal_advection)
-                get_local_shape_fn(var, e, shpdx, shpdz);
+            get_local_shape_fn(var, e, shpdx, shpdz);
 #endif
             for (int i=0; i<NODES_PER_ELEM; ++i) {
-                if (param.control.has_fluid_thermal_advection) {
-                    double value = -rh;
-                    for (int j = 0; j < NODES_PER_ELEM; ++j)
-                        value += transport[i][j]*temperature[conn[j]];
-                    tr[i] = value;
-                    continue;
-                }
                 double diffusion = 0.;
                 for (int j=0; j<NODES_PER_ELEM; ++j) {
 #ifdef THREED
@@ -419,31 +215,39 @@ static void temperature_step(const Param &param, const Variables &var,
 #ifndef ACC
             #pragma omp for
 #endif
-            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(rows, dt, capacity)
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
-                double fixed_temperature = 0;
-                if (prescribed_temperature(param, var, n, fixed_temperature))
-                    temperature[n] = fixed_temperature;
+                if ((*var.bcflag)[n] & BOUNDZ1)
+                    temperature[n] = param.bc.surface_temperature;
                 else {
                     double tdot = 0;
 
-                    // Sum the element rows through the node's support patch (element, local index).
+                    // Same element order, so bit-identical; saves ~100 probes/node in 3D.
                     const int npatch = var.support.size(n);
                     const int* patch = var.support.patch(n);
                     const int* lpatch = var.support.local(n);
                     for (int k=0; k<npatch; ++k)
                         tdot += tmp_result[patch[k]][lpatch[k]];
-                    if (param.heat_injection.enabled) tdot -= (*var.heat_source)[n];
-                    // Injected enthalpy relative to the node: rho_f c_f (sum Q T_in - T sum Q).
-                    if (var.inflow_rate)
-                        tdot -= capacity * ((*var.inflow_heat)[n] - temperature[n] * (*var.inflow_rate)[n]);
-                    temperature[n] -= dt * tdot / (*var.tmass)[n];
+                    // Combining temperature update and bc in the same loop for efficiency,
+                    // since only the top boundary has Dirichlet bc, and all the other boundaries
+                    // have no heat flux bc.
+                    temperature[n] -= var.dt * tdot / (*var.tmass)[n];
                 }
             }
         }
     }
 
+    // Combining temperature update and bc in the same loop for efficiency,
+    // since only the top boundary has Dirichlet bc, and all the other boundaries
+    // have no heat flux bc.
+//    #pragma omp parallel for default(none) shared(var, param, tdot, temperature)
+//    for (int n=0; n<var.nnode; ++n) {
+//        if ((*var.bcflag)[n] & BOUNDZ1)
+//            temperature[n] = param.bc.surface_temperature;
+//        else
+//            temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
+//    }
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -457,46 +261,26 @@ int explicit_substeps(double dt, double limit, const char *message)
     return std::max(1, static_cast<int>(count));
 }
 
-void update_temperature(const Param &param, const Variables &var,
-                        double_vec &temperature, elem_cache &work)
+double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
+                        double limit)
 {
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Temperature, var, 0.0)) return;
-#endif
-    // A short pulse can be faster than its whole-step mean. Bound every
-    // thermal substep by the active rates, then integrate its actual overlap.
-    if (var.inflow_rate) assemble_inflow(param, var, var.time - var.dt, var.time, true);
-    if (var.mat->thermal_step_limit == 0 || param.control.has_fluid_thermal_advection)
-        var.mat->thermal_step_limit = temperature_step_limit(param, var, work);
-    const int steps = explicit_substeps(var.dt, var.mat->thermal_step_limit,
-                                        "Thermal timestep needs too many explicit substeps.");
-    for (int i = 0; i < steps; ++i) {
-        // Each substep reads its neighbours' ghost temperatures; the dispatcher exchanges the last.
-        if (i > 0) mpi_sync(var, temperature, MpiEntity::Node);
-        temperature_step(param, var, temperature, work, var.dt / steps,
-            i+1 == steps ? var.time : var.time-var.dt+(i+1)*(var.dt/steps));
-    }
-    if (var.pending_heat) {
-        #pragma acc wait
-        std::fill(var.pending_heat->begin(), var.pending_heat->end(), 0.0);
-    }
-}
-
-void accumulate_shear_heat(const Variables &var)
-{
-    if (!var.pending_heat) return;
-    #pragma acc wait
-    int invalid = 0;
+    const int mpi_ne = mpi_node_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var) reduction(|:invalid)
+    #pragma omp parallel for default(none) shared(var, work, mass) firstprivate(mpi_ne) reduction(min:limit)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(|:invalid)
-    for (int e = 0; e < var.nelem; ++e) {
-        const double energy = (*var.shear_heat)[e] * var.dt * (*var.volume)[e];
-        (*var.pending_heat)[e] += energy;
-        if (!(energy >= 0 && std::isfinite((*var.pending_heat)[e]))) invalid = 1;
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ne) reduction(min:limit)
+    for (int n = 0; n < mpi_ne; ++n) {
+        double row = 0;
+        const int *patch = var.support.patch(n), *local = var.support.local(n);
+        for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
+        if (row > 0 && mass[n] > 0)
+            limit = std::min(limit, mass[n] / row);
     }
-    if (invalid) die(EXIT_RUNTIME_NAN, "Non-finite or negative accepted shear heat.");
+    #pragma acc wait
+#ifdef USEMPI
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&limit, 1);
+#endif
+    return limit;
 }
 
 void update_strain_rate(const Variables& var, tensor_t& strain_rate)

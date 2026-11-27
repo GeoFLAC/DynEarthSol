@@ -253,10 +253,8 @@ void metadata(MpiState& state, Variables& var) {
     // Fluid volume balance of the last accepted step; every rank holds the reduced sums.
     ARCHIVE(fluid_balance);
     // Sources fixed in the material, in elements of the whole mesh; each rank finds its own.
-    for (PointSourceOwners* owners : {&var.fluid_points, &var.heat_points}) {
-        state.value(owners->element);
-        state.value(owners->weight);
-    }
+    state.value(var.fluid_points.element);
+    state.value(var.fluid_points.weight);
 #undef ARCHIVE
 }
 
@@ -381,7 +379,6 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     COPY(vbc_vertical_ratio_x1);
     COPY(surfinfo.max_surf_vel);
     COPY(fluid_points);
-    COPY(heat_points);
 #undef COPY
     var.nnode = partition.nodes.size();
     var.nelem = partition.elements.size();

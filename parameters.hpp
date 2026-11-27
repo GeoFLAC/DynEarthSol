@@ -2,7 +2,6 @@
 #define DYNEARTHSOL3D_PARAMETERS_HPP
 
 #include <map>
-#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -260,11 +259,8 @@ struct Control {
 
     bool is_quasi_static;
     bool has_thermal_diffusion;
-    bool has_fluid_thermal_advection;
     bool has_hydraulic_diffusion;
     bool has_poroelastic_pressure_feedback = true;
-    bool has_thermal_pressurization;
-    bool has_shear_heating = false;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -289,13 +285,6 @@ struct Control {
 struct BC {
     double surface_temperature;
     double mantle_temperature;
-    int tbc[6] = {0, 0, 0, 0, 0, 1};
-    double tbc_value[6] = {
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN(),
-        std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::quiet_NaN()};
-    bool custom_temperature_boundary = false;
-
 
     double winkler_delta_rho;
     bool has_winkler_foundation;
@@ -448,9 +437,6 @@ struct IC {
     bool gwb_fault_is_gaussian;   // weakzone_option 936: Gaussian across a fault, sigma weakzone_standard_deviation
 
     int temperature_option;
-    double temp_background, temp_anomaly_amplitude;
-    double temp_anomaly_xcenter, temp_anomaly_ycenter, temp_anomaly_zcenter;
-    double temp_anomaly_xsemi_axis, temp_anomaly_ysemi_axis, temp_anomaly_zsemi_axis;
     std::string Temp_filename;
     std::string Nodes_filename;
     std::string Connectivity_filename;
@@ -545,7 +531,6 @@ struct Mat {
     double_vec porosity;
     double_vec hydraulic_perm;
     double_vec fluid_rho0;  // pore fluid density
-    double_vec fluid_heat_capacity;
     double_vec fluid_alpha; // pore fluid thermal expansivity
     double_vec fluid_bulk_modulus;  // pore fluid bulk modulus
     double_vec fluid_visc;  // pore fluid dynamic viscosity
@@ -675,11 +660,10 @@ struct Injection {
     int rate_model = injection_rate_constant;
     double_vec points_x, points_y, points_z;
     double_vec rate, total_amount, start_time, end_time;
-    double_vec temperature;  // fluid sources only: injection temperature (K) per point; empty: none
 };
 
 struct Param {
-    Injection injection, heat_injection;
+    Injection injection;
     Sim sim;
     Monitor monitor;
     Mesh mesh;
@@ -904,10 +888,6 @@ struct Variables {
     MpiSimulation *mpi = nullptr; // owned by main; null in ordinary serial builds
 #endif
     double_vec *fluid_point_source = nullptr;
-    double_vec *heat_source = nullptr;
-    // Fluid injected at a prescribed temperature: injected volume rate and its
-    // temperature-weighted sum per node, for the injected enthalpy.
-    double_vec *inflow_rate = nullptr, *inflow_heat = nullptr;
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
@@ -1011,11 +991,8 @@ struct Variables {
     // For hydraulic processes
     double_vec *ppressure = nullptr; // pore pressure
     double_vec *dppressure = nullptr; // delta pore pressure
-    double_vec *old_temperature = nullptr; // physical-step baseline, never a PT history
-    double_vec *shear_heat = nullptr; // accepted nonelastic power density (W/m^3)
-    double_vec *pending_heat = nullptr; // undeposited physical energy per element (J; J/m in 2D)
     double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
-    PointSourceOwners fluid_points, heat_points; // [injection] and [heat_injection]
+    PointSourceOwners fluid_points; // [injection]
     WellPieces well_pieces;
     double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 

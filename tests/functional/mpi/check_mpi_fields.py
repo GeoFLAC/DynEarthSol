@@ -33,10 +33,6 @@ OUTSIDE = {
     "log_table": "table", "sin_table": "table", "tan_table": "table",
     # Five accepted-step sums; the metadata carries them and every rank holds the reduced values.
     "fluid_balance": "reduced over the ranks",
-    # Coupled models that check_mpi_support() in input.cxx refuses in MPI builds.
-    **{name: "refused under MPI" for name in (
-        "heat_source", "inflow_heat", "inflow_rate", "old_temperature", "pending_heat",
-        "shear_heat")},
 }
 
 ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*(?:[^;]*[?:]\s*)?new\s+"

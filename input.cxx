@@ -39,9 +39,9 @@ static void declare_point_source(opt::Registry &cfg, const char *section,
         (key("rate_model").c_str(), opt::value<std::string>()->default_value("constant_rate"),
          "Source schedule: constant_rate or total_amount.")
         (key("rate").c_str(), opt::list()->default_value("[0]"),
-         "Positive rate supplies fluid volume or heat; negative rate extracts.")
+         "Positive rate supplies fluid volume; negative rate extracts.")
         (key("total_amount").c_str(), opt::list()->default_value("[0]"),
-         "Total fluid volume or heat over the scheduled interval.")
+         "Total fluid volume over the scheduled interval.")
         (key("start_time_in_yr").c_str(), opt::list()->default_value("[0]"),
          "Source start time in years.")
         (key("end_time_in_yr").c_str(), opt::list()->default_value("[]"),
@@ -71,13 +71,6 @@ static void declare_parameters(opt::Registry &cfg,
      */
 
     declare_point_source(cfg, "injection", p.injection);
-    declare_point_source(cfg, "heat_injection", p.heat_injection);
-    cfg.add_options()
-        ("injection.temperature", opt::list()->default_value("[]"),
-         "Temperature (K) of the injected fluid of each point; requires has_fluid_thermal_advection. "
-         "An injecting node gains rho_f*c_f*Q*(T_in - T); extraction leaves at the local temperature. "
-         "Unset: the fluid source carries no enthalpy and a heat source must be given separately.")
-        ;
     cfg.add_options()
         ("sim.modelname", opt::value<std::string>(&p.sim.modelname),
          "Prefix for the output files")
@@ -604,14 +597,6 @@ static void declare_parameters(opt::Registry &cfg,
          "The are of the sediment bring from continent source (=10 m^2/yr) (in m^2/s). "
          "Assuming the width of the channel is 50 km, 5e7 ton/yr ~= 2.e-5 m^2/s")
 
-        ("control.has_thermal_pressurization", opt::value<bool>(&p.control.has_thermal_pressurization)->default_value(false),
-         "Couple thermal expansion to solid stress and fluid content; requires hydraulic and thermal diffusion.")
-        ("control.has_shear_heating", opt::value<bool>(&p.control.has_shear_heating)->default_value(false),
-         "Convert accepted viscous/plastic work to heat. Pending energy is deposited at the next "
-         "physical thermal update, independently of changes in timestep; initial PT equilibration "
-         "does not generate heat. All computed nonelastic work is converted (unit heat fraction).")
-        ("control.has_fluid_thermal_advection", opt::value<bool>(&p.control.has_fluid_thermal_advection)->default_value(false),
-         "Transport heat with Darcy flow using combined rock/water heat capacity; requires hydraulics.")
         ("control.has_poroelastic_pressure_feedback", opt::value<bool>(&p.control.has_poroelastic_pressure_feedback)->default_value(true),
          "Include mechanical volumetric/mean-stress changes in the hydraulic source; transport remains active when false.")
         ("control.has_thermal_diffusion", opt::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
@@ -675,20 +660,6 @@ static void declare_parameters(opt::Registry &cfg,
          "f must be in [0, 2); 0 (default) disables this state-update limit.\n")
         ;
 
-    const char *thermal_boundary_help = "Thermal boundary: 0 insulated, 1 fixed temperature.";
-    const char *thermal_value_help = "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
-         "It is applied at initialization, so a value that differs from the initial temperature is part "
-         "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.";
-    // Only the top boundary holds a fixed temperature by default.
-    for (int i = 0; i < 6; ++i) {
-        const std::string side = side_name[i];
-        cfg.add_options()
-            (("bc.tbc_" + side).c_str(), opt::value<int>(&p.bc.tbc[i])->default_value(i == iboundz1 ? 1 : 0),
-             thermal_boundary_help)
-            (("bc.tbc_val_" + side).c_str(), opt::value<double>(&p.bc.tbc_value[i])->default_value(std::numeric_limits<double>::quiet_NaN()),
-             thermal_value_help)
-            ;
-    }
     cfg.add_options()
         ("bc.surface_temperature", opt::value<double>(&p.bc.surface_temperature)->default_value(273),
          "Surface temperature (in Kelvin)")
@@ -1023,9 +994,6 @@ static void declare_parameters(opt::Registry &cfg,
          "1: continental thermal gradient.\n"
          "2: equilibrium temperature for crustal radiogenic heating.\n"
          "3: continental thermal gradient with adiabatic mantle.\n"
-         "4: uniform ic.temp_background plus a Gaussian anomaly.\n"
-         "5: linear conduction from bc.surface_temperature at the top to bc.mantle_temperature\n"
-         "   at the bottom (mesh.zlength), plus the same Gaussian anomaly.\n"
          "90: temperature read from an external grid\n"
          "936: from the Geodynamic World Builder world ic.gwb_filename (needs a build with usegwb=1).\n")
 
@@ -1084,22 +1052,6 @@ static void declare_parameters(opt::Registry &cfg,
          "the fault's GWB thickness still bounds the zone, so make it about 4 to 6 sigma. The "
          "world's faults then need distinct names.\n")
 
-        ("ic.temp_background", opt::value<double>(&p.ic.temp_background)->default_value(273),
-         "Uniform background temperature in K for temperature_option=4.")
-        ("ic.temp_anomaly_amplitude", opt::value<double>(&p.ic.temp_anomaly_amplitude)->default_value(0),
-         "Gaussian temperature amplitude in K.")
-        ("ic.temp_anomaly_xcenter", opt::value<double>(&p.ic.temp_anomaly_xcenter)->default_value(0),
-         "Gaussian thermal anomaly x coordinate in m.")
-        ("ic.temp_anomaly_ycenter", opt::value<double>(&p.ic.temp_anomaly_ycenter)->default_value(0),
-         "Gaussian thermal anomaly y coordinate in m.")
-        ("ic.temp_anomaly_zcenter", opt::value<double>(&p.ic.temp_anomaly_zcenter)->default_value(0),
-         "Gaussian thermal anomaly z coordinate in m.")
-        ("ic.temp_anomaly_xsemi_axis", opt::value<double>(&p.ic.temp_anomaly_xsemi_axis)->default_value(1),
-         "Positive Gaussian x scale in m.")
-        ("ic.temp_anomaly_ysemi_axis", opt::value<double>(&p.ic.temp_anomaly_ysemi_axis)->default_value(1),
-         "Positive Gaussian y scale in m.")
-        ("ic.temp_anomaly_zsemi_axis", opt::value<double>(&p.ic.temp_anomaly_zsemi_axis)->default_value(1),
-         "Positive Gaussian z scale in m.")
         // for temperature_option = 90
         ("ic.Temp_filename", opt::value<std::string>(&p.ic.Temp_filename)->default_value("Thermal.dat"),
          "Filename of the input thermal field, for temperature_option=90.\n"
@@ -1343,8 +1295,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Intrinsic permeability of the materials '[d0, d1, d2, ...]' (m^2)")
         ("mat.fluid_rho0", opt::list()->default_value("[1000]"),
          "Reference fluid density for Darcy gravity and saturated mixture weight '[d0, d1, d2, ...]' (kg/m^3)")
-        ("mat.fluid_heat_capacity", opt::list()->default_value("[4180]"),
-         "Fluid heat capacity '[d0, d1, ...]' in J/kg/K, for groundwater heat transport.")
         ("mat.derive_biot_coeff_from_bulk_moduli", opt::value<bool>(&p.mat.derive_biot_coeff_from_bulk_moduli)->default_value(false),
          "Use biot_coeff=1-bulk_modulus/bulk_modulus_s with finite positive ordered moduli.")
         ("mat.fluid_alpha", opt::list()->default_value("[2.07e-4]"),
@@ -1603,11 +1553,6 @@ static void check_mpi_support(const Param& p)
                              p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
     struct Feature { const char* name; bool used; };
     const Feature features[] = {
-        {"control.has_thermal_pressurization", p.control.has_thermal_pressurization},
-        {"control.has_shear_heating", p.control.has_shear_heating},
-        {"control.has_fluid_thermal_advection", p.control.has_fluid_thermal_advection},
-        {"heat point sources", p.heat_injection.enabled},
-        {"fluid injected at a temperature", !p.injection.temperature.empty()},
         {"mat.retention_model", any_nonzero(p.mat.retention_model)},
         {"bc.vbc_z1 = 8", p.bc.vbc_z1 == 8},
         {"bc.stress_bc_* = 4", std::find(std::begin(stress_bc), std::end(stress_bc), 4) != std::end(stress_bc)},
@@ -1623,7 +1568,7 @@ static void check_mpi_support(const Param& p)
 #endif
 
 static void parse_point_source(const opt::Registry &vm, const Param &p,
-                               const char *section, Injection &source, bool fluid)
+                               const char *section, Injection &source)
 {
     const auto key = [section](const char *name) { return std::string(section)+"."+name; };
     const auto fail = [section](const char *why) {
@@ -1632,7 +1577,7 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
     };
     if (source.num_points < 0 || (source.enabled && source.num_points == 0))
         fail("enabled sources require a positive num_points.");
-    if (source.enabled && fluid && !p.control.has_hydraulic_diffusion)
+    if (source.enabled && !p.control.has_hydraulic_diffusion)
         fail("fluid sources require has_hydraulic_diffusion=true.");
     if (source.num_points == 0) return;
     const int n = source.num_points;
@@ -1684,14 +1629,6 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
             source.end_time[i]=source.start_time[i]+span[i];
         }
     } else source.end_time.assign(n,std::numeric_limits<double>::infinity());
-    if (fluid && !vm.defaulted(key("temperature"))) {
-        if (!p.control.has_fluid_thermal_advection)
-            fail("temperature requires control.has_fluid_thermal_advection=true.");
-        list("temperature",source.temperature,true);
-        for (int i=0;i<n;++i)
-            if (!(source.temperature[i] > 0 && std::isfinite(source.temperature[i])))
-                fail("injection temperatures must be finite and positive (K).");
-    }
     for (int i=0;i<n;++i) {
         if (!std::isfinite(source.rate[i]) || !std::isfinite(source.total_amount[i]) ||
             !std::isfinite(source.start_time[i]) ||
@@ -1707,23 +1644,10 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
 
 static void validate_parameters(const opt::Registry &vm, Param &p)
 {
-    parse_point_source(vm,p,"injection",p.injection,true);
-    parse_point_source(vm,p,"heat_injection",p.heat_injection,false);
+    parse_point_source(vm,p,"injection",p.injection);
     std::cout << "Checking consistency of input parameters...\n";
 
     //
-    // Unspecified thermal side values use bc.surface_temperature and bc.mantle_temperature.
-    {
-        for (int i = 0; i < 6; ++i) {
-            const std::string type = std::string("bc.tbc_") + side_name[i];
-            const std::string value = std::string("bc.tbc_val_") + side_name[i];
-            const bool supplied = !vm.defaulted(value);
-            p.bc.custom_temperature_boundary |= supplied || !vm.defaulted(type);
-            if (p.bc.tbc[i] < 0 || p.bc.tbc[i] > 1 ||
-                (supplied && !std::isfinite(p.bc.tbc_value[i])))
-                die(EXIT_CONFIG_VALUE, "Thermal boundaries require tbc=0/1 and finite supplied temperatures.");
-        }
-    }
     // stopping condition and output interval are based on either model time or step
     //
     if ( ! (vm.count("sim.max_steps") || vm.count("sim.max_time_in_yr")) ) {
@@ -2119,22 +2043,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
 
         if (!std::isfinite(p.ic.water_table_z))
             die(EXIT_CONFIG_VALUE, "ic.water_table_z must be finite.");
-        if (p.ic.temperature_option == 4 || p.ic.temperature_option == 5) {
-            if (p.ic.temperature_option == 5 &&
-                !(std::isfinite(p.bc.surface_temperature) && std::isfinite(p.bc.mantle_temperature)))
-                die(EXIT_CONFIG_VALUE, "Linear conduction requires finite top and bottom temperatures.");
-            const double base = p.ic.temperature_option == 4 ? p.ic.temp_background :
-                std::min(p.bc.surface_temperature, p.bc.mantle_temperature);
-            const double values[] = {base,p.ic.temp_anomaly_amplitude,
-                p.ic.temp_anomaly_xcenter,p.ic.temp_anomaly_ycenter,p.ic.temp_anomaly_zcenter,
-                p.ic.temp_anomaly_xsemi_axis,p.ic.temp_anomaly_ysemi_axis,p.ic.temp_anomaly_zsemi_axis};
-            for (double v : values)
-                if (!std::isfinite(v)) die(EXIT_CONFIG_VALUE, "Gaussian temperature parameters must be finite.");
-            if (!(base+std::min(0.0,p.ic.temp_anomaly_amplitude) > 0 &&
-                  p.ic.temp_anomaly_xsemi_axis > 0 && p.ic.temp_anomaly_ysemi_axis > 0 &&
-                  p.ic.temp_anomaly_zsemi_axis > 0))
-                die(EXIT_CONFIG_VALUE, "Gaussian temperature requires positive Kelvin values and scales.");
-        }
         if (p.ic.initial_stress_option != 0 &&
             p.ic.initial_stress_option != 1) {
             die(EXIT_CONFIG_VALUE,
@@ -2507,7 +2415,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.fluid_heat_capacity", p.mat.fluid_heat_capacity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_bulk_modulus", p.mat.fluid_bulk_modulus, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_visc", p.mat.fluid_visc, p.mat.nmat, nmat_key, true);
@@ -2520,40 +2427,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                     die(EXIT_CONFIG_VALUE, "Derived Biot coefficient requires 0 < bulk_modulus <= bulk_modulus_s, both finite.");
                 p.mat.biot_coeff[m] = 1-kd/ks;
             }
-        for (int m = 0; m < p.mat.nmat; ++m)
-            if (p.control.has_thermal_pressurization &&
-                !(std::isfinite(p.mat.alpha[m]) && std::isfinite(p.mat.fluid_alpha[m])))
-                die(EXIT_CONFIG_VALUE, "Thermal expansivities must be finite.");
-        if (p.control.has_thermal_pressurization && !(p.mat.rheol_type & MatProps::rh_elastic))
-            die(EXIT_CONFIG_VALUE, "Thermal pressurization requires a rheology with elastic bulk response.");
-        if (p.control.has_fluid_thermal_advection) {
-            if (!p.control.has_hydraulic_diffusion)
-                die(EXIT_CONFIG_VALUE, "Fluid thermal advection requires has_hydraulic_diffusion=true.");
-            for (int m = 0; m < p.mat.nmat; ++m) {
-                const double phi = p.mat.porosity[m], cs = p.mat.heat_capacity[m];
-                const double cf = p.mat.fluid_heat_capacity[m];
-                const double capacity = (1-phi)*p.mat.rho0[m]*cs + phi*p.mat.fluid_rho0[m]*cf;
-                if (!(cs >= 0 && std::isfinite(cs) && cf > 0 && std::isfinite(cf) &&
-                      capacity > 0 && std::isfinite(capacity) &&
-                      p.mat.therm_cond[m] >= 0 && std::isfinite(p.mat.therm_cond[m])))
-                    die(EXIT_CONFIG_VALUE, "Fluid heat transport requires nonnegative solid capacity/conductivity, positive fluid capacity and bulk storage.");
-            }
-        }
-        // Buoyancy follows the material: rho_f0 is the density at bc.surface_temperature.
-        if (p.control.has_hydraulic_diffusion &&
-            (p.control.has_thermal_diffusion || p.control.has_fluid_thermal_advection))
-            for (int m = 0; m < p.mat.nmat; ++m)
-                if (!std::isfinite(p.mat.fluid_alpha[m]))
-                    die(EXIT_CONFIG_VALUE, "mat.fluid_alpha must be finite with hydraulic and thermal transport.");
-        if (p.heat_injection.enabled && !p.control.has_fluid_thermal_advection)
-            for (int m=0; m<p.mat.nmat; ++m)
-                if (!(p.mat.rho0[m]>0 && std::isfinite(p.mat.rho0[m]) &&
-                      p.mat.heat_capacity[m]>0 && std::isfinite(p.mat.heat_capacity[m]) &&
-                      p.mat.therm_cond[m]>=0 && std::isfinite(p.mat.therm_cond[m])))
-                    die(EXIT_CONFIG_VALUE, "Heat sources require positive finite solid density/capacity and nonnegative conductivity.");
-        if (p.control.has_thermal_pressurization &&
-            !(p.control.has_hydraulic_diffusion && p.control.has_thermal_diffusion))
-            die(EXIT_CONFIG_VALUE, "Thermal pressurization requires hydraulic and thermal diffusion.");
         if (p.control.has_hydraulic_diffusion) {
             const auto positive = [](double x) { return x > 0 && std::isfinite(x); };
             for (int m = 0; m < p.mat.nmat; ++m) {
@@ -2602,9 +2475,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
             if (active && !p.control.has_hydraulic_diffusion)
                 die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 requires has_hydraulic_diffusion=true.");
-            // The unsaturated content balance does not account for thermal coupling.
-            if (active && (p.control.has_thermal_pressurization || p.control.has_fluid_thermal_advection))
-                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 does not yet support thermal coupling.");
         }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);

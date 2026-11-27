@@ -2,7 +2,7 @@
 """Integrate saturated constant-property content independently of its residual.
 
 All accepted steps must be saved. Fixed geometry, fixed porosity, no
-retention, no thermal source and no wells are required. The initial pending
+retention and no wells are required. The initial pending
 PT increment comes from the run or its source checkpoint; it is not assumed
 zero at a nonzero restart. --measure reports the content defect without
 failing on it.
@@ -29,7 +29,6 @@ def analyze(config, until=None):
     assert cfg.getboolean('control', 'has_hydraulic_diffusion', fallback=False)
     assert cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=False)
     assert not cfg.getboolean('control', 'has_moving_mesh', fallback=False)
-    assert not cfg.getboolean('control', 'has_thermal_pressurization', fallback=False)
     assert not any(json.loads(cfg.get('mat', 'retention_model', fallback='[0]')))
 
     def prop(name):

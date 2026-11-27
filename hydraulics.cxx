@@ -198,37 +198,6 @@ void reset_hydraulic_assembly(const Param &param, Variables &var)
     // nodal remapper. Reallocating them here would discard the remapped state.
 }
 
-namespace {
-#pragma acc routine seq
-inline void hydraulic_flux(const Param &param, const Variables &var, int e,
-                           const double g[NDIMS][NODES_PER_ELEM], double mobility, double *q)
-{
-    const auto conn = (*var.connectivity)[e];
-    double drive[NDIMS];
-    hydraulic_drive(param, var, *var.ppressure, e, g, drive);
-    if (var.mat->has_retention)
-        mobility *= element_mean_kr(*var.mat, (*var.elemmarkers)[e], conn, *var.ppressure);
-    for (int d = 0; d < NDIMS; ++d) q[d] = -mobility*drive[d];
-}
-
-} // namespace
-
-#pragma acc routine seq
-void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
-                            const double (*gradient)[NODES_PER_ELEM])
-{
-    if (!param.control.has_hydraulic_diffusion) {
-        for (int d = 0; d < NDIMS; ++d) q[d] = 0;
-        return;
-    }
-    double g[NDIMS][NODES_PER_ELEM];
-    if (!gradient) {
-        get_shape_gradients(var, e, g);
-        gradient = g;
-    }
-    hydraulic_flux(param,var,e,gradient,hydraulic_mobility(*var.mat,e),q);
-}
-
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
 {
     if (!param.control.has_hydraulic_diffusion) return;
@@ -444,51 +413,6 @@ void assemble_well_source(const Param &param, const Variables &var)
     }
 }
 
-// Integral of T - T0 from the lowest node level up to each level, from the
-// horizontal mean temperature of each level. One extra level at each end
-// extends the end temperatures beyond the mesh, e.g. to a water table above it.
-static void buoyancy_profile(const Param &param, const Variables &var, double alpha_f,
-                             double_vec &zs, double_vec &area)
-{
-    const double t0 = param.bc.surface_temperature;
-    std::vector<std::pair<double,double>> nodes(var.nnode);
-    for (int n = 0; n < var.nnode; ++n) {
-        const double t = (*var.temperature)[n];
-        if (!(1 - alpha_f * (t - t0) > 0))
-            die(EXIT_CONFIG_VALUE, "Buoyant fluid density is not positive at the initial temperature.");
-        nodes[n] = std::make_pair((*var.coord)[n][NDIMS-1], t);
-    }
-    std::sort(nodes.begin(), nodes.end());
-    const double tol = 1e-9 * (1 + nodes.back().first - nodes.front().first);
-    double_vec ts;
-    int_vec count;
-    for (int n = 0; n < var.nnode; ++n) {
-        if (zs.empty() || nodes[n].first - zs.back() > tol) {
-            zs.push_back(nodes[n].first);
-            ts.push_back(0);
-            count.push_back(0);
-        }
-        ts.back() += nodes[n].second;
-        ++count.back();
-    }
-    const int nlevel = zs.size();
-    area.assign(nlevel, 0);
-    for (int k = 0; k < nlevel; ++k) ts[k] = ts[k] / count[k] - t0;
-    for (int k = 1; k < nlevel; ++k)
-        area[k] = area[k-1] + 0.5 * (ts[k-1] + ts[k]) * (zs[k] - zs[k-1]);
-    zs.insert(zs.begin(), zs.front() - 1);
-    area.insert(area.begin(), -ts.front());
-    zs.push_back(zs.back() + 1);
-    area.push_back(area.back() + ts.back());
-}
-
-static double profile_integral(const double_vec &zs, const double_vec &area, double z)
-{
-    if (zs.empty()) return 0;
-    const int k = std::upper_bound(zs.begin()+1, zs.end()-1, z) - zs.begin();
-    return area[k-1] + (area[k] - area[k-1]) / (zs[k] - zs[k-1]) * (z - zs[k-1]);
-}
-
 void validate_hydraulic_boundaries(const Param &param, const Variables &var)
 {
     if (!param.control.has_hydraulic_diffusion) return;
@@ -542,13 +466,6 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
     const double alpha = var.mat->alpha_biot(0);
     const double loading_efficiency = alpha / ((bulk + 4.0 * shear / 3.0) * hydraulic_inverse_biot_modulus(*var.mat, 0) + alpha * alpha);
 
-    // Buoyant water: dp/dz = -rho_f0*g*(1 - alpha_f*(T - T0)).
-    const double alpha_f = param.mat.fluid_alpha[param.mat.mattype_ref];
-    double_vec zs, area;
-    if (hydraulic_buoyancy(param) && alpha_f != 0)
-        buoyancy_profile(param, var, alpha_f, zs, area);
-    const double table = profile_integral(zs, area, param.ic.water_table_z);
-
     for (int i = 0; i < var.nnode; ++i) {
         ConstArrayAccessor coord = (*var.coord)[i];
         double z = coord[NDIMS - 1];
@@ -557,8 +474,6 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         if (side >= 0 && var.hbc_types[side] == 2) continue;
         // Pressure is compression-positive; z increases upward.
         ppressure[i] = -rho_fluid * gravity * (z - param.ic.water_table_z);
-        if (!zs.empty())
-            ppressure[i] -= rho_fluid * gravity * alpha_f * (table - profile_integral(zs, area, z));
 
         // Add excess pore pressure for non-boundary nodes
         if (side < 0) ppressure[i] += loading_efficiency * loading;
@@ -663,14 +578,6 @@ static void pressure_step(const Param &param, const Variables &var,
             if (correction != 0)
                 pe += hydraulic_fixed_stress_lag(*var.mat, e) * correction * (*var.volume)[e] /
                       NODES_PER_ELEM / var.dt;
-        }
-        if (var.old_temperature) {
-            const double phi = var.mat->phi(e), solid = var.mat->alpha_solid(e);
-            const double beta = pore_weighted(phi, alpha_b, var.mat->alpha_fluid(e), solid);
-            const double thermal = strain_source ? beta :
-                beta - alpha_b * bulk_comp * var.mat->bulkm(e) * solid;
-            pe -= thermal * hydraulic_temperature_change(var, e) * (*var.volume)[e] /
-                  (NODES_PER_ELEM * var.dt);
         }
         source += pe * NODES_PER_ELEM * dt;
         double grad[NDIMS][NODES_PER_ELEM];
@@ -857,20 +764,13 @@ void remap_coefficients(const Param &param, const Variables &var, int e, double 
 // Mobile physical content and numerical fixed-stress buffer.
 void remap_content(const Param &param, const Variables &var, int e, int j, double value[2])
 {
-    const double alpha = var.mat->alpha_biot(e), phi = var.mat->phi(e);
+    const double alpha = var.mat->alpha_biot(e);
     const bool feedback = param.control.has_poroelastic_pressure_feedback;
     double storage, lag;
     remap_coefficients(param,var,e,storage,lag);
     const int n = (*var.connectivity)[e][j];
     value[0] = storage*(*var.ppressure)[n];
     if (feedback) value[0] += alpha*trace((*var.strain)[e]);
-    if (param.control.has_thermal_pressurization) {
-        const double solid = var.mat->alpha_solid(e);
-        double beta = pore_weighted(phi,alpha,var.mat->alpha_fluid(e),solid);
-        if (!feedback && !hydraulic_strain_form(param))
-            beta -= alpha*hydraulic_mean_stress_compliance(*var.mat,e)*var.mat->bulkm(e)*solid;
-        value[0] -= beta*((*var.temperature)[n]-param.bc.surface_temperature);
-    }
     value[1] = -lag*(*var.dppressure)[n];
 }
 
@@ -879,19 +779,10 @@ void remap_content(const Param &param, const Variables &var, int e, int j, doubl
 ContentRemap::ContentRemap(const Param &param, const Variables &var) :
     linear(param.control.has_hydraulic_diffusion && !var.mat->has_retention &&
            (!param.control.has_poroelastic_pressure_feedback ||
-            (param.mat.rheol_type & MatProps::rh_elastic))),
-    active(linear || var.pending_heat)
+            (param.mat.rheol_type & MatProps::rh_elastic)))
 {
-    if (!active) return;
-    #pragma acc wait
-    if (var.pending_heat) {
-        heat_density.resize(var.nelem);
-        for (int e = 0; e < var.nelem; ++e) {
-            heat_density[e] = (*var.pending_heat)[e]/(*var.volume)[e];
-            heat_total += (*var.pending_heat)[e];
-        }
-    }
     if (!linear) return;
+    #pragma acc wait
     old_content.resize(var.nelem);
     for (int e = 0; e < var.nelem; ++e)
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
@@ -908,7 +799,7 @@ ContentRemap::ContentRemap(const Param &param, const Variables &var) :
 void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
                          const conn_t &old_connectivity)
 {
-    if (!active) return;
+    if (!linear) return;
     #pragma acc wait
     // Centroid of a simplex and the radius about it that encloses the simplex.
     auto enclose = [](const auto &coordinate, double center[NDIMS]) {
@@ -939,7 +830,6 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
     std::vector<nanoflann::ResultItem<std::uint32_t,double>> candidates;
     candidates.reserve(64);
     outside.resize(var.nelem,0.0);
-    if (!heat_density.empty()) mapped_heat.assign(var.nelem,0.0);
     for (int e = 0; e < var.nelem; ++e) {
         const auto coordinate = var.coord->view_const((*var.connectivity)[e]);
         const double volume = compute_volume(coordinate);
@@ -956,13 +846,11 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
             if (candidate.second > reach*reach) continue;
             const SimplexOverlap overlap = simplex_overlap(old_coordinate.view_const(old_connectivity[old]),coordinate);
             if (overlap.volume == 0) continue;
-            if (!heat_density.empty()) mapped_heat[e] += overlap.volume*heat_density[old];
             for (int i = 0; i < NODES_PER_ELEM; ++i)
                 for (int j = 0; j < NODES_PER_ELEM; ++j) {
                     outside[e][i] -= overlap.product[i][j];
-                    if (linear)
-                        for (int k = 0; k < 2; ++k)
-                            mapped[k] += overlap.product[i][j]*old_content[old][k*NODES_PER_ELEM+j];
+                    for (int k = 0; k < 2; ++k)
+                        mapped[k] += overlap.product[i][j]*old_content[old][k*NODES_PER_ELEM+j];
                 }
         }
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
@@ -982,15 +870,8 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
 
 void ContentRemap::restore(const Param &param, Variables &var) const
 {
-    if (!active) return;
-    #pragma acc wait
-    if (!heat_density.empty()) {
-        *var.pending_heat = mapped_heat;
-        double retained = 0;
-        for (double energy : mapped_heat) retained += energy;
-        std::printf("    Pending heat remap: retained/removed [J] = %.17g %.17g\n",retained,heat_total-retained);
-    }
     if (!linear) return;
+    #pragma acc wait
     double current[2] = {}, current_magnitude[2] = {}, imported[2] = {}, capacity[2] = {};
     for (int e = 0; e < var.nelem; ++e) {
         const double volume = (*var.volume)[e];

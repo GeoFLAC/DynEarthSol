@@ -243,73 +243,6 @@ def rsf_check(exe, folder, ndims, replay=False):
     return report
 
 
-def thermal_check(exe, folder, ndims, replay=False):
-    """Thermal source, plastic return and pending pressure on one affine path."""
-    import thermal_cell as heat
-    cfg = configuration('pt', 10)
-    cfg['mesh'].update(resolution='1', largest_size='1', smallest_size='1')
-    cfg['control'].update(has_thermal_diffusion='true', has_thermal_pressurization='true',
-                          has_fluid_thermal_advection='true')
-    alpha_s, alpha_f = 1e-5, 2e-4
-    cfg['mat'].update(alpha=f'[{alpha_s}]', fluid_alpha=f'[{alpha_f}]', heat_capacity='[1000]',
-                      fluid_heat_capacity='[4180]', therm_cond='[0]')
-    reset_boundaries(cfg['bc'], tbc='0')
-    cfg['ic'].update(temperature_option='4', temp_background='273', temp_anomaly_amplitude='0')
-    if replay:
-        model = Dynearthsol(str(folder/'column'))
-    else:
-        cfg['sim']['max_steps'] = '1'
-        seed = run_model(exe, folder, cfg, 'seed')
-        x, _, _, lumped = heat.volumes(seed)
-        heat.heating(cfg, x, lumped); cfg['sim']['max_steps'] = '100'
-        model = run_model(exe, folder, cfg, 'column')
-    x, conn, volume, lumped = heat.volumes(model)
-    assert int(model.ndims) == ndims and len(x) == 2**ndims
-    beta = PHI*alpha_f+(ALPHA-PHI)*alpha_s
-    lag = ALPHA**2/(BULK+(SHEAR/3 if ndims == 2 else 0))
-    nphi = (1+math.sin(math.radians(20)))/(1-math.sin(math.radians(20)))
-    npsi = (1+math.sin(math.radians(10)))/(1-math.sin(math.radians(10)))
-    lame = BULK-2*SHEAR/3
-    axial = lateral = previous_pressure = previous_temperature = 0.
-    scale = volume.sum()*(SPEED*DURATION+beta*heat.RATE*heat.STOP)
-    worst_budget = worst_pressure = worst_stress = 0.
-    history = []
-    for row in scan_frames(str(folder/'column')):
-        frame, time = row['frame'], row['time']
-        theta = heat.RATE*min(time, heat.STOP)
-        reference = (ALPHA*SPEED*time+beta*theta+lag*previous_pressure)/(STORAGE+lag) if frame else 0.
-        if frame:
-            axial -= (lame+2*SHEAR)*SPEED*DT+BULK*alpha_s*(theta-previous_temperature)
-            lateral -= lame*SPEED*DT+BULK*alpha_s*(theta-previous_temperature)
-            axial, lateral = edge_return(axial, lateral, nphi, npsi)
-        stress = model.read_field(frame, 'stress')
-        expected = np.zeros_like(stress)
-        expected[:, :ndims] = lateral-ALPHA*previous_pressure
-        expected[:, ndims-1] = axial-ALPHA*previous_pressure
-        worst_stress = max(worst_stress, float(np.max(abs(stress-expected)))/(BULK*SPEED*DURATION))
-        temperature = model.read_field(frame, 'temperature')
-        np.testing.assert_allclose(temperature, heat.T0+theta, rtol=0, atol=1e-9)
-        p = model.read_field(frame, 'pore pressure')
-        strain = model.read_field(frame, 'strain')[:, :ndims].sum(axis=1)
-        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment')
-        content = float(volume @ (STORAGE*p[conn].mean(axis=1)+ALPHA*strain-
-                                  beta*(temperature[conn].mean(axis=1)-heat.T0)))
-        pending = -lag*float(volume @ dp[conn].mean(axis=1))
-        worst_budget = max(worst_budget, abs(content+pending)/scale)
-        worst_pressure = max(worst_pressure, float(np.max(abs(p-reference)))*STORAGE/(SPEED*DURATION+beta*10))
-        history.append([time, theta, reference, float(p.mean()), content, pending])
-        previous_pressure, previous_temperature = reference, theta
-    plastic = float(model.read_field(model.frames[-1], 'plastic strain').max())
-    assert plastic > 1e-5 and max(worst_budget, worst_pressure, worst_stress) < 1e-9, (
-        plastic, worst_budget, worst_pressure, worst_stress)
-    np.savetxt(folder/'history.csv', history, delimiter=',', comments='',
-               header='time_s,temperature_rise_K,reference_pressure_Pa,mean_pressure_Pa,physical_content_m3,pending_split_m3')
-    return dict(case='pt-thermal', dimension=ndims, frames=len(history), max_plastic_strain=plastic,
-                max_thermal_budget_error=worst_budget, max_pressure_reference_error=worst_pressure,
-                max_stress_reference_error=worst_stress,
-                scope='Uniform prescribed heating plus compression; nonzero solid expansion and two-face plastic return. No shear-heating or open-enthalpy claim.')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path); parser.add_argument('output', type=Path)
@@ -329,8 +262,6 @@ def main():
                 current = retention_check(exe, folder, dim, replay=True)
             elif name == 'pt-rsf':
                 current = rsf_check(exe, folder, dim, replay=True)
-            elif name == 'pt-thermal':
-                current = thermal_check(exe, folder, dim, replay=True)
             else:
                 method = 'pt' if name.startswith('pt-') else 'explicit'
                 current = dict(case=name, **analyze(folder, method, 'elastic' not in name,
@@ -378,9 +309,6 @@ def main():
     print(json.dumps(report['cases'][-1]), flush=True)
     rsf = output/'pt-rsf'; rsf.mkdir()
     report['cases'].append(rsf_check(exe, rsf, args.ndims))
-    print(json.dumps(report['cases'][-1]), flush=True)
-    thermal = output/'pt-thermal'; thermal.mkdir()
-    report['cases'].append(thermal_check(exe, thermal, args.ndims))
     print(json.dumps(report['cases'][-1]), flush=True)
     for method in ('pt', 'explicit'):
         drained = output/f'{method}-drained'; drained.mkdir()

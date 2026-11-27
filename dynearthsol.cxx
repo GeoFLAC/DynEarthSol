@@ -223,7 +223,6 @@ void init(const Param& param, Variables& var)
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
-    apply_temperature_bcs(param, var, *var.temperature);
     // initial_temperature() reassigns mantle to asthenosphere, moving elemmarkers.
     var.mat->refresh_elem_cache();
     initial_stress_state(param, var, *var.stress, *var.stressyy, *var.old_mean_stress, *var.strain, var.compensation_pressure);
@@ -295,22 +294,19 @@ static int read_material_points(Input &bin, const std::string &prefix, int expec
 template <class Input>
 static void restore_sources(const Param &param, Variables &var, Input &bin)
 {
-    const auto points = [&](const std::string &name, const Injection &injection,
-                            PointSourceOwners &owners) {
-        if (!injection.enabled ||
-            read_material_points(bin, name, injection.num_points, owners.element,
-                                 owners.weight) != injection.num_points) {
-            place_point_sources(injection, var, owners);
-            return;
-        }
+    const Injection &injection = param.injection;
+    PointSourceOwners &owners = var.fluid_points;
+    if (!injection.enabled ||
+        read_material_points(bin, "fluid", injection.num_points, owners.element,
+                             owners.weight) != injection.num_points)
+        place_point_sources(injection, var, owners);
+    else {
         for (int p = 0; p < injection.num_points; ++p)
             if (owners.element[p] < 0 || owners.element[p] >= var.nelem)
                 die(EXIT_IO_RESTART, "Invalid point-source element in the checkpoint.");
         for (double w : owners.weight)
             if (!std::isfinite(w)) die(EXIT_IO_RESTART, "Invalid point-source weight in the checkpoint.");
-    };
-    points("fluid", param.injection, var.fluid_points);
-    points("heat", param.heat_injection, var.heat_points);
+    }
 
     const BC &bc = param.bc;
     int count = 0;
@@ -584,30 +580,6 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         // the R2 baseline, so the first remesh after a restart refines as in a continuous run
         bin_chkpt.read_array(*var.plstrain_remesh, "plstrain_remesh");
         bin_save.read_array(*var.radiogenic_source, "radiogenic source");
-        const bool heat_version = bin_chkpt.has_array("shear heat version");
-        const bool heat_pending = bin_chkpt.has_array("pending shear heat");
-        const bool heat_power = bin_chkpt.has_array("shear heating");
-        if (heat_version || heat_pending || heat_power) {
-            if (!(heat_version && heat_pending && heat_power))
-                die(EXIT_IO_RESTART, "Incomplete shear-heat checkpoint.");
-            int version = 0;
-            bin_chkpt.read_scalar(version, "shear heat version");
-            if (version != 1) die(EXIT_IO_RESTART, "Unsupported shear-heat checkpoint version.");
-            double_vec pending(var.nelem), power(var.nelem);
-            bin_chkpt.read_array(pending, "pending shear heat");
-            bin_chkpt.read_array(power, "shear heating");
-            for (int e = 0; e < var.nelem; ++e) {
-                if (!(std::isfinite(pending[e]) && pending[e] >= 0 &&
-                      std::isfinite(power[e]) && power[e] >= 0))
-                    die(EXIT_IO_RESTART, "Invalid shear-heat checkpoint energy or power.");
-                if (!var.pending_heat && pending[e] != 0)
-                    die(EXIT_IO_RESTART, "Cannot disable shear heating with undeposited checkpoint energy.");
-            }
-            if (var.pending_heat) {
-                *var.pending_heat = pending;
-                *var.shear_heat = power;
-            }
-        }
         bin_save.read_array(*var.ppressure, "pore pressure");
         if (param.control.has_hydraulic_diffusion) {
             if (!bin_chkpt.has_array("pending pore pressure increment"))
@@ -1299,8 +1271,7 @@ int main(int argc, const char* argv[])
         if (!var.mpi || !var.mpi->distributed())
 #endif
             var.mat->refresh_elem_cache();
-        if (var.old_temperature) *var.old_temperature = *var.temperature;
-        if (has_temperature_transport(param))
+        if (param.control.has_thermal_diffusion)
             update_temperature(param, var, *var.temperature, *var.tmp_result);
 
         if (param.control.has_hydraulic_diffusion)
@@ -1330,9 +1301,6 @@ int main(int argc, const char* argv[])
             apply_platen_velocity(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
         }
-
-        // One physical commit, after acceptance; PT trials never deposit energy.
-        accumulate_shear_heat(var);
 
         if(param.control.has_hydraulic_diffusion && !hydraulic_strain_form(param))
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);

@@ -1,8 +1,6 @@
 #ifndef DYNEARTHSOL3D_FIELDS_HPP
 #define DYNEARTHSOL3D_FIELDS_HPP
 
-#include <cmath>
-
 // Element shape gradients shared by field updates and the current-rate timestep bound.
 #ifdef THREED
 #pragma acc routine seq
@@ -66,39 +64,19 @@ inline void get_shape_gradients(const Variables &var, int e, double g[NDIMS][NOD
 #endif
 }
 
-// Temperature of a boundary side: bc.tbc_value, or where that is not finite
-// the mantle temperature at the bottom and the surface temperature elsewhere.
-#pragma acc routine seq
-inline double thermal_boundary_value(const Param &param, int side)
-{
-    const double value = param.bc.tbc_value[side];
-    return std::isfinite(value) ? value :
-        (side == 4 ? param.bc.mantle_temperature : param.bc.surface_temperature);
-}
-
 // Number of explicit substeps of at most limit that cover dt; dies with
 // message when it does not fit in an int.
 int explicit_substeps(double dt, double limit, const char *message);
 // Smallest mass/row over the owned nodes of all ranks, starting from limit.
-// A node's row sums its element rows in work, plus capacity*(*inflow)[n].
+// A node's row sums its element rows in work.
 double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
-                        double limit, const double_vec *inflow = nullptr, double capacity = 0);
+                        double limit);
 
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_tmp(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);
-#pragma acc routine seq
-inline bool has_temperature_transport(const Param &param)
-{
-    return param.control.has_thermal_diffusion || param.control.has_fluid_thermal_advection ||
-           param.heat_injection.enabled || param.control.has_shear_heating;
-}
-void accumulate_shear_heat(const Variables &var);
 void update_temperature(const Param &param, const Variables &var,
     double_vec &temperature, elem_cache& tmp_result);
-void apply_temperature_bcs(const Param &param, const Variables &var, double_vec &temperature);
-#pragma acc routine seq
-bool prescribed_temperature(const Param &param, const Variables &var, int n, double &value);
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);
 // force_undamped optionally receives a caller-owned nnode-sized copy of the force with
 // the physical loads but without artificial damping. It must not alias force,

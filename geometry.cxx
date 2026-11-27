@@ -1644,8 +1644,7 @@ double_vec dt_controls(const Param& param)
             c.characteristic_speed, static_cast<double>(c.use_global_velocity_scaling),
             static_cast<double>(c.mass_scaling_reference_speed), c.rsf_dtheta_max,
             static_cast<double>(c.has_thermal_diffusion),
-            static_cast<double>(c.has_hydraulic_diffusion),
-            static_cast<double>(c.has_fluid_thermal_advection)};
+            static_cast<double>(c.has_hydraulic_diffusion)};
 }
 
 double compute_dt(const Param& param, Variables& var,
@@ -1687,7 +1686,6 @@ double compute_dt(const Param& param, Variables& var,
     double dt_hydro_wave = std::numeric_limits<double>::max();
     double hydro_wave_length = std::numeric_limits<double>::max();
     double hydro_wave_floor = std::numeric_limits<double>::max();
-    double dt_thermal_advection = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
     const bool uses_rsf_state_step_limit =
         include_rsf_state_limit &&
@@ -1708,12 +1706,12 @@ double compute_dt(const Param& param, Variables& var,
     int nan_elem_count = 0;
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection, global_dt_min) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) \
         default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection, global_dt_min) \
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
         reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 
@@ -1805,16 +1803,6 @@ double compute_dt(const Param& param, Variables& var,
             }
         minl = std::min(minl, minh);
 
-        if (param.control.has_fluid_thermal_advection) {
-            double q[NDIMS], norm = 0;
-            hydraulic_element_flux(param, var, e, q);
-            for (int d = 0; d < NDIMS; ++d) norm += q[d]*q[d];
-            const double speed = var.mat->rho_fluid_reference(e)*var.mat->cp_fluid(e)*
-                std::sqrt(norm)/var.mat->thermal_capacity(e);
-            if (speed > 0)
-                dt_thermal_advection = std::min(dt_thermal_advection, 0.5*minh/speed);
-        }
-
         if (hydraulic_strain_form(param)) {
             const double alpha = var.mat->alpha_biot(e);
             const double modulus = var.mat->bulkm(e) + 4.0/3.0*var.mat->shearm(e) +
@@ -1849,12 +1837,11 @@ double compute_dt(const Param& param, Variables& var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
         double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min,
-                           dt_hydro_wave, hydro_wave_length, hydro_wave_floor, dt_thermal_advection};
+                           dt_hydro_wave, hydro_wave_length, hydro_wave_floor};
         var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
         minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
         dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
         dt_hydro_wave=limits[6]; hydro_wave_length=limits[7]; hydro_wave_floor=limits[8];
-        dt_thermal_advection=limits[9];
         global_max_vem=var.mpi->maximum(global_max_vem);
         nan_elem_count=var.mpi->sum(nan_elem_count);
     }
@@ -1919,7 +1906,7 @@ double compute_dt(const Param& param, Variables& var,
 
     // The step is the smallest of the limits, times dt_fraction.
     double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
-                          dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, dt_thermal_advection}) *
+                          dt_diffusion, dt_hydro_diffusion, dt_hydro_wave}) *
                 param.control.dt_fraction;
     if (param.debug.dt && mpi_reports(var)) {
         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
@@ -1965,7 +1952,6 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
     refresh_hydraulic_diffusivity(param, var);
-    var.mat->thermal_step_limit = 0;
 
 #ifndef ACC
 #ifdef GPP1X
@@ -1995,14 +1981,13 @@ void compute_mass(const Param &param, const Variables &var,
             }
 
             double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
-            double tm = var.mat->thermal_capacity(e) * (*var.volume)[e] / NODES_PER_ELEM;
+            double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
             double hm = hydraulic_storage(param, *var.mat, e) * (*var.volume)[e] / NODES_PER_ELEM;
             double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
             tr[0] = (*var.volume)[e];
             tr[1] = m;
-            if (has_temperature_transport(param))
-                tr[2] = tm;
+            tr[2] = param.control.has_thermal_diffusion ? tm : 0.0;
             tr[3] = hm; // check
             tr[4] = ym; 
         }
@@ -2046,7 +2031,7 @@ void compute_mass(const Param &param, const Variables &var,
                     ConstElemCacheAccessor tr = tmp_result[patch[i]];
                     volume_n[n] += tr[0];
                     mass[n] += tr[1];
-                    if (has_temperature_transport(param))
+                    if (param.control.has_thermal_diffusion)
                         tmass[n] += tr[2];
                     hmass[n] += tr[3];
                     ymass[n] += tr[4];

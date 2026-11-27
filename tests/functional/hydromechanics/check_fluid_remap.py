@@ -6,7 +6,7 @@ content changes only by what the domain change removes and adds, as DES
 reports it; a remesh that is not meant to change the domain changes its
 volume by at most 1e-6, and the moving-domain controls, a rigid translation,
 add or remove the uniform excess content of the swept volume. This does not
-check total retained mass or energy.
+check total retained mass.
 """
 import argparse
 import json
@@ -34,16 +34,8 @@ def configuration(case):
     if case in ('explicit', 'gvs'):
         cfg['control'].update(has_PT='false', fixed_dt='.001', inertial_scaling='1e5',
                               use_global_velocity_scaling=str(case == 'gvs'))
-    if case in ('uncoupled', 'uncoupled-thermal'):
+    if case == 'uncoupled':
         cfg['control']['has_poroelastic_pressure_feedback'] = 'false'
-    if case in ('thermal', 'uncoupled-thermal'):
-        cfg['control']['has_thermal_pressurization'] = 'true'
-        cfg['mat'].update(alpha='[3e-5]', fluid_alpha='[2e-4]')
-        cfg['ic'].update(temperature_option='4', temp_background='273',
-                         temp_anomaly_amplitude='10', temp_anomaly_xcenter='.5',
-                         temp_anomaly_ycenter='.5', temp_anomaly_zcenter='-5',
-                         temp_anomaly_xsemi_axis='1', temp_anomaly_ysemi_axis='1',
-                         temp_anomaly_zsemi_axis='3')
     if case.startswith('domain'):
         cfg['sim']['max_steps'] = '1'
         cfg['mesh'].update(xlength='1', ylength='1', zlength='1', resolution='1',
@@ -72,12 +64,6 @@ def inventories(model, frame, cfg):
     pressure = model.read_field(frame, 'pore pressure')[cells].mean(axis=1)
     strain = model.read_field(frame, 'strain')[:, :dim].sum(axis=1)
     mobile = float(volume@(storage*pressure+(alpha*strain if feedback else 0)))
-    if cfg.getboolean('control', 'has_thermal_pressurization', fallback=False):
-        beta = phi*value('fluid_alpha')+(alpha-phi)*value('alpha')
-        if not feedback:
-            beta -= alpha*value('bulk_modulus')*value('alpha')/mean_bulk
-        temperature = model.read_field(frame, 'temperature')[cells].mean(axis=1)
-        mobile -= float(volume@(beta*(temperature-cfg.getfloat('bc', 'surface_temperature'))))
     return dict(volume=float(volume.sum()), mobile=mobile,
                 max_pressure=float(np.max(np.abs(pressure))), nodes=len(x), cells=len(cells))
 
@@ -114,8 +100,8 @@ def main():
     exe, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     records = []
-    for case in ('drained', 'sealed', 'explicit', 'gvs', 'thermal',
-                 'uncoupled', 'uncoupled-thermal', 'domain-add', 'domain-remove'):
+    for case in ('drained', 'sealed', 'explicit', 'gvs',
+                 'uncoupled', 'domain-add', 'domain-remove'):
         folder = output/case
         folder.mkdir()
         cfg = configuration(case)

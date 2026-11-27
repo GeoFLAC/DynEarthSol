@@ -222,10 +222,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         bin.write_cell_array(density, "bulk density", density.size());
     }
     bin.write_cell_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
-    if (var.shear_heat) {
-        bin.write_cell_array(*var.shear_heat, "shear heating", var.shear_heat->size());
-        bin.write_cell_array(*var.pending_heat, "pending shear heat", var.pending_heat->size());
-    }
 
     bin.write_cell_array(*var.plstrain, "plastic strain", var.plstrain->size());
 
@@ -506,11 +502,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
     bin.write_scalar(var.dt, "dt");
-    if (var.pending_heat) {
-        bin.write_scalar(1, "shear heat version");
-        bin.write_array(*var.pending_heat, "pending shear heat", var.pending_heat->size());
-        bin.write_array(*var.shear_heat, "shear heating", var.shear_heat->size());
-    }
     if (hydraulic_strain_form(param))
         bin.write_scalar(1, "physical hydraulic step");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
@@ -524,7 +515,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     write_material_points(bin, "monitor", monitor.elements, monitor.weights, &monitor.positions);
     // Sources fixed in the material: where a restart continues them.
     write_material_points(bin, "fluid", var.fluid_points.element, var.fluid_points.weight);
-    write_material_points(bin, "heat", var.heat_points.element, var.heat_points.weight);
     const WellPieces &pieces = var.well_pieces;
     if (!pieces.element.empty()) {
         bin.write_scalar(int(pieces.element.size()), "well piece count");

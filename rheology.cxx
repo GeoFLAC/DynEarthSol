@@ -450,63 +450,6 @@ static double plastic_increment(const double plastic[3], bool plane_strain)
     return std::sqrt(0.5*squared);
 }
 
-// Recover only the irreversible increment with the inverse of the Hooke law
-// actually used by this branch. dpp is a stress shift, not elastic strain.
-// The start tensor is taken after reversible thermal expansion. Work uses
-// effective stress, including the mean Bishop pressure over this interval.
-#pragma acc routine seq
-static double plastic_heat(double bulk, double shear, const double *start,
-                           ConstTensorAccessor final, const double *de, double dpp,
-                           bool has_syy, double syy_start, double syy_final,
-                           double work_pressure)
-{
-    const double lambda = bulk - 2.0/3.0 * shear;
-    const int trace_dim = has_syy ? 3 : NDIMS;
-    const double ratio = lambda / (trace_dim * lambda + 2 * shear);
-    const double t0 = trace(start) + (has_syy ? syy_start : 0);
-    const double t1 = trace(final) - NDIMS*dpp + (has_syy ? syy_final-dpp : 0);
-    double heat = 0;
-    for (int d = 0; d < NSTR; ++d) {
-        const bool normal = d < NDIMS;
-        const double change = final[d] - start[d] - (normal ? dpp : 0);
-        const double elastic = (change - (normal ? ratio*(t1-t0) : 0)) / (2*shear);
-        const double work = 0.5*(start[d]+final[d]) + (normal ? work_pressure : 0);
-        heat += (normal ? 1 : 2) * work * (de[d]-elastic);
-    }
-    if (has_syy) {
-        const double elastic = (syy_final-dpp-syy_start-ratio*(t1-t0)) / (2*shear);
-        heat -= (0.5*(syy_start+syy_final)+work_pressure) * elastic;
-    }
-    // Individual normal components are not dissipation: pressure contributions
-    // cancel only in the sum. Never clamp each contribution separately.
-    return heat < 0 ? 0 : heat;
-}
-
-// Maxwell uses a centered viscous strain increment. Memoryless flow uses
-// its instantaneous deviatoric rate instead; neither dissipates bulk work.
-#pragma acc routine seq
-static double viscous_heat(double viscosity, double dt, ConstTensorAccessor rate,
-                           const double *start, ConstTensorAccessor final,
-                           bool maxwell_branch, bool has_syy,
-                           double syy_start, double syy_final)
-{
-    const int trace_dim = has_syy ? 3 : NDIMS;
-    const double mean = maxwell_branch ?
-        (trace(start)+trace(final)+(has_syy ? syy_start+syy_final : 0))/(2*trace_dim) :
-        trace(rate)/trace_dim;
-    double squared = 0;
-    for (int d = 0; d < NSTR; ++d) {
-        const double value = (maxwell_branch ? 0.5*(start[d]+final[d]) : rate[d]) -
-                             (d < NDIMS ? mean : 0);
-        squared += (d < NDIMS ? 1 : 2) * value*value;
-    }
-    if (has_syy) {
-        const double value = (maxwell_branch ? 0.5*(syy_start+syy_final) : 0) - mean;
-        squared += value*value;
-    }
-    return dt * squared * (maxwell_branch ? 1/(2*viscosity) : 2*viscosity);
-}
-
 #pragma acc routine seq
 static bool finite3(const double p[3])
 {
@@ -2131,7 +2074,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
     // consuming a pressure increment belonging to the next physical step.
     const bool has_hydraulic_diffusion =
         param.control.has_hydraulic_diffusion && !initial_equilibrium;
-    const bool shear_heating = param.control.has_shear_heating && !initial_equilibrium;
     // Only option 0 projects the centroid velocity; option 1 derives its rate
     // from the strain-rate invariant.
     const bool needs_slip_rate = (param.mat.rheol_type == MatProps::rh_ep_rsf)
@@ -2151,10 +2093,10 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         vel, stress, stressyy, dpressure, viscosity, strain, plstrain, delta_plstrain, \
         strain_rate, dyn_fric_coeff, state_variable) \
         firstprivate(has_hydraulic_diffusion, needs_slip_rate, trial_reference_geometry, initial_equilibrium, \
-                     needs_projected_velocity, start_angles, shear_heating) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) \
+                     needs_projected_velocity, start_angles) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) \
         reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne,shear_heating) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: the 3x3 eigensolver in elasto_plastic rounds differently on the device
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: the 3x3 eigensolver in elasto_plastic rounds differently on the device
     for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         int rejection = 0;
@@ -2203,20 +2145,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
         if (trial_reference_geometry && var.mat->is_plane_strain) old_s += syy;
-        if (has_hydraulic_diffusion && var.old_temperature) {
-            // alpha_solid is volumetric, consistent with the density law.
-            const double thermal = var.mat->bulkm(e) * var.mat->alpha_solid(e) *
-                                   hydraulic_temperature_change(var, e);
-            for (int d = 0; d < NDIMS; ++d) s[d] -= thermal;
-            if (var.mat->is_plane_strain) syy -= thermal;
-        }
-
-        double heat_start[NSTR];
-        const double heat_syy_start = syy;
-        if (shear_heating)
-            for (int d = 0; d < NSTR; ++d) heat_start[d] = s[d];
-        bool heat_maxwell = param.mat.rheol_type == MatProps::rh_maxwell;
-        bool heat_has_syy = var.mat->is_plane_strain;
 
         // anti-mesh locking correction on strain rate
         {
@@ -2281,7 +2209,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             break;
         case MatProps::rh_viscous:
             {
-                heat_has_syy = trial_reference_geometry && var.mat->is_plane_strain;
                 double bulkm = var.mat->bulkm(e);
                 viscosity[e] = var.mat->visc(e);
                 double total_dv = trace(es);
@@ -2297,7 +2224,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             break;
         case MatProps::rh_maxwell:
             {
-                heat_has_syy = trial_reference_geometry && var.mat->is_plane_strain;
                 double bulkm = var.mat->bulkm(e);
                 double shearm = var.mat->shearm(e);
                 viscosity[e] = var.mat->visc(e);
@@ -2370,8 +2296,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 // use the smaller as the final stress
                 if (svII < spII) {
-                    heat_maxwell = true;
-                    heat_has_syy = plane_trial;
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
                     if (plane_trial) syy = svyy;
@@ -2479,8 +2403,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 // use the smaller as the final stress
                 if (svII < spII) {
-                    heat_maxwell = true;
-                    heat_has_syy = plane_trial;
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
                     if (plane_trial) syy = svyy;
@@ -2501,17 +2423,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 //            std::cerr << "Error: unknown rheology type: " << rheol_type << "\n";
 //            std::exit(1);
             break;
-        }
-        if (shear_heating) {
-            double heat = 0;
-            if (param.mat.rheol_type == MatProps::rh_viscous || heat_maxwell)
-                heat = viscous_heat(viscosity[e], var.dt, edot, heat_start, s,
-                                    heat_maxwell, heat_has_syy, heat_syy_start, syy);
-            else if (var.mat->rheol_type & MatProps::rh_plastic)
-                heat = plastic_heat(var.mat->bulkm(e), var.mat->shearm(e), heat_start, s,
-                                    de, dpp, heat_has_syy, heat_syy_start, syy,
-                                    pore_strength_pressure + 0.5*dpp);
-            (*var.shear_heat)[e] = heat / var.dt;
         }
         if (param.control.is_using_mixed_stress) {
             const double new_trace = trial_reference_geometry && var.mat->is_plane_strain
