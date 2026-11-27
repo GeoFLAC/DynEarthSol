@@ -99,7 +99,8 @@ def main():
     args.workdir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='pt-mpi-', dir=args.workdir.resolve()))
     print(work, flush=True)
-    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), PYTHONPATH=str(ROOT))
+    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads),
+               PYTHONPATH=os.pathsep.join(filter(None, (str(ROOT), os.environ.get('PYTHONPATH')))))
     launcher = shlex.split(args.launcher)
     report = dict(completed=False, rtol=args.rtol, atol=args.atol, threads=args.threads,
                   partitioner='metis', checks=[])
