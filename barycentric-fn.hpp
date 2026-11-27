@@ -17,9 +17,9 @@ class Barycentric_transformation {
      * ordering) before any host read, any non-async device consumer, and
      * destruction of the object or its input arrays.
      */
-    typedef Array2D<double,NODES_PER_ELEM*NDIMS> coeff_t;
-    typedef coeff_t::Accessor CoeffAccessor;
-    typedef coeff_t::ConstAccessor ConstCoeffAccessor;
+    using coeff_t = Array2D<double,NODES_PER_ELEM*NDIMS>;
+    using CoeffAccessor = coeff_t::Accessor;
+    using ConstCoeffAccessor = coeff_t::ConstAccessor;
     coeff_t coeff_;
     int nelem_;
     int elem_dim_;

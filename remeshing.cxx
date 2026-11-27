@@ -9,7 +9,6 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <unordered_map>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -30,12 +29,10 @@
 #include "remeshing.hpp"
 #include "remesh-scratch.hpp"
 
-#ifdef USEMMG
 #ifdef THREED
 #include "mmg/mmg3d/libmmg3d.h"
 #else
 #include "mmg/mmg2d/libmmg2d.h"
-#endif
 #endif
 
 #ifdef ACC
@@ -43,29 +40,6 @@
 #endif
 
 namespace { // anonymous namespace
-
-
-// The arrays points_to_new_mesh and points_to_new_surface return, owned here so that every path
-// frees them. TetGen allocates them with new[], and the vendored Triangle's trimalloc
-// (triangle/triangle.c) was changed to operator new[], so delete[] releases both.
-struct GeneratedMesh {
-    int nnode = 0, nelem = 0, nseg = 0;
-    std::unique_ptr<double[]> coord, regattr;
-    std::unique_ptr<int[]> connectivity, segment, segflag;
-
-    // Take a mesher's output, freeing the arrays held so far.
-    void adopt(int nn, int ne, int ns, double *c, int *conn, int *seg, int *flag, double *attr)
-    {
-        nnode = nn;
-        nelem = ne;
-        nseg = ns;
-        coord.reset(c);
-        connectivity.reset(conn);
-        segment.reset(seg);
-        segflag.reset(flag);
-        regattr.reset(attr);
-    }
-};
 
 
 // equilateral triangle area = 0.433*s^2, equilateral tetrahedron volume = 0.118*s^3
@@ -92,8 +66,6 @@ RefineFloors refine_floors(const Mesh &m)
     return f;
 }
 
-const int DELETED_FACET = -1;
-const int DEBUG = 0;
 
 bool is_boundary(uint flag)
 {
@@ -155,12 +127,6 @@ bool is_corner(uint flag)
 }
 
 
-bool is_bottom_corner(uint flag)
-{
-    if ((flag & BOUNDZ0) && is_corner(flag)) return 1;
-    return 0;
-}
-
 void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
                     double bottom, int_vec &points_to_delete, const RefineFloors &floors)
 {
@@ -186,8 +152,7 @@ void flatten_bottom(const uint_vec &old_bcflag, double *qcoord,
         else if (qcoord[i*NDIMS + NDIMS-1] < bottom + floors.min_dist) {
             // Delete every non-bottom node within min_dist of (or below) the bottom: an interior
             // one inverts its elements once the bottom snaps back up, a side-wall one below the
-            // corner degenerates the corner elements. The MMG collapse or
-            // delete_points_and_merge_boundary (see its keep rule) removes it.
+            // corner degenerates the corner elements. The MMG collapse removes it.
             points_to_delete.push_back(i);
         }
     }
@@ -270,821 +235,6 @@ void flatten_y1(const uint_vec &old_bcflag, double *qcoord,
 }
 
 
-void new_bottom(const uint_vec &old_bcflag, double *qcoord,
-                double bottom_depth, int_vec &points_to_delete, double min_dist,
-                int *segment, int *segflag, int nseg)
-{
-    /* deleting nodes that are on or close to the bottom boundary,
-     * excluding nodes on the side walls
-     */
-
-#ifdef THREED
-    /* In 3D, if bottom nodes were deleted, the facets on the side boundaries
-     * near the bottom are affected as well. The code does not deal with this
-     * complexity and can only work in 2D.
-     */
-    die(EXIT_UNSUPPORTED_DIM, "new_bottom() does not work in 3D.");
-#endif
-
-    int_vec bottom_corners;
-    for (std::size_t i=0; i<old_bcflag.size(); ++i) {
-        uint flag = old_bcflag[i];
-        if (is_bottom(flag)) {
-            if(is_bottom_corner(flag))
-                bottom_corners.push_back(i);
-            else
-                points_to_delete.push_back(i);
-        }
-        else if (! is_boundary(flag) &&
-                 std::fabs(qcoord[i*NDIMS + NDIMS-1] - bottom_depth) < min_dist) {
-            points_to_delete.push_back(i);
-        }
-    }
-
-    if (DEBUG) {
-        std::cout << "bottom points to delete: ";
-        print(std::cout, points_to_delete);
-        std::cout << '\n';
-        std::cout << "segment before delete: ";
-        print(std::cout, segment, nseg*NODES_PER_FACET);
-        std::cout << '\n';
-        std::cout << "segflag before delete: ";
-        print(std::cout, segflag, nseg);
-        std::cout << '\n';
-    }
-
-    // must have 2 bottom corners in 2D
-    if (bottom_corners.size() != 2) {
-        std::cerr << "Error: cannot find all bottom corners before remeshing. n_bottom_corners = "
-                  << bottom_corners.size() << " (2 expected).\n";
-        std::cout << "bottom corners: ";
-        print(std::cout, bottom_corners);
-        std::cout << '\n';
-        die(EXIT_MESH_QUALITY);
-    }
-
-    // move the corners to the same depth
-    for (std::size_t i=0; i<bottom_corners.size(); i++) {
-        int n = bottom_corners[i];
-        qcoord[n*NDIMS + NDIMS-1] = bottom_depth;
-    }
-
-    // mark all bottom nodes as deleted
-    for (int i=0; i<nseg; ++i) {
-        if (static_cast<uint>(segflag[i]) == BOUNDZ0) {
-            for (int j=0; j<NODES_PER_FACET; j++)
-                segment[i*NODES_PER_FACET + j] = DELETED_FACET;
-        }
-    }
-
-    // create new bottom segments from corner nodes
-    for (int i=0; i<nseg; ++i) {
-        if (static_cast<uint>(segflag[i]) == BOUNDZ0) {
-            segment[i*NODES_PER_FACET + 0] = bottom_corners[0];
-            segment[i*NODES_PER_FACET + 1] = bottom_corners[1];
-            break;
-        }
-    }
-
-    if (DEBUG) {
-        std::cout << "bottom corners: ";
-        print(std::cout, bottom_corners);
-        std::cout << '\n';
-        std::cout << "segment with new bottom: ";
-        print(std::cout, segment, nseg*NODES_PER_FACET);
-        std::cout << '\n';
-        std::cout << "segflag with new bottom: ";
-        print(std::cout, segflag, nseg);
-        std::cout << '\n';
-    }
-}
-
-
-// local cmp functor
-struct cmp {
-    const array_t &coord;
-    const int d;
-    cmp (const array_t &coord_, int dim) : coord(coord_), d(dim) {};
-    bool operator()(const int &a, const int &b) {return coord[a][d] < coord[b][d];}
-};
-
-
-typedef std::pair<int,int> edge_t;
-struct equal_to1
-{
-    bool operator()(const edge_t &lhs, const edge_t &rhs) const {
-        return (lhs.first == rhs.first && lhs.second == rhs.second);
-    }
-};
-
-
-struct hash1
-{
-    std::size_t operator()(const edge_t &k) const {
-        // first as the upper half
-        const int halfbytes = 4;
-        return (static_cast<std::size_t>(k.first) << sizeof(std::size_t)*halfbytes) | k.second;
-    }
-};
-
-
-void find_tiny_element(const Param &param, const double_vec &volume,
-                       int_vec &tiny_elems)
-{
-    const double smallest_vol = refine_floors(param.mesh).smallest_vol;
-
-    for (std::size_t e=0; e<volume.size(); e++) {
-        if (volume[e] < smallest_vol)
-            tiny_elems.push_back(e);
-    }
-
-    if (DEBUG) {
-        std::cout << "tiny elements: ";
-        print(std::cout, tiny_elems);
-        std::cout << '\n';
-    }
-}
-
-
-void find_points_of_tiny_elem(const array_t &coord, const conn_t &connectivity,
-                              const double_vec &volume, const int_vec &tiny_elems,
-                              int npoints, const array_t &old_points,
-                              const uint_vec &old_bcflag, int_vec &points_to_delete,
-                              bool excl_func(uint))
-{
-    // collecting the nodes of tiny_elems
-    int tiny_nelem = tiny_elems.size();
-    array_t tiny_coord(tiny_nelem * NODES_PER_ELEM);
-    conn_t tiny_conn(tiny_nelem);
-    double_vec tiny_vol(tiny_nelem);
-    int ii = 0;
-    for (int ee=0; ee<tiny_nelem; ++ee) {
-        int e = tiny_elems[ee];
-
-        tiny_vol[ee] = volume[e];
-
-        ConstArrayIndirectAccessor coord_e = coord.view_const(connectivity[e]);
-        for (int j=0; j<NODES_PER_ELEM; ++j) {
-            tiny_conn[ee][j] = ii;
-
-            for (int d=0; d<NDIMS; ++d) {
-                tiny_coord[ii][d] = coord_e[j][d];
-            }
-            ii ++;
-        }
-    }
-
-    Barycentric_transformation bary(tiny_coord, tiny_conn, tiny_vol);
-
-    #pragma acc wait
-
-    // find old nodes that are connected to tiny elements and are not excluded
-    // (most of the nodes of tiny elements are newly inserted by the remeshing library)
-    for (int i=0; i<npoints; ++i) {
-        // excluded nodes
-        if (excl_func(old_bcflag[i])) continue;
-
-        ConstArrayAccessor p = old_points[i];
-        for (int ee=0; ee<tiny_nelem; ++ee) {
-            if (bary.is_inside_elem(p, ee)) {
-                points_to_delete.push_back(i);
-                break;
-            }
-        }
-    }
-
-    if (DEBUG) {
-        std::cout << "points of tiny elements: ";
-        print(std::cout, points_to_delete);
-        std::cout << '\n';
-    }
-}
-
-
-// Swap-delete points_to_delete. A deleted point must be in no segment, or its segments end on the
-// node moved into its slot: option 2's bottom nodes qualify (new_bottom replaced their segments);
-// other boundary points go through delete_points_and_merge_boundary. A kept internal segment's
-// node (is_discarding_internal_segments = no) can still be picked; its segments are then misrouted.
-void delete_points(const int_vec &points_to_delete, int &npoints,
-                   int nseg, double *points, int *segment)
-{
-    if (points_to_delete.size() == 0) return;
-
-    if (DEBUG) {
-        std::cout << "old points to delete: ";
-        print(std::cout, points_to_delete);
-        std::cout << '\n';
-    }
-
-    int *endsegment = segment + nseg * NODES_PER_FACET;
-
-    int end = npoints - 1;
-
-    // delete points from the end
-    for (auto i=points_to_delete.rbegin(); i<points_to_delete.rend(); ++i) {
-        // when a point is deleted, replace it with the last point
-        for (int d=0; d<NDIMS; ++d) {
-            points[(*i)*NDIMS + d] = points[end*NDIMS + d];
-        }
-
-        // if the last point is also a segment point, the segment point index
-        // needs to be updated as well
-        std::replace(segment, endsegment, end, *i);
-        // std::cout << *i << " <- " << end << "\n";
-
-        end --;
-    }
-    npoints -= points_to_delete.size();
-}
-
-
-void delete_facets(int &nseg, int *segment, int *segflag)
-{
-    // delete facets from the end
-    for (int i=nseg-1; i>=0; i--) {
-        if (segment[i*NODES_PER_FACET] == DELETED_FACET) {
-            // safety check
-            if (segment[i*NODES_PER_FACET + 1] != DELETED_FACET
-#ifdef THREED
-                || segment[i*NODES_PER_FACET + 2] != DELETED_FACET
-#endif
-                ) {
-                std::cerr << "Error: segment array is corrupted before delete_facets()!\n";
-                print(std::cerr, segment, nseg*NODES_PER_FACET);
-                die(EXIT_MESH_QUALITY);
-            }
-
-            // replace deleted segment with the last segment
-            for (int j=0; j<NODES_PER_FACET; ++j) {
-                segment[i*NODES_PER_FACET + j] = segment[(nseg-1)*NODES_PER_FACET + j];
-            }
-            segflag[i] = segflag[nseg-1];
-            nseg --;
-        }
-    }
-
-    if (DEBUG) {
-        std::cout << "segment: ";
-        print(std::cout, segment, nseg*NODES_PER_FACET);
-        std::cout << '\n';
-        std::cout << "segflag: ";
-        print(std::cout, segflag, nseg);
-        std::cout << '\n';
-    }
-}
-
-
-void delete_points_and_merge_segments(const int_vec &points_to_delete, int &npoints,
-                                      int nseg, double *points, int *segment,
-                                      uint_vec &bcflag, double min_length)
-{
-#ifdef THREED
-    die(EXIT_INTERNAL_ASSERT, "delete_points_and_merge_segments() doesn't work in 3D!");
-#endif
-
-    int *endsegment = segment + nseg * NODES_PER_FACET;
-
-    int end = npoints - 1;
-
-    // delete points from the end
-    for (auto i=points_to_delete.rbegin(); i<points_to_delete.rend(); ++i) {
-        if (DEBUG) {
-            std::cout << " deleting point " << *i << " replaced by point " << end << '\n';
-        }
-
-        // if the deleted point is a segment point, merge the neighboring two segments
-        uint flag = bcflag[*i];
-        if (is_boundary(flag)) {
-            // segment and points:  aa------a = b-------bb
-
-            int *a = std::find(segment, endsegment, *i);
-            int *b = std::find(a+1, endsegment, *i);
-            if (b == endsegment) {
-                die(EXIT_MESH_QUALITY, "segment array is corrupted when merging segment!");
-            }
-
-            // a could be the either first or second node of the segment,
-            // which will affect the location of aa in the segment array.
-            bool not_first;
-            not_first = (a - segment) % NODES_PER_FACET;
-            int *aa = not_first? (a - 1) : (a + 1);
-            not_first = (b - segment) % NODES_PER_FACET;
-            int *bb = not_first? (b - 1) : (b + 1);
-
-            // if the length of the two segments are too long
-            // do not delete this point
-            double la2, lb2;
-            la2 = dist2(points + (*a)*NDIMS, points + (*aa)*NDIMS);
-            lb2 = dist2(points + (*b)*NDIMS, points + (*bb)*NDIMS);
-            if (la2 > min_length*min_length && lb2 > min_length*min_length) {
-                if (DEBUG) {
-                    std::cout << " the segments of point " << *i << " have length^2 "
-                              << la2 << ", " << lb2 << " -- skip deletion."<< '\n';
-                }
-                continue;
-            }
-
-            // merge the two segments
-            *a = *bb;
-            *bb = DELETED_FACET;
-            *b = DELETED_FACET;
-
-            if (DEBUG) {
-                std::cout << "a: " << (a-segment) << "  b: " << (b-segment)
-                          << " not_first? " << not_first << " bb: " << (bb-segment)
-                          << " = " << *bb << '\n';
-                std::cout << "segment after merging: ";
-                print(std::cout, segment, nseg*NODES_PER_FACET);
-                std::cout << '\n';
-            }
-        }
-
-        // when a point is deleted, replace it with the last point
-        flag = bcflag[end];
-        bcflag[*i] = flag;
-        for (int d=0; d<NDIMS; ++d) {
-            points[(*i)*NDIMS + d] = points[end*NDIMS + d];
-        }
-
-        // if the last point is also a segment point, the segment point index needs to be
-        // updated as well. Not gated on is_boundary(flag): a node of a kept internal segment
-        // (is_discarding_internal_segments = no) has bcflag 0.
-        std::replace(segment, endsegment, end, *i);
-        if (DEBUG) {
-            std::cout << "segment after replace: ";
-            print(std::cout, segment, nseg*NODES_PER_FACET);
-            std::cout << '\n';
-        }
-
-        end --;
-        npoints --;
-    }
-
-    /* PS: We don't check whether the merged segments belong to the same boundary or not,
-     *     e.g., one segment is on the top boundary while the other segment is on the left
-     *     boundary. The check is performed in delete_facets() instead.
-     */
-}
-
-
-#ifdef THREED
-// Lawson edge flips over one boundary's facets (node triples). An edge flips only if its two
-// diagonals cross in the projection plane, the flip raises the smaller 3D angle of its two facets,
-// and the surface stays within max_change of the input along the projection axis: the move is
-// measured where the diagonals cross and summed per facet, so flips cannot add up past it.
-// Outline edges (one facet) never flip. Each flip strictly raises an angle, so the loop ends. The
-// output is not oriented (TetGen orients the faces it meshes).
-static void flip_boundary_facets(int_vec &facets, const double *points, int major_direction,
-                                 double max_change)
-{
-    auto P = [&](int n, int d) { return points[n*NDIMS + d]; };
-    const int u = (major_direction + 1) % NDIMS, v = (major_direction + 2) % NDIMS;
-    auto orient = [&](int a, int b, int c) {   // twice the signed area in the projection plane
-        return (P(b,u) - P(a,u)) * (P(c,v) - P(a,v)) - (P(b,v) - P(a,v)) * (P(c,u) - P(a,u));
-    };
-    auto min_angle = [&](int a, int b, int c) {
-        const int n[3] = {a, b, c};
-        double m = 4.0;   // above pi
-        for (int k=0; k<3; ++k) {
-            double d1 = 0, d2 = 0, dot = 0;
-            for (int d=0; d<NDIMS; ++d) {
-                const double e1 = P(n[(k+1) % 3], d) - P(n[k], d), e2 = P(n[(k+2) % 3], d) - P(n[k], d);
-                d1 += e1*e1; d2 += e2*e2; dot += e1*e2;
-            }
-            m = std::min(m, std::acos(std::max(-1.0, std::min(1.0, dot / std::sqrt(d1*d2)))));
-        }
-        return m;
-    };
-    auto key = [](int a, int b) { return std::make_pair(std::min(a, b), std::max(a, b)); };
-    std::unordered_map<edge_t, std::array<int, 2>, hash1, equal_to1> efacets;   // edge -> its facets
-    const int nf = facets.size() / NODES_PER_FACET;
-    std::vector<double> moved(nf, 0.0);   // how far each facet's area has moved, along the axis
-    for (int f=0; f<nf; ++f)
-        for (int k=0; k<NODES_PER_FACET; ++k) {
-            auto it = efacets.emplace(key(facets[3*f + k], facets[3*f + (k+1) % 3]),
-                                      std::array<int, 2>{{f, -1}});
-            if (!it.second) it.first->second[1] = f;
-        }
-    std::vector<edge_t> stack;
-    for (const auto &e : efacets)
-        if (e.second[1] >= 0) stack.push_back(e.first);
-    auto third = [&](int f, int a, int b) {
-        for (int k=0; k<NODES_PER_FACET; ++k)
-            if (facets[3*f + k] != a && facets[3*f + k] != b) return facets[3*f + k];
-        return -1;
-    };
-    while (!stack.empty()) {
-        const edge_t e = stack.back();
-        stack.pop_back();
-        auto it = efacets.find(e);
-        if (it == efacets.end() || it->second[1] < 0) continue;   // flipped away, or outline
-        const int f = it->second[0], g = it->second[1], a = e.first, b = e.second;
-        const int c = third(f, a, b), d = third(g, a, b);
-        const double oa = orient(c, d, a), ob = orient(c, d, b), oc = orient(a, b, c), od = orient(a, b, d);
-        if (oa * ob >= 0 || oc * od >= 0) continue;     // the diagonals do not cross in projection
-        if (efacets.count(key(c, d))) continue;          // cd is an edge already (the projection folds)
-        if (!(std::min(min_angle(c, d, a), min_angle(c, d, b)) >
-              std::min(min_angle(a, b, c), min_angle(a, b, d)))) continue;
-        const double s = oa / (oa - ob), t = oc / (oc - od);   // the crossing on ab and on cd
-        const int M = major_direction;
-        const double gap = std::abs(P(a,M) + s*(P(b,M) - P(a,M)) - P(c,M) - t*(P(d,M) - P(c,M)));
-        const double moved_fg = std::max(moved[f], moved[g]) + gap;
-        if (moved_fg > max_change) continue;
-        moved[f] = moved[g] = moved_fg;
-        const int nf3[3] = {a, c, d}, ng3[3] = {b, d, c};
-        std::copy(nf3, nf3 + 3, &facets[3*f]);
-        std::copy(ng3, ng3 + 3, &facets[3*g]);
-        efacets.erase(it);
-        efacets[key(c, d)] = {{f, g}};
-        for (auto &x : efacets[key(b, c)]) if (x == f) x = g;   // (b,c) moved from f to g
-        for (auto &x : efacets[key(a, d)]) if (x == g) x = f;   // (a,d) moved from g to f
-        stack.push_back(key(a, c)); stack.push_back(key(b, c));
-        stack.push_back(key(a, d)); stack.push_back(key(b, d));
-    }
-}
-#endif
-
-
-// Delete points_to_delete and re-triangulate only the cavity of each boundary that loses a point:
-// the facets touching a deleted point, plus the facets they enclose (the fill has no holes). The
-// fill is a constrained triangulation of the cavity's remaining points in the boundary's
-// projection plane; every other facet and boundary is kept. A deleted point on the outline (a
-// ridge with the next boundary) drops out of it, so its two outline edges become one chord on both
-// boundaries and the surface stays closed. The fill is not bounded; flip_boundary_facets then
-// improves the boundary's facets, moving its surface by at most max_change in all.
-void delete_points_and_merge_facets(const int_vec &points_to_delete,
-                                    uint deleting_bdry,
-                                    const array_t &bnormals,
-                                    int &npoints,
-                                    int &nseg, double *points,
-                                    int *segment, int *segflag,
-                                    uint_vec &bcflag, double max_change)
-{
-#ifndef THREED
-    die(EXIT_INTERNAL_ASSERT, "delete_points_and_merge_facets() doesn't work in 2D!");
-#else
-    std::vector<char> deleting(npoints, 0);
-    for (int p : points_to_delete) deleting[p] = 1;
-
-    std::vector<char> replaced(nseg, 0);   // facet replaced by its boundary's cavity triangulation
-    int_vec new_facets, new_flags;         // NODES_PER_FACET nodes per new facet
-
-    for (int i=0; i<nbdrytypes; ++i) {
-        const int flag = 1 << i;
-        if (!(deleting_bdry & flag)) continue;
-
-        // this boundary's facets, and the facet owning each directed edge; across() below needs a
-        // boundary's facets consistently oriented, as TetGen outputs the facets of a mesh
-        int_vec bfacets;
-        std::unordered_map<edge_t, int, hash1, equal_to1> owner;
-        for (int f=0; f<nseg; ++f) {
-            if (segflag[f] != flag) continue;
-            bfacets.push_back(f);
-            const int *s = segment + f*NODES_PER_FACET;
-            for (int k=0; k<NODES_PER_FACET; ++k)
-                if (!owner.emplace(std::make_pair(s[k], s[(k+1) % NODES_PER_FACET]), f).second)
-                    die(EXIT_INTERNAL_ASSERT, "delete_points_and_merge_facets: two facets of a "
-                        "boundary share a directed edge (inconsistent facet orientation)");
-        }
-        auto across = [&](int a, int b) {   // the facet on the other side of edge a->b, or -1
-            auto it = owner.find(std::make_pair(b, a));
-            return it == owner.end() ? -1 : it->second;
-        };
-
-        // the cavity, then every non-cavity facet not linked through non-cavity facets to the
-        // boundary's outline (a hole) joins it
-        for (int f : bfacets) {
-            const int *s = segment + f*NODES_PER_FACET;
-            if (deleting[s[0]] || deleting[s[1]] || deleting[s[2]]) replaced[f] = 1;
-        }
-        std::vector<char> outside(nseg, 0);
-        int_vec stack;
-        for (int f : bfacets) {
-            if (replaced[f]) continue;
-            const int *s = segment + f*NODES_PER_FACET;
-            for (int k=0; k<NODES_PER_FACET; ++k)
-                if (across(s[k], s[(k+1) % NODES_PER_FACET]) < 0 && !outside[f]) {
-                    outside[f] = 1;
-                    stack.push_back(f);
-                }
-        }
-        while (!stack.empty()) {
-            const int f = stack.back();
-            stack.pop_back();
-            const int *s = segment + f*NODES_PER_FACET;
-            for (int k=0; k<NODES_PER_FACET; ++k) {
-                const int g = across(s[k], s[(k+1) % NODES_PER_FACET]);
-                if (g >= 0 && !replaced[g] && !outside[g]) {
-                    outside[g] = 1;
-                    stack.push_back(g);
-                }
-            }
-        }
-        for (int f : bfacets)
-            if (!outside[f]) replaced[f] = 1;
-
-        // outline successor of each point on the boundary's outline (edges with no facet across)
-        std::unordered_map<int, int> outline_next;
-        for (int f : bfacets) {
-            const int *s = segment + f*NODES_PER_FACET;
-            for (int k=0; k<NODES_PER_FACET; ++k) {
-                const int a = s[k], b = s[(k+1) % NODES_PER_FACET];
-                if (across(a, b) < 0 && !outline_next.emplace(a, b).second)
-                    die(EXIT_MESH_QUALITY, "delete_points_and_merge_facets: the boundary outline "
-                        "is not a simple polygon");
-            }
-        }
-
-        // the cavity's remaining points (local numbering) and its outline as segments, a deleted
-        // outline point bridged by the chord between its remaining outline neighbours
-        int_vec inv;                          // local -> global point
-        std::unordered_map<int, int> local;   // global -> local point
-        auto local_of = [&](int n) {
-            auto it = local.emplace(n, (int)inv.size());
-            if (it.second) inv.push_back(n);
-            return it.first->second;
-        };
-        int_vec surf_segment;
-        for (int f : bfacets) {
-            if (!replaced[f]) continue;
-            const int *s = segment + f*NODES_PER_FACET;
-            for (int k=0; k<NODES_PER_FACET; ++k) {
-                const int a = s[k];
-                int b = s[(k+1) % NODES_PER_FACET];
-                if (deleting[a]) continue;
-                local_of(a);
-                const int g = across(a, b);
-                if (g >= 0 && replaced[g]) continue;          // inside the cavity
-                while (deleting[b]) b = outline_next.at(b);   // only outline points can be deleted here
-                surf_segment.push_back(local_of(a));
-                surf_segment.push_back(local_of(b));
-            }
-        }
-        // a cavity left with fewer than 3 points is a facet whose bridged chord is one of its own
-        // edges: dropping the facet closes it
-        if (inv.size() < 3) continue;
-        const int nsurfseg = surf_segment.size() / 2;
-        int_vec surf_segflag(nsurfseg);   // all 0, its value does not matter
-
-        // 3d coordinate -> 2d, dropping the normal's largest component
-        int major_direction = i / 2;
-        if (i >= iboundn0) { // slant boundaries start at iboundn0
-            double max = 0;
-            for (int d=0; d<NDIMS; d++) {
-                if (std::abs(bnormals[i][d]) > max) {
-                    max = std::abs(bnormals[i][d]);
-                    major_direction = d;
-                }
-            }
-        }
-        double_vec coord2d(2 * inv.size());
-        for (std::size_t j=0; j<inv.size(); ++j)
-            for (int d=0, dd=0; d<NDIMS; d++)
-                if (d != major_direction) coord2d[2*j + dd++] = points[inv[j]*NDIMS + d];
-
-        // re-triangulate the cavity (connect only, not adding new points)
-        GeneratedMesh cavity;
-        {
-            int nn, ne, ns;
-            double *c = nullptr, *attr = nullptr;
-            int *conn = nullptr, *seg = nullptr, *segflag = nullptr;
-            Mesh mesh;
-            mesh.min_angle = 0;
-            mesh.meshing_verbosity = 0;
-            points_to_new_surface(mesh, inv.size(), coord2d.data(),
-                                  nsurfseg, surf_segment.data(), surf_segflag.data(),
-                                  0, NULL,
-                                  0, 3,
-                                  nn, ne, ns, c, conn, seg, segflag, attr);
-            cavity.adopt(nn, ne, ns, c, conn, seg, segflag, attr);
-        }
-        const int new_nnode = cavity.nnode, new_nelem = cavity.nelem, new_nseg = cavity.nseg;
-        const int *pconnectivity = cavity.connectivity.get();
-        if (static_cast<std::size_t>(new_nnode) != inv.size())
-            die(EXIT_MESH_QUALITY, "delete_points_and_merge_facets: the cavity triangulation "
-                "added or dropped points");
-        if (new_nseg != nsurfseg)
-            die(EXIT_MESH_QUALITY, "delete_points_and_merge_facets: the cavity triangulation "
-                "split a segment");
-        // the bridged outline must keep the replaced facets' orientation and enclose the fill
-        // exactly: a chord passing beyond a remaining point inverts part of it, and the fill then
-        // overlaps the kept facets (areas doubled, in coord2d's plane)
-        {
-            int d0 = -1, d1 = -1;
-            for (int d=0; d<NDIMS; d++)
-                if (d != major_direction) (d0 < 0 ? d0 : d1) = d;
-            double old_area = 0, outline_area = 0, fill_area = 0;
-            for (int f : bfacets) {
-                if (!replaced[f]) continue;
-                const int *n = segment + f*NODES_PER_FACET;
-                auto X = [&](int k, int d) { return points[n[k]*NDIMS + d]; };
-                old_area += (X(1,d0) - X(0,d0)) * (X(2,d1) - X(0,d1)) - (X(1,d1) - X(0,d1)) * (X(2,d0) - X(0,d0));
-            }
-            for (int j=0; j<nsurfseg; ++j) {
-                const double *p = &coord2d[2*surf_segment[2*j]], *q = &coord2d[2*surf_segment[2*j + 1]];
-                outline_area += p[0]*q[1] - p[1]*q[0];
-            }
-            for (int j=0; j<new_nelem; ++j) {
-                const double *p = &coord2d[2*pconnectivity[3*j]], *q = &coord2d[2*pconnectivity[3*j + 1]],
-                             *r = &coord2d[2*pconnectivity[3*j + 2]];
-                fill_area += std::abs((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
-            }
-            // 1e-9: far above the round-off of these sums (~1e-13 relative), far below one facet
-            if (outline_area * old_area <= 0 || std::abs(std::abs(outline_area) - fill_area) > 1e-9 * fill_area)
-                die(EXIT_MESH_QUALITY, "delete_points_and_merge_facets: the cavity fill overlaps the "
-                    "boundary (a deleted outline point's chord passes beyond a remaining point)");
-        }
-        // the boundary's facets after the fill, re-emitted with the new ones after bounded flips
-        int_vec bnew;
-        for (int f : bfacets) {
-            if (replaced[f]) continue;
-            bnew.insert(bnew.end(), segment + f*NODES_PER_FACET, segment + (f+1)*NODES_PER_FACET);
-            replaced[f] = 1;
-        }
-        for (int j=0; j<new_nelem*NODES_PER_FACET; ++j)
-            bnew.push_back(inv[pconnectivity[j]]);
-        flip_boundary_facets(bnew, points, major_direction, max_change);
-        new_facets.insert(new_facets.end(), bnew.begin(), bnew.end());
-        new_flags.insert(new_flags.end(), bnew.size() / NODES_PER_FACET, flag);
-    }
-
-    // kept facets first, then the cavities' new ones; the rest marked deleted. Internal facets
-    // (no boundary bit) are dropped: the deletion below renumbers only boundary points.
-    int_vec kept_facets, kept_flags;
-    for (int f=0; f<nseg; ++f) {
-        if (replaced[f] || !(segflag[f] & BOUND_ANY)) continue;
-        kept_facets.insert(kept_facets.end(), segment + f*NODES_PER_FACET, segment + (f+1)*NODES_PER_FACET);
-        kept_flags.push_back(segflag[f]);
-    }
-    kept_facets.insert(kept_facets.end(), new_facets.begin(), new_facets.end());
-    kept_flags.insert(kept_flags.end(), new_flags.begin(), new_flags.end());
-    const int nseg2 = kept_flags.size();
-    if (nseg2 > nseg)
-        die(EXIT_INTERNAL_ASSERT, "delete_points_and_merge_facets: more facets than before");
-    for (int n : kept_facets)
-        if (deleting[n])
-            die(EXIT_INTERNAL_ASSERT, "delete_points_and_merge_facets: a facet keeps a deleted point");
-    std::copy(kept_facets.begin(), kept_facets.end(), segment);
-    std::copy(kept_flags.begin(), kept_flags.end(), segflag);
-    for (int i=nseg2; i<nseg; ++i) {
-        for (int j=0; j<NODES_PER_FACET; ++j)
-            segment[i*NODES_PER_FACET + j] = DELETED_FACET;
-        segflag[i] = 0;
-    }
-    nseg = nseg2;
-
-    // delete points from the end
-    int *endsegment = segment + nseg * NODES_PER_FACET;  // last segment
-    int end = npoints - 1;  // last point
-    for (auto i=points_to_delete.rbegin(); i<points_to_delete.rend(); ++i) {
-        if (DEBUG) {
-            std::cout << " deleting point " << *i << " replaced by point " << end << '\n';
-        }
-
-        // when a point is deleted, replace it with the last point
-        uint flag = bcflag[end];
-        bcflag[*i] = flag;
-        for (int d=0; d<NDIMS; ++d) {
-            points[(*i)*NDIMS + d] = points[end*NDIMS + d];
-        }
-
-        // if the last point is also a segment point, the segment point index
-        // needs to be updated as well
-        if (is_boundary(flag)) {
-            std::replace(segment, endsegment, end, *i);
-            if (DEBUG > 1) {
-                std::cout << *i << " <- " << end << "\n";
-                std::cout << "segment after replace: ";
-                print(std::cout, segment, nseg*NODES_PER_FACET);
-                std::cout << '\n';
-            }
-        }
-
-        end --;
-        npoints --;
-    }
-
-#endif
-}
-
-
-// Delete the points in points_to_delete, merging the neighbouring boundary
-// segments (2D) / facets (3D) for the points that lie on a boundary so the
-// boundary stays closed; in 2D a boundary point whose two segments are both longer
-// than min_size is kept, in 3D the facet flips move the surface by at most min_size in all.
-// Non-boundary points are simply removed. This is the
-// deletion path for remeshing_option 1 and 10-12 (boundaries may be modified); it
-// fully handles the removal, so the caller must NOT also call delete_points().
-void delete_points_and_merge_boundary(int_vec &points_to_delete,
-                               const array_t &bnormals,
-                               int &npoints,
-                               int &nseg, double *points,
-                               int *segment, int *segflag,
-                               uint_vec &bcflag, double min_size)
-{
-    if (DEBUG > 1) {
-        std::cout << "old points to delete: ";
-        print(std::cout, points_to_delete);
-        std::cout << '\n';
-        std::cout << "segment before delete: ";
-        print(std::cout, segment, nseg*NODES_PER_FACET);
-        std::cout << '\n';
-    }
-
-#ifdef THREED
-    // the boundaries that lose a point
-    uint deleting_bdry = 0;
-    for (int p : points_to_delete) deleting_bdry |= bcflag[p] & BOUND_ANY;
-
-    // non-boundary points changed,
-    if (! deleting_bdry) {
-        delete_points(points_to_delete, npoints, nseg,
-                      points, segment);
-        delete_facets(nseg, segment, segflag);
-        return;
-    }
-
-    delete_points_and_merge_facets(points_to_delete, deleting_bdry, bnormals, npoints, nseg,
-                                   points, segment, segflag, bcflag, min_size);
-    delete_facets(nseg, segment, segflag);
-#else
-    delete_points_and_merge_segments(points_to_delete, npoints, nseg,
-                                     points, segment, bcflag, min_size);
-    delete_facets(nseg, segment, segflag);
-#endif
-
-    if (DEBUG > 1) {
-        std::cout << "segment after  delete: ";
-        print(std::cout, segment, nseg*NODES_PER_FACET);
-        std::cout << '\n';
-    }
-}
-
-
-void refine_surface_elem(const Param &param, const Variables &var,
-                         const array_t &old_coord, const conn_t &old_connectivity,
-                         const double_vec &old_volume, int &old_nnode, double *qcoord)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    const double surface_vol = param.mesh.sediment_size * sizefactor * std::pow(param.mesh.resolution, NDIMS);
-
-    std::cout << "    Checking surface element volume.\n";
-
-//    #pragma omp parallel for default(none) shared(param, var, old_coord, old_connectivity, old_volume, old_nnode, qcoord)
-
-    for (size_t i=0; i<(*var.surfinfo.top_facet_elems).size(); i++) {
-        int e = (*var.surfinfo.top_facet_elems)[i];
-
-        int_vec &a = (*var.elemmarkers)[e];
-        if (a[param.mat.mattype_sediment] == 0) continue;
-//        int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-//        if (mat != param.mat.mattype_sediment) continue;
-
-        if (old_volume[e] < surface_vol) continue;
-
-        ConstConnAccessor conn = old_connectivity[e];
-        int_vec n(NDIMS);
-
-//        if (DEBUG)
-            std::printf("      Surface node added (%4d %.1e %.1e)\n",e, old_volume[e], surface_vol);
-        // get the nodes of the element on surface
-        for (int j=0; j<NDIMS; j++)
-            n[j] = (*var.connectivity_surface)[e][j];
-
-        int nsub_node = -1;
-        for (int j=0;j<NODES_PER_ELEM; j++)
-            if (std::find(n.begin(),n.end(),conn[j]) == n.end()) {
-                nsub_node = conn[j];
-                break;
-            }
-
-        if (nsub_node >= 0) {
-            // for nodes on surface
-            for (int j=0; j<NDIMS; j++) {
-                double mcoord[NDIMS]    ;
-
-                for (int d=0;d<NDIMS; d++) {
-                    mcoord[d] = old_coord[ n[j] ][d];
-                    mcoord[d] += old_coord[nsub_node][d];
-                    mcoord[d] /= 2.;
-                }
-
-//                #pragma omp critical(refine_surface_elem)
-                {
-                    for (int d=0;d<NDIMS; d++)
-                        qcoord[old_nnode*NDIMS + d] = mcoord[d];
-                    old_nnode++;
-                }
-            }
-        }
-    }
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-}
-
 // Drift state of the restored side walls (remeshing_option 13), measured on the OLD mesh. A side
 // RECEIVES material when its wall moved inward off its plane since the last remesh, and drifted
 // OUTWARD when it moved out (flatten_* snaps it back, which narrows the column beside it).
@@ -1134,341 +284,6 @@ SideInflowState side_inflow_state(const Param &param, double time_in_yr, int nno
     return s;
 }
 
-// Node-spacing floor of the Triangle/TetGen path (new_mesh): drop INTERIOR nodes within hmin of a
-// retained node, so re-triangulating the advected points rarely forms a tiny element (spacing
-// bounds edges, not measure: new_mesh's smallest_vol retry catches the rest). Boundary nodes stay
-// (flatten_* owns their spacing), and so do kept internal segments' nodes (deleting one misroutes
-// its segment). Uniform grid of cell hmin: O(nnode).
-// Do not exempt shear-band nodes: that lowered the peak plastic strain and added tiny-element
-// remeshes.
-void decimate_below_hmin(const Param &param, const array_t &coord, int nnode,
-                         const uint_vec &bcflag, int nseg, const int *segment,
-                         int_vec &points_to_delete)
-{
-    const double hmin = refine_floors(param.mesh).hmin;
-    if (hmin <= 0.0 || nnode <= 0) return;
-    const double inv_h = 1.0/hmin, h2 = hmin*hmin;
-    const long long OFF = 1LL<<20, BITS = 21;   // cell index range ~[-1M, 1M) -> fits domains up to ~1M*hmin
-
-    auto cell = [&](int i, long long c[NDIMS]) {
-        for (int d=0; d<NDIMS; ++d) c[d] = (long long)std::floor(coord[i][d]*inv_h);
-    };
-    auto pack = [&](const long long c[NDIMS]) -> long long {
-        long long k = c[0] + OFF;
-        for (int d=1; d<NDIMS; ++d) k = (k<<BITS) | (c[d] + OFF);
-        return k;
-    };
-    std::unordered_map<long long, int_vec> grid;   // cell -> retained node ids
-
-    auto probe = [&](const long long nb[NDIMS], int i) -> bool {
-        auto it = grid.find(pack(nb));
-        if (it == grid.end()) return false;
-        for (int j : it->second) {
-            double d2 = 0;
-            for (int d=0; d<NDIMS; ++d) { double dd = coord[i][d]-coord[j][d]; d2 += dd*dd; }
-            if (d2 < h2) return true;
-        }
-        return false;
-    };
-    auto near_retained = [&](int i) -> bool {
-        long long c[NDIMS]; cell(i, c);
-        long long nb[NDIMS];
-#ifdef THREED
-        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
-          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
-            for (int e=-1;e<=1;++e){ nb[2]=c[2]+e;
-              if (probe(nb, i)) return true;
-            }}}
-#else
-        for (int a=-1;a<=1;++a){ nb[0]=c[0]+a;
-          for (int b=-1;b<=1;++b){ nb[1]=c[1]+b;
-            if (probe(nb, i)) return true;
-          }}
-#endif
-        return false;
-    };
-    auto retain = [&](int i) { long long c[NDIMS]; cell(i, c); grid[pack(c)].push_back(i); };
-    // Pass 1: retain all boundary and segment nodes (never decimated) so interior nodes crowding
-    // them are removed. With discarded internal segments every segment node is a boundary node.
-    std::vector<char> kept(nnode, 0);
-    for (int i=0; i<nnode; ++i) kept[i] = is_boundary(bcflag[i]);
-    for (int k=0; k<nseg*NODES_PER_FACET; ++k)
-        if (segment[k] != DELETED_FACET) kept[segment[k]] = 1;   // new_bottom (option 2) deletes
-    for (int i=0; i<nnode; ++i) if (kept[i]) retain(i);
-    // Pass 2: greedily thin the other nodes to >= hmin spacing.
-    for (int i=0; i<nnode; ++i) {
-        if (kept[i]) continue;
-        if (near_retained(i)) points_to_delete.push_back(i);
-        else retain(i);
-    }
-}
-
-
-// Flag in affected_old_node (RemeshScratch) every original node in points_to_delete or moved
-// before meshing (qcoord != original_coord). Call before qcoord is renumbered.
-void record_affected_old_nodes(std::vector<char> &affected_old_node, const array_t &original_coord,
-                               const double *qcoord, int old_nnode, const int_vec &points_to_delete)
-{
-    if ((int)affected_old_node.size() != old_nnode)
-        die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: record not sized to the old mesh");
-    for (int n : points_to_delete) {
-        if (n < 0 || n >= old_nnode)
-            die(EXIT_INTERNAL_ASSERT, "record_affected_old_nodes: deleted node is not an old node");
-        affected_old_node[n] = 1;
-    }
-    for (int n = 0; n < old_nnode; ++n)
-        for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
-                affected_old_node[n] = 1;
-                break;
-            }
-}
-
-
-void new_mesh(const Param &param, Variables &var, int bad_quality,
-              const array_t &original_coord, const conn_t &original_connectivity,
-              const segment_t &original_segment, const segflag_t &original_segflag,
-              std::vector<char> &affected_old_node)
-{
-#ifdef NPROF_DETAIL
-    nvtxRangePush(__FUNCTION__);
-#endif
-    // create a copy of original mesh
-    array_t old_coord(original_coord);
-    conn_t old_connectivity(original_connectivity);
-    segment_t old_segment(original_segment);
-    segflag_t old_segflag(original_segflag);
-
-    double_vec qcoord_vec;
-    int_vec qconn_vec, qsegment_vec, qsegflag_vec;
-
-    old_coord.pack_to(qcoord_vec);
-    old_connectivity.pack_to(qconn_vec);
-    old_segment.pack_to(qsegment_vec);
-    old_segflag.pack_to(qsegflag_vec);
-
-    // raw pointers to old mesh
-    double *qcoord = qcoord_vec.data();
-    int *qconn = qconn_vec.data();
-    int *qsegment = qsegment_vec.data();
-    int *qsegflag = qsegflag_vec.data();
-
-    // size of old mesh
-    int old_nnode = old_coord.size();
-    int old_nelem = old_connectivity.size();
-    int old_nseg = old_segment.size();
-
-    // copying useful arrays of old mesh
-    double_vec old_volume(*var.volume);
-    uint_vec old_bcflag(*var.bcflag);
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
-    switch (param.mesh.remeshing_option) {
-    case 0:
-    case 1:
-    case 2:
-        // DO NOT change the boundary
-        excl_func = &is_boundary;
-        break;
-    case 10:
-    case 11:
-    case 12:
-        // DO NOT change the corners
-        excl_func = &is_corner;
-        break;
-    case 13:
-        // new_mesh is the non-MMG remesher, and validate_parameters rejects option 13 without MMG.
-        die(EXIT_INTERNAL_UNREACHABLE, "new_mesh: remeshing_option 13 requires MMG remeshing");
-    default:
-        std::cerr << "Error: unknown remeshing_option: " << param.mesh.remeshing_option << '\n';
-        die(EXIT_CONFIG_VALUE);
-    }
-
-    /* choosing which way to remesh the boundary */
-    int_vec points_to_delete;
-    const RefineFloors floors = refine_floors(param.mesh);
-    const double min_dist = floors.min_dist;
-    switch (param.mesh.remeshing_option) {
-    case 0:
-    case 10:
-        // Nothing
-        break;
-    case 1:
-    case 11:
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, floors);
-        break;
-    case 2:
-        new_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                   points_to_delete, min_dist, qsegment, qsegflag, old_nseg);
-        break;
-    case 12:
-        flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
-        break;
-    }
-
-    array_t array_t_qcoord(qcoord, old_nnode);
-
-    if (bad_quality == 3) { // there is a tiny element
-        // Marking (non-boundary) points of small elements, which will be deleted later
-        int_vec tiny_elems;
-        find_tiny_element(param, old_volume, tiny_elems);
-
-        if (tiny_elems.size() > 0) {
-            find_points_of_tiny_elem(old_coord, old_connectivity, old_volume,
-                                     tiny_elems, old_nnode, array_t_qcoord, old_bcflag, points_to_delete,
-                                     excl_func);
-        }
-    }
-
-    decimate_below_hmin(param, array_t_qcoord, old_nnode, old_bcflag, old_nseg, qsegment,
-                        points_to_delete);
-
-    // sort points_to_delete and remove duplicates
-    {
-        std::sort(points_to_delete.begin(), points_to_delete.end());
-        auto last = std::unique(points_to_delete.begin(), points_to_delete.end());
-        points_to_delete.resize(last - points_to_delete.begin());
-    }
-
-    record_affected_old_nodes(affected_old_node, original_coord, qcoord, old_nnode, points_to_delete);
-
-    // delete points
-    switch (param.mesh.remeshing_option) {
-    case 0:
-    case 2:
-        // deleting points that are in no segment (see delete_points)
-        delete_points(points_to_delete, old_nnode, old_nseg,
-                      qcoord, qsegment);
-        delete_facets(old_nseg, qsegment, qsegflag);
-        break;
-    case 1:
-    case 10:
-    case 11:
-    case 12:
-        // deleting points, some of them might be on the boundary (option 1: the side-wall nodes
-        // flatten_bottom marks).
-        // delete_points_and_merge_boundary() already removes the points in
-        // points_to_delete (merging segments for the boundary ones) and reduces
-        // old_nnode accordingly. Calling delete_points() again on the same list
-        // would be a *second* deletion pass over an already-compacted array with
-        // now-stale indices: its swap-delete + std::replace(segment, end, *i)
-        // rewrites the boundary segments of the highest-index nodes (typically the
-        // most recently added surface/corner nodes), which detaches the top surface
-        // from the side wall and collapses the corner into a spurious cliff. Do NOT
-        // call delete_points() here.
-        delete_points_and_merge_boundary(points_to_delete, *var.bnormals,
-                                  old_nnode, old_nseg,
-                                  qcoord, qsegment, qsegflag, old_bcflag, min_dist);
-        break;
-    }
-
-    // refine surface element where volume is too large
-#ifdef THREED
-    // todo
-#else
-    // qcoord with room for the nodes refine_surface_elem adds
-    double_vec qcoord_sediment;
-    if (param.mesh.meshing_sediment) {
-        qcoord_sediment.resize((old_nnode + var.surfinfo.top_nodes->size() * 2) * NDIMS);
-        std::copy(qcoord, qcoord + old_nnode * NDIMS, qcoord_sediment.begin());
-        qcoord = qcoord_sediment.data();
-        refine_surface_elem(param, var, old_coord, old_connectivity, old_volume, old_nnode, qcoord);
-    }
-#endif
-    int new_nnode, new_nelem, new_nseg;
-    GeneratedMesh gen;   // the last attempt's mesh; each new attempt frees the one before
-
-    int nloops = 0;
-    Mesh mesh = param.mesh;  // temporary copy
-    mesh.poly_filename = ""; // not used, but still need to be init'd
-    while (1) {
-
-        if (bad_quality == 3) {
-            // lessen the quality constraint so that less new points got inserted to the mesh
-            // and less chance of having tiny elements
-            mesh.min_angle *= 0.9;
-            mesh.max_ratio *= 1.1;
-            mesh.min_tet_angle *= 0.9;
-        }
-#ifdef THREED
-        if (nloops != 0 && bad_quality == 1) {
-            // enable tetgen optimization for mesh with higher quality
-            // tetgen might consume too much memory and crash!
-            mesh.tetgen_optlevel = 3;
-        }
-#endif
-        //
-        // new mesh
-        //
-
-        // We don't want to refine large elements during remeshing,
-        // so using negative size as the max area
-        const double max_elem_size = -1;
-        const int vertex_per_polygon = 3;
-        {
-            double *c = nullptr, *attr = nullptr;
-            int *conn = nullptr, *seg = nullptr, *segflag = nullptr;
-            points_to_new_mesh(mesh, old_nnode, qcoord,
-                               old_nseg, qsegment, qsegflag,
-                               0, nullptr,
-                               max_elem_size, vertex_per_polygon,
-                               new_nnode, new_nelem, new_nseg,
-                               c, conn, seg, segflag, attr);
-            gen.adopt(new_nnode, new_nelem, new_nseg, c, conn, seg, segflag, attr);
-        }
-
-        array_t new_coord(gen.coord.get(), new_nnode);
-        conn_t new_connectivity(gen.connectivity.get(), new_nelem);
-
-        // deleting (non-boundary) nodes to avoid having tiny elements
-        double_vec new_volume(new_nelem);
-        compute_volume(new_coord, new_connectivity, new_volume);
-
-        #pragma acc wait
-
-        const double smallest_vol = floors.smallest_vol;
-        bad_quality = 0;
-        for (int e=0; e<new_nelem; e++) {
-            if (new_volume[e] < smallest_vol) {
-                bad_quality = 3;
-                break;
-            }
-        }
-        int worst_elem;
-        double q = worst_elem_quality(new_coord, new_connectivity,
-                                      new_volume, worst_elem);
-#ifdef THREED
-        // normalizing q so that its magnitude is about the same in 2D and 3D
-        q = std::pow(q, 1.0/3);
-#endif
-        if (q < param.mesh.min_quality) {
-            bad_quality = 1;
-        }
-
-        // new_coord.nullify();
-        // new_connectivity.nullify();
-        if (! bad_quality) break;
-
-        nloops ++;
-        if (nloops > 5) {
-            std::cout << "Warning: exceeding loop limit in remeshing. Proceeding with risks.\n";
-            break;
-        }
-    }
-
-    var.nnode = new_nnode;
-    var.nelem = new_nelem;
-    var.nseg = new_nseg;
-    var.coord->load_from_buffer(gen.coord.get(), new_nnode);
-    var.connectivity->load_from_buffer(gen.connectivity.get(), new_nelem);
-    var.segment->load_from_buffer(gen.segment.get(), var.nseg);
-    var.segflag->load_from_buffer(gen.segflag.get(), var.nseg);
-#ifdef NPROF_DETAIL
-    nvtxRangePop();
-#endif
-
-}
-
 
 // use linear interpolation to calculate uniformly distributed 2D curve points
 void interpolate_curve(const Param &param,const array_t &input_points, 
@@ -1491,9 +306,6 @@ void interpolate_curve(const Param &param,const array_t &input_points,
         switch (param.mesh.remeshing_option)
         {
         case 1:
-            min_val = -param.mesh.zlength;
-            break;
-        case 11:
             min_val = -param.mesh.zlength;
             break;
         default:
@@ -1542,7 +354,6 @@ void interpolate_uniform_curve(const Param &param,const array_t &input_points,
     switch (param.mesh.remeshing_option)
     {
     case 1:
-    case 11:
         if (primary_index == (NDIMS - 1))
             min_val = -param.mesh.zlength;
         break;
@@ -1756,9 +567,6 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
         case 1:
             inx_bot[i][1] = -param.mesh.zlength;
             break;
-        case 11:
-            inx_bot[i][1] = -param.mesh.zlength;
-            break;
         default:
             inx_bot[i][1] = p[1];
         }
@@ -1918,7 +726,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                     switch (param.mesh.remeshing_option)
                     {
                     case 1:
-                    case 11:
                         if (idx[2] == 0 && n2 != 2)
                             for (int kk=0; kk<nxyz[n2]; ++kk)
                                 in[kk][2] = -param.mesh.zlength;
@@ -2011,7 +818,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
                         switch (param.mesh.remeshing_option)
                         {
                         case 1:
-                        case 11:
                             if (n2==2 && kk==0) {
                                 (*var.coord)[ind][2] = -param.mesh.zlength;
                                 continue;
@@ -2207,7 +1013,6 @@ void new_uniformed_regular_mesh(const Param &param, Variables &var,
         inx[i][0] = p[0];
         switch (param.mesh.remeshing_option) {
         case 1:
-        case 11:
         case 13:
             inx[i][1] = -param.mesh.zlength;
             break;
@@ -2310,8 +1115,7 @@ double packed_elem_quality(const double *coord, const int *elem)
 }
 
 
-// Shared by check_mesh_tangle() and, with MMG, by the bottom-fold repair in optimize_mesh_2d():
-// outside the MMG block, so a build without MMG has them too.
+// Shared by check_mesh_tangle() and the bottom-fold repair in optimize_mesh_2d().
 namespace {
 
 // The tolerance of the fold test: an element's signed measure counts only beyond
@@ -2342,7 +1146,6 @@ int first_folded_element(int nelem, const Measure &measure)
 
 } // anonymous namespace
 
-#ifdef USEMMG
 // A node's plastic-strain size target: init_elem_size_n * (patch-volume-weighted mean of
 // 1/(1 + coeff*plstrain))^(1/NDIMS), before the top-element inflation, the floor and the wall cap.
 // compute_metric_field's aggregation and refine_initial_weak_zone (mesh.cxx, on the raw initial
@@ -2523,10 +1326,8 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //  FREEZE / REQUIRED POLICY
 // ============================================================================
 // Every entity MMG rebuilds is re-interpolated, which diffuses the fields, above all the
-// localized plastic strain. Triangle re-triangulates the existing points, so it keeps them
-// implicitly (its only policy is RefineFloors). MMG rebuilds everything not forbidden, so this
-// policy forbids it explicitly: MMG never moves or deletes a required VERTEX and never touches a
-// required ELEMENT.
+// localized plastic strain. MMG rebuilds everything not forbidden, so this policy forbids it
+// explicitly: MMG never moves or deletes a required VERTEX and never touches a required ELEMENT.
 //
 // Grades:
 //   node : MOVABLE, or PINNED (MMG-required; its nodal fields are carried verbatim).
@@ -2700,17 +1501,14 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
 
 // R3 BOUNDARY. Pinned: quiet LID nodes (top nodes on no boundary but a restored wall), the pure
 // wall nodes of restored sides (clamp_side_bits) and the bottom nodes (R4 frees some of them in an
-// outward side's band). Movable: every other boundary node, i.e. active lid nodes and the
-// off-bottom nodes of an unrestored side wall (its top nodes included) or of a slant boundary.
-// ACTIVE (2D only): the last surface-process dh, as a rate over one remesh interval, moves the node
-// more than 1% of resolution. Only surface_process_option 1 and 102 fill dh, so the whole lid is
-// pinned in 3D, with surface_process_option 0, 11 or 101, on a repeat remesh within one step
-// (tau = 0: no time to extrapolate over) and on a PT-loop remesh in the step after an end-of-step
-// remesh (dh still zero). The pinned lid is validated only in 2D with remeshing_option 11.
+// outward side's band). Movable: every other boundary node. A lid node is ACTIVE (2D only) when the
+// last surface-process dh, as a rate over one remesh interval, moves it more than 1% of resolution.
+// The pinned lid is validated only in 2D with remeshing_option 1.
 void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
                          uint clamp_side_bits, FreezeMask &m)
 {
-    // activity = |dh|/dt * tau (dh: see SURFACE-MOTION ANTICIPATION)
+    // activity = |dh|/dt * tau (dh: see SURFACE-MOTION ANTICIPATION); zero, so the lid stays pinned,
+    // without dh (surface_process_option not 1 or 102), at tau = 0 and while dh = 0 after a remesh.
     std::vector<char> top_active(nnode, 0);
 #ifndef THREED
     const double tau = var.time - var.last_remesh_time;
@@ -2739,7 +1537,7 @@ void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
         if ((f & clamp_side_bits) && !(f & ~clamp_side_bits)) continue;
 
         // Bottom nodes (corners included) stay pinned: the boundary outline already places the
-        // row (options 1, 11 and 13 snap it, 12 slides its x0 end).
+        // row (options 1 and 13 snap it, 12 slides its x0 end).
         if (f & BOUNDZ0) continue;
         free_node(m, n, 3);                 // active lid, unrestored-wall and slant nodes: movable
     }
@@ -2972,7 +1770,6 @@ void rule_size_recovery(const Param &param, const Variables &var,
 {
     const double ratio = param.mesh.mmg_remesh_size_recovery_ratio;
     if (ratio <= 0.0) return;                                    // disabled
-    if ((int)var.init_elem_size_n->size() != nnode) return;      // defensive: init() always fills it
 
     // Band of a side that does not receive: carried verbatim (static wall) or re-sized by R4
     // alone (outward drift).
@@ -3214,19 +2011,29 @@ void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
 //  R6 input: what did flatten_* break?
 // ----------------------------------------------------------------------------
 // Elements flatten_* broke: a boundary node was snapped onto its restored plane (qcoord !=
-// original_coord) and the post-flatten quality fell below min_quality. Also records the moved
-// and deleted old nodes (record_affected_old_nodes). OLD element ids.
+// original_coord) and the post-flatten quality fell below min_quality. Also flags the moved and
+// the deleted old nodes in affected_old_node. OLD ids throughout: qcoord and qconn are the
+// flattened old mesh, not the collapse path's c_* arrays, and points_to_delete lists old nodes.
 std::vector<char> detect_flatten_broken(const Param &param, std::vector<char> &affected_old_node,
                                         const array_t &original_coord,
                                         const double *qcoord, const int *qconn,
                                         int old_nnode, int old_nelem,
                                         const int_vec &points_to_delete)
 {
+    if ((int)affected_old_node.size() != old_nnode)
+        die(EXIT_INTERNAL_ASSERT, "detect_flatten_broken: affected_old_node not sized to the old mesh");
     std::vector<char> displaced(old_nnode, 0);
     for (int n = 0; n < old_nnode; ++n)
         for (int d = 0; d < NDIMS; ++d)
-            if (qcoord[n*NDIMS + d] != original_coord[n][d]) { displaced[n] = 1; break; }
-    record_affected_old_nodes(affected_old_node, original_coord, qcoord, old_nnode, points_to_delete);
+            if (qcoord[n*NDIMS + d] != original_coord[n][d]) {
+                displaced[n] = affected_old_node[n] = 1;
+                break;
+            }
+    for (int n : points_to_delete) {
+        if (n < 0 || n >= old_nnode)
+            die(EXIT_INTERNAL_ASSERT, "detect_flatten_broken: deleted node is not an old node");
+        affected_old_node[n] = 1;
+    }
     std::vector<char> flatten_broken(old_nelem, 0);
     for (int e = 0; e < old_nelem; ++e) {
         const int *el = qconn + e*NODES_PER_ELEM;
@@ -3756,16 +2563,11 @@ static void rebuild_collapsed_segments(int nseg, const int *segment, const int *
                   << n_exposed << " exposed face(s).\n";
 }
 
-// MMG-native removal of material that moved OUTSIDE a restored boundary, instead of a whole-domain
-// Triangle/TetGen remesh. flatten_* snapped the boundary nodes back onto their planes and marked
-// the nodes past, or within min_dist of, a restored plane (`pts`, the outside nodes); those past it
-// would invert their elements. The peel and stalemate passes below merge an outside node s by edge
-// collapse only onto a boundary node m of a plane in its `crossed` mask (BOUND* bits: m qualifies
-// iff bcflag[m] & crossed[s]; a corner matches on either bit), never onto a top-surface-only node.
-// Builds fresh 0-indexed outputs (inputs untouched); survivor node order is kept, so the metric
-// maps by renumbering; the segments follow the survivors. On a FOLD (see collapse_outside_nodes)
-// `fold` returns the surviving nodes (old ids, NODES_PER_ELEM each) of every dropped flat/inverted
-// element with an exposed fold face, and the outputs are incomplete.
+// Remove material that moved OUTSIDE a restored boundary: each node s in `pts` (past, or within
+// min_dist of, a plane that flatten_* restored) merges by edge collapse only onto a boundary node m
+// with bcflag[m] & crossed[s], never onto a top-surface-only node. Builds fresh 0-indexed outputs,
+// survivors in order (the metric maps by renumbering). On a FOLD (see collapse_outside_nodes) `fold`
+// returns the old ids of each dropped folded element's surviving nodes; the outputs are incomplete.
 static void collapse_outside_pass(const int_vec &pts, const std::vector<uint> &crossed,
                                   int nnode, int nelem, int nseg,
                                   const double *coord, const uint_vec &bcflag,
@@ -4079,7 +2881,7 @@ void collapse_outside_nodes(int_vec &pts, int nnode, int nelem, int nseg,
 }
 
 // Collapse every boundary segment shorter than min_len BEFORE MMG by merging its removable endpoint
-// onto its segment partner, as delete_points_and_merge_boundary does on the Triangle/TetGen path.
+// onto its segment partner.
 // Why: strong convergence piles the free surface into a short near-vertical "cliff"; MMG pins both
 // ends as corners (a turn above its default 45-degree ridge angle) and never collapses it, so the
 // sliver re-fires the tiny-element trigger forever.
@@ -4291,14 +3093,8 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
               const segment_t &original_segment, const segflag_t &original_segflag,
               std::vector<char> &affected_old_node)
 {
-    // We don't want to refine large elements during remeshing,
-    // so using negative size as the max area
-    const double max_elem_size = -1;
-    const int vertex_per_polygon = 3;
     const RefineFloors floors = refine_floors(param.mesh);
     const double min_dist = floors.min_dist;
-    Mesh mesh_param = param.mesh;
-    mesh_param.poly_filename = "";
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
@@ -4332,29 +3128,17 @@ void optimize_mesh(const Param &param, Variables &var, int bad_quality,
 
     int_vec points_to_delete;
     double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
     switch (param.mesh.remeshing_option) {
     case 0:
         // DO NOT change the boundary
-        excl_func = &is_boundary;
         break;
     case 1:
-        excl_func = &is_boundary;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, floors);
-        break;
-    case 10:
-        excl_func = &is_corner;
-        break;
-    case 11:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         break;
     case 13:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
@@ -4542,14 +3326,8 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
               const segment_t &original_segment, const segflag_t &original_segflag,
               std::vector<char> &affected_old_node)
 {
-    // We don't want to refine large elements during remeshing,
-    // so using negative size as the max area
-    const double max_elem_size = -1;
-    const int vertex_per_polygon = 3;
     const RefineFloors floors = refine_floors(param.mesh);
     const double min_dist = floors.min_dist;
-    Mesh mesh_param = param.mesh;
-    mesh_param.poly_filename = "";
 
     // create a copy of original_coord and original_segment
     double_vec qcoord_vec;
@@ -4583,34 +3361,21 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
 
     int_vec points_to_delete;
     double x0plane = 0.;   // where flatten_* puts the x0 wall; remeshing_option 12 moves it
-    bool (*excl_func)(uint) = NULL; // function pointer indicating which point cannot be deleted
 
     /* choosing which way to remesh the boundary */
     switch (param.mesh.remeshing_option) {
     case 0:
         // DO NOT change the boundary
-        excl_func = &is_boundary;
         break;
     case 1:
-        excl_func = &is_boundary;
-        flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
-                       points_to_delete, floors);
-        break;
-    case 10:
-        excl_func = &is_corner;
-        break;
-    case 11:
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         break;
     case 12:
-        excl_func = &is_corner;
         x0plane = flatten_x0_corner(old_bcflag, qcoord, points_to_delete, min_dist);
         break;
     case 13:
         // restore the bottom AND both side walls to their initial planes
-        excl_func = &is_corner;
         flatten_bottom(old_bcflag, qcoord, -param.mesh.zlength,
                        points_to_delete, floors);
         flatten_x0(old_bcflag, qcoord, points_to_delete, min_dist);
@@ -4839,7 +3604,6 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     *var.segflag = std::move(new_segflag);
 }
 #endif  // end of if THREED
-#endif // end of if USEMMG
 
 } // anonymous namespace
 
@@ -4953,8 +3717,6 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
 
     // check if any bottom node is too far away from the bottom depth
     if (param.mesh.remeshing_option == 1 ||
-        param.mesh.remeshing_option == 2 ||
-        param.mesh.remeshing_option == 11 ||
         param.mesh.remeshing_option == 13) {
         double bottom = - param.mesh.zlength;
         double dist = param.mesh.max_boundary_distortion * param.mesh.resolution;
@@ -5094,19 +3856,16 @@ int bad_mesh_quality(const Param &param, const Variables &var, int &index, doubl
     return 0;
 }
 
-// Fail-fast guard against a TANGLED mesh (a self-collapsed free surface that no remesh can repair):
-//   (1) FOLDED element: signed measure opposite to the mesh's dominant sign (not hard-coded CCW;
-//       the 2D solver is orientation-agnostic). It can fire only after a uniform mesher
-//       (meshing_elem_shape 1 or 2): Triangle and TetGen orient every element alike, and MMG
-//       reorients an inverted input element.
-//   (2) SELF-INTERSECTING boundary (2D only): two boundary segments sharing no node cross. MMG
-//       does not split such a crossing; Triangle splits it at a vertex the pieces share.
-// So it can stop only a uniform-mesher or a 2D MMG remesh, never a Triangle, TetGen or 3D MMG one.
-// Prints the offending geometry and dies with the mesh error code. `when` labels the call site.
 static double tangle_orient2d(const double *a, const double *b, const double *c)
 {
     return (b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]);
 }
+
+// Fail-fast guard against a TANGLED mesh, a self-collapsed free surface no remesh can repair: (1) a
+// FOLDED element, signed measure opposite to the mesh's dominant sign (only after a uniform mesher:
+// Triangle/TetGen orient every element alike, and MMG reorients an inverted one); (2, 2D only) two
+// boundary segments that share no node and cross, which MMG does not split. Prints the offending
+// geometry and dies with the mesh error code; `when` labels the call site.
 void check_mesh_tangle(const char *when, const array_t &coord, const conn_t &connectivity,
                        int nelem, const segment_t &segment, const segflag_t &segflag, int nseg)
 {
@@ -5270,8 +4029,7 @@ void detect_side_profile(const Param& param, Variables& var, uint side_bits)
             prof.node_reldepth.push_back(top_z - (*var.coord)[n][NDIMS-1]);
             prof.node_coord0_z.push_back((*var.coord0)[n][NDIMS-1]);
             prof.node_temperature.push_back((*var.temperature)[n]);
-            if ((int)var.init_elem_size_n->size() == var.nnode)   // empty without USEMMG
-                prof.node_init_elem_size.push_back((*var.init_elem_size_n)[n]);
+            prof.node_init_elem_size.push_back((*var.init_elem_size_n)[n]);
 #ifdef THREED
             prof.node_strike.push_back(side_wall_strike((*var.coord)[n], si));
 #else
@@ -5726,10 +4484,8 @@ void restore_side_fields(const Param &param, Variables &var,
             (*var.temperature)[n] = side_profile_value(at, prof.node_temperature);
             (*var.coord0)[n][axis] = entry;
             (*var.coord0)[n][NDIMS-1] = side_profile_value(at, prof.node_coord0_z);
-            if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
-                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
-                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n];   // pristine: unrefined
-            }
+            (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n];   // pristine: unrefined
             if (!node_done[n]) ++count_n;
             node_done[n] |= 1 << axis;   // bit = the horizontal component this band set
         }
@@ -5737,17 +4493,15 @@ void restore_side_fields(const Param &param, Variables &var,
         // Re-pin init_elem_size_n on the whole wall: a wall node inside the old mesh (the wall did
         // not move inward there, e.g. a depth-varying velocity zero at its depth) still holds the
         // remapped value. A band node gets the same value again.
-        if (!prof.node_init_elem_size.empty()) {   // empty without USEMMG
-            for (int n = 0; n < var.nnode; ++n) {
-                if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
-                const double rel = ref_z - (*var.coord)[n][NDIMS-1];
-                side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
-                const double old_init = (*var.init_elem_size_n)[n];
-                (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
-                // the same refined fraction of the re-pinned base: 1 for the band set above
-                (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n]
-                                                * ((*var.refined_elem_size_n)[n] / old_init);
-            }
+        for (int n = 0; n < var.nnode; ++n) {
+            if (!((*var.bcflag)[n] & SIDEWALL_FLAG[t])) continue;
+            const double rel = ref_z - (*var.coord)[n][NDIMS-1];
+            side_profile_locate(prof, side_wall_strike((*var.coord)[n], t), rel, at);
+            const double old_init = (*var.init_elem_size_n)[n];
+            (*var.init_elem_size_n)[n] = side_profile_value(at, prof.node_init_elem_size);
+            // the same refined fraction of the re-pinned base: 1 for the band set above
+            (*var.refined_elem_size_n)[n] = (*var.init_elem_size_n)[n]
+                                            * ((*var.refined_elem_size_n)[n] / old_init);
         }
 
         for (int e = 0; e < var.nelem; ++e) {
@@ -6157,7 +4911,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         const int old_nseg  = old.segment.size();
         const char *remesh_engine = "?";
 
-        // filled by the meshing routine (record_affected_old_nodes)
+        // filled by the meshing routine (detect_flatten_broken)
         rs.affected_old_node.assign(old_nnode, 0);
 
         // while var.bcflag still describes the old mesh
@@ -6167,15 +4921,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
 #ifdef THREED
         if (param.mesh.meshing_elem_shape == 0) {
-#if defined USEMMG
             remesh_engine = "MMG";
             optimize_mesh(param, var, bad_quality, old.coord, old.connectivity,
                     old.segment, old.segflag, rs.affected_old_node);
-#else
-            remesh_engine = "TetGen";
-            new_mesh(param, var, bad_quality, old.coord, old.connectivity,
-                    old.segment, old.segflag, rs.affected_old_node);
-#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old.coord, old.connectivity,
@@ -6186,15 +4934,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 #else  // if 2d
         if (param.mesh.meshing_elem_shape == 0) {
-#if defined USEMMG
             remesh_engine = "MMG";
             optimize_mesh_2d(param, var, bad_quality, old.coord, old.connectivity,
                 old.segment, old.segflag, rs.affected_old_node);
-#else
-            remesh_engine = "Triangle";
-            new_mesh(param, var, bad_quality, old.coord, old.connectivity,
-                old.segment, old.segflag, rs.affected_old_node);
-#endif
         } else if (param.mesh.meshing_elem_shape == 1) {
             remesh_engine = "uniform regular";
             new_uniformed_regular_mesh(param, var, old.coord, old.connectivity,
@@ -6376,8 +5118,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 #endif
 
     if (param.mesh.remeshing_option==1 ||
-        param.mesh.remeshing_option==2 ||
-        param.mesh.remeshing_option==11 ||
         param.mesh.remeshing_option==13) {
         /* Reset coord0 of the bottom nodes */
         int nbot = static_cast<int>(var.bnodes[iboundz0]->size());

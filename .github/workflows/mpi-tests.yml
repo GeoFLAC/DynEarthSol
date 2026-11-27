@@ -45,8 +45,8 @@ jobs:
       - name: build serial and MPI executables with HDF5 and MMG
         run: |
           for nd in 2 3; do
-            make -j4 ndims=$nd openmp=1 hdf5=1 usemmg=1
-            make -j4 ndims=$nd usempi=1 openmp=1 hdf5=1 usemmg=1
+            make -j4 ndims=$nd openmp=1
+            make -j4 ndims=$nd usempi=1 openmp=1
           done
 
       - name: compare MPI with the serial solver

@@ -7,7 +7,7 @@ transport, hillslope diffusion and marine deposition. DES handles tectonics;
 GoSPL handles the surface.
 
 For a step-by-step walkthrough with exercises, see the tutorial
-[Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl).
+[Coupling with GoSPL](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl).
 This file is the reference kept with the code.
 
 ## Files
@@ -66,7 +66,7 @@ Homebrew mamba, keep it elsewhere):
 ```bash
 conda activate gospl          # or: mamba activate gospl
 make clean
-make ndims=3 usegospl=1 usemmg=1 -j4 CONDA_ENV_PATH=$CONDA_PREFIX
+make ndims=3 usegospl=1 -j4 CONDA_ENV_PATH=$CONDA_PREFIX
 ```
 
 `make config` shows what was picked. On macOS:
@@ -79,8 +79,7 @@ make ndims=3 usegospl=1 usemmg=1 -j4 CONDA_ENV_PATH=$CONDA_PREFIX
   wrapper could not pass one on anyway: macOS removes `DYLD_*` variables when
   it starts `/bin/bash`.
 
-- `ndims=3` is required; `usemmg=1` (MMG mesh optimization during remeshing) is
-  recommended but optional.
+- `ndims=3` is required.
 - `GOSPL_EXT_DIR` (default `~/opt/gospl_extensions`) and `CONDA_ENV_PATH`
   (default `~/miniforge3/envs/gospl`) locate the two prerequisites; set them on
   the command line, in the Makefile or as exported variables if yours are
@@ -216,7 +215,7 @@ DES output goes to the working directory, GoSPL output to the YAML's
 
 `GOSPL=1 ./build.sh` in the repository root builds `dynearthsol/gcc-11-gospl`
 with the gospl conda environment, gospl_extensions and a 3D `dynearthsol3d`
-built with `usemmg=1` already inside, and the environment activated in every
+already inside, and the environment activated in every
 login shell. Put your cfg and GoSPL YAML in `./runs`, which is mounted at `~/DynEarthSol/runs`, and
 run there, so the output lands back in `./runs` on the host:
 

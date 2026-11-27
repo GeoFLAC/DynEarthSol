@@ -173,6 +173,10 @@ REJECTED = [
     ("surface process option that does not exist (2 was never implemented)",
      replace("surface_process_option = 0", "surface_process_option = 2"),
      EXIT_CONFIG_VALUE, "surface_process_option = 2 is not one of"),
+    ("remeshing_option 2",
+     replace("remeshing_option = 0", "remeshing_option = 2"), EXIT_CONFIG_VALUE, "0, 1, 12 or 13"),
+    ("remeshing_option 11",
+     replace("remeshing_option = 0", "remeshing_option = 11"), EXIT_CONFIG_VALUE, "0, 1, 12 or 13"),
 ]
 
 # (name, edit, check on the files the run leaves in its directory)

@@ -64,7 +64,7 @@ Setting `gospl_coupling_frequency = 50` in the cfg tests the coupling interval:
 if the result changes, 200 steps was too coarse.
 
 The tutorial
-[Coupling with GoSPL](https://geoflac.github.io/des3d/docs/tutorial/couplinggospl)
+[Coupling with GoSPL](https://geoflac.github.io/DynEarthSol/docs/tutorial/couplinggospl)
 walks through this example with figures.
 
 ## Known Issues

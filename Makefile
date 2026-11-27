@@ -7,7 +7,7 @@
 ## Build notes
 ## - Run simply `make` to build the optimized production executable.
 ## - For a debugging build, run for example: `make opt=0 openmp=0`.
-## - A flag rebuilds only what it reaches (hdf5: a few units; LDFLAGS: relink
+## - A flag rebuilds only what it reaches (useexo: one unit; LDFLAGS: relink
 ##   only). `make feature-map` prints the reach; `make config` summarises it.
 ## Common configuration variables (set on the make command line or edit below):
 ##  - ndims = 3 : build 3D code; set to 2 for the 2D code.
@@ -21,12 +21,11 @@
 ##  - nprof = 1 : enable NVHPC nprof profiling build (uses nvc++ when set),
 ##       1 = main dynearthsol loop profiling, 2 = detailed profiling.
 ##  - gprof = 1 : enable GNU gprof instrumentation (-pg).
-##  - usemmg = 1 : enable MMG mesh optimization support (requires MMG headers/libs).
 ##  - usempi = 1 : MPI timestep kernels; openacc=1 builds dynearthsol[23]d.mpi.gpu.
 ##       Requires METIS 5, which partitions the mesh (METIS_INCLUDE_DIR, METIS_LIB_DIR).
-##  - hdf5 = 1 : enable HDF5-based vtkhdf output support (requires hdf5).
 ##  - useexo = 1 : enable ExodusII import support (3D only; requires seacas/exodus libs).
 ##  - snapshot_diff = 1 : embed uncommitted code changes in the executable.
+## MMG (the mmg submodule) is always built, which needs cmake. HDF5 is required.
 ## HDF5 and, on macOS, the OpenMP runtime are found automatically -- see
 ## the "Optional paths" block below for the HDF5 and NVHPC overrides; every
 ## other dependency's path is declared beside the code that uses it.
@@ -37,17 +36,15 @@ openacc = 0
 openmp = 1
 nprof = 0
 gprof = 0
-usemmg = 0
 usempi = 0
 useexo = 0
 usegospl = 0
 usegwb = 0
-hdf5 = 0
 snapshot_diff = 0
 nofma = 0   # disable FMA instructions when using nvc++, may help if using mixed precision
 ## Every knob above but ndims and opt; the build.snapshot records those not at 0, in this
 ## order. The check below accepts only listed knobs, so a new one cannot be missed here.
-KNOB_VARS = openmp openacc hdf5 usemmg usempi useexo usegospl usegwb nprof gprof nofma snapshot_diff
+KNOB_VARS = openmp openacc usempi useexo usegospl usegwb nprof gprof nofma snapshot_diff
 
 ifeq ($(ndims), 2)
 	useexo = 0    # for now, can import only 3d exo mesh
@@ -80,8 +77,8 @@ OSNAME := $(shell uname -s)
 ##
 ## Every other dependency's path is declared beside the code that consumes it, so
 ## it is read together with the flags it feeds: OPENMP_* in the clang++ branch, and
-## EXO_*, MMG_* and the GoSPL and PYTHON_* group inside their useexo=1, usemmg=1
-## and usegospl=1 blocks.
+## MMG_* in the MMG block, and EXO_* and the GoSPL and PYTHON_* group inside their
+## useexo=1 and usegospl=1 blocks.
 ##
 ## Everything here uses `?=`, so an EXPORTED value is honoured -- that is how a
 ## module file or a conda activate hook can name a prefix once instead of every
@@ -96,8 +93,8 @@ OSNAME := $(shell uname -s)
 ## use rather than leaving it in a shell profile.
 ########################################################################
 
-## HDF5, for hdf5=1. Set either or both; whichever is left blank is still
-## detected. Layouts the search knows about, if you would rather name them:
+## HDF5. Set both, or neither to have them detected; with one set, detection fills
+## neither. Layouts the search knows about, if you would rather name them:
 ##   Debian/Ubuntu  /usr/include/hdf5/serial  /usr/lib/<arch>-linux-gnu/hdf5/serial
 ##   Fedora/RHEL    /usr/include              /usr/lib64
 ##   Homebrew       $(brew --prefix hdf5)/include  $(brew --prefix hdf5)/lib
@@ -182,89 +179,6 @@ else
 CXX_BACKEND = ${CXX}
 endif
 
-ifeq ($(hdf5), 1)
-## Every stage below fills only what is still blank, so a path set by hand is
-## never overwritten, and setting just one of the two still leaves the other
-## detected instead of empty (a blank -L would eat the -lhdf5 that follows it).
-HDF5_DETECT :=
-ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-	HDF5_DETECT := yes
-endif
-ifeq ($(strip $(HDF5_LIB_DIR)),)
-	HDF5_DETECT := yes
-endif
-ifeq ($(HDF5_DETECT), yes)
-	ifeq ($(OSNAME), Darwin)
-		## Use the architecture-matched Homebrew prefix (see BREW_PREFIX above)
-		## and that prefix's own pkg-config, not whichever one PATH offers.
-		HDF5_BREW = $(BREW_PREFIX)
-		PKGCONFIG := $(BREW_PREFIX)/bin/pkg-config
-	else
-		HDF5_BREW =
-		PKGCONFIG := pkg-config
-	endif
-
-	## Ask pkg-config for directories rather than parsing --cflags/--libs:
-	## h5cc -show and --libs mix in inline .a paths and -lsz/-lz/-ldl, which
-	## are painful to filter and differ per build. Debian and Ubuntu name the
-	## serial module hdf5-serial; everyone else ships plain hdf5.
-	HDF5_PC := $(shell for m in hdf5 hdf5-serial; do \
-		$(PKGCONFIG) --exists $$m 2>/dev/null && { echo $$m; break; }; done)
-	ifneq ($(HDF5_PC),)
-		ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-			HDF5_INCLUDE_DIR := $(shell $(PKGCONFIG) --variable=includedir $(HDF5_PC))
-		endif
-		ifeq ($(strip $(HDF5_LIB_DIR)),)
-			HDF5_LIB_DIR := $(shell $(PKGCONFIG) --variable=libdir $(HDF5_PC))
-		endif
-	endif
-
-	## Without a .pc file, probe the layouts real installs use -- Fedora and
-	## RHEL need this branch unconditionally, as their hdf5-devel ships no
-	## pkg-config file at all. Debian splits its serial build across two trees
-	## (/usr/include/hdf5/serial and .../hdf5/serial under the multiarch libdir),
-	## so the header and the library are searched separately, not under one
-	## prefix. /usr/local comes before the system directories so a hand-built
-	## HDF5 installed there wins over the distro package.
-	HDF5_INC_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/include) \
-		/usr/include/hdf5/serial \
-		/usr/local/include /usr/include
-	HDF5_LIB_DIRS = $(call under,$(HDF5_BREW),/opt/hdf5/lib) \
-		/usr/lib/*-linux-gnu/hdf5/serial \
-		/usr/local/lib /usr/local/lib64 \
-		/usr/lib/*-linux-gnu \
-		/usr/lib64 /usr/lib
-	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(HDF5_INC_DIRS))
-	endif
-	ifeq ($(strip $(HDF5_LIB_DIR)),)
-		HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(HDF5_LIB_DIRS))
-	endif
-
-	## Checked separately: finding one without the other is still unbuildable,
-	## and failing here beats a confusing link error hundreds of lines later.
-	## Indented with SPACES, not a tab: a tab-indented $(error) this early
-	## reads as a recipe line and make reports "commands commence before first
-	## target" instead of the message below.
-	ifeq ($(strip $(HDF5_INCLUDE_DIR)),)
-        $(error hdf5=1 but no HDF5 headers found. Install HDF5 (macOS: brew install hdf5; \
-Debian/Ubuntu: apt install libhdf5-dev; Fedora/RHEL: dnf install hdf5-devel), \
-or set the paths by hand: \
-make hdf5=1 HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib)
-	endif
-	ifeq ($(strip $(HDF5_LIB_DIR)),)
-        $(error hdf5=1: found HDF5 headers in $(HDF5_INCLUDE_DIR) but no libhdf5. \
-Set HDF5_LIB_DIR to the directory holding libhdf5, \
-e.g. make hdf5=1 HDF5_LIB_DIR=/prefix/lib)
-	endif
-endif
-endif
-
-########################################################################
-## Select compiler and linker flags
-## (Usually you won't need to modify anything below)
-########################################################################
-
 ifeq ($(useexo), 1)
 	# path to exodus header files
 	EXO_INCLUDE = ./seacas/include
@@ -274,29 +188,11 @@ ifeq ($(useexo), 1)
 
 	EXO_CXXFLAGS = -I$(EXO_INCLUDE) -DUSEEXODUS
 	EXO_LDFLAGS = -L$(EXO_LIB_DIR) -lexodus
+	## Recorded absolute here, in libexodus's macOS install name and in HDF5's rpath: a
+	## relative path is read against the directory DES runs in, not the executable's.
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		EXO_LDFLAGS += -Wl,-rpath=$(EXO_LIB_DIR)
+		EXO_LDFLAGS += -Wl,-rpath=$(abspath $(EXO_LIB_DIR))
 	endif
-endif
-
-ifeq ($(usemmg), 1)
-	# path to MMG3D header files
-	MMG_INCLUDE = ./mmg/build/include
-
-	# path of MMG3D library files, if not in standard system location
-	MMG_LIB_DIR = ./mmg/build/lib
-
-	MMG_CXXFLAGS = -I$(MMG_INCLUDE) -DUSEMMG
-	ifeq ($(ndims), 3)	
-		MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg3d
-	else
-		MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
-	endif
-	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
-		MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
-	endif
-
-	MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
 endif
 
 ifeq ($(usegospl), 1)
@@ -306,16 +202,16 @@ ifeq ($(usegospl), 1)
 	GOSPL_INCLUDE = $(GOSPL_EXT_DIR)/include
 	GOSPL_LIB_DIR = $(GOSPL_EXT_DIR)/lib
 	GOSPL_PYTHONPATH = $(GOSPL_EXT_DIR)/cpp_interface
-	
+
 	# Export PYTHONPATH for GoSPL extensions
-    	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
-  
+	export PYTHONPATH := $(GOSPL_PYTHONPATH):$(PYTHONPATH)
+
 	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
 	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
 		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
 	endif
-	
+
 	# Python include/lib dirs — override on the command line for non-conda builds:
 	#   make usegospl=1 PYTHON_VERSION=3.12 PYTHON_INCLUDE_DIR=/usr/include/python3.12 PYTHON_LIB_DIR=/usr/lib/x86_64-linux-gnu
 	CONDA_ENV_PATH ?= $(HOME)/miniforge3/envs/gospl
@@ -333,7 +229,99 @@ ifeq ($(usegospl), 1)
 		GOSPL_LDFLAGS += $(PYTHON_LIB_DIR)/libpython$(PYTHON_VERSION).dylib
 		GOSPL_RPATH = $(abspath $(PYTHON_LIB_DIR))
 	endif
+
+	## <prefix>/include of the prefix that holds the embedded Python's headers.
+	PYTHON_PREFIX_INCLUDE = $(abspath $(PYTHON_INCLUDE_DIR)/..)
 endif
+
+## Each HDF5 stage below runs only while both dirs are blank, and sets both (see
+## HDF5_INCLUDE_DIR above).
+##
+## 1. A library's own HDF5, as on Linux DES must link the file it loads: seacas's prefix
+## (see EXO_LIBHDF5), and on Linux the embedded Python's prefix, whose h5py loads that
+## libhdf5 unless it is a pip wheel (see hdf5_same_file). A system Python's prefix holds
+## no hdf5.h on Debian, so detection goes on. macOS keeps the detected HDF5 with GoSPL:
+## the env's include dir is OpenMP's -idirafter there, which an -I of the same dir
+## cannot move ahead of /usr/local/include.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	ifeq ($(useexo), 1)
+		HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(EXO_INCLUDE))
+		HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(EXO_LIB_DIR))
+	endif
+endif
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	ifeq ($(usegospl), 1)
+		ifneq ($(OSNAME), Darwin)
+			HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(PYTHON_PREFIX_INCLUDE))
+			HDF5_LIB_DIR := $(if $(HDF5_INCLUDE_DIR),$(PYTHON_LIB_DIR))
+		endif
+	endif
+endif
+
+## 2. pkg-config, for its directories only: --libs adds -lsz/-lz/-ldl that differ per
+## build. On macOS the architecture-matched Homebrew's (see BREW_PREFIX). Debian and
+## Ubuntu name the module hdf5-serial.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	PKGCONFIG := $(if $(filter Darwin,$(OSNAME)),$(BREW_PREFIX)/bin/pkg-config,pkg-config)
+	HDF5_PC := $(shell for m in hdf5 hdf5-serial; do \
+		$(PKGCONFIG) --exists $$m 2>/dev/null && { echo $$m; break; }; done)
+	ifneq ($(HDF5_PC),)
+		HDF5_INCLUDE_DIR := $(shell $(PKGCONFIG) --variable=includedir $(HDF5_PC))
+		HDF5_LIB_DIR := $(shell $(PKGCONFIG) --variable=libdir $(HDF5_PC))
+	endif
+endif
+
+## 3. Install layouts without a .pc file: Fedora/RHEL ship none, and Debian splits its
+## serial build into two trees, so headers and library are searched apart. /usr/local
+## comes before the plain /usr dirs, so a hand-built HDF5 there wins over one in them.
+ifeq ($(strip $(HDF5_INCLUDE_DIR))$(strip $(HDF5_LIB_DIR)),)
+	HDF5_INCLUDE_DIR := $(call firstdir,hdf5.h,$(call under,$(BREW_PREFIX),/opt/hdf5/include) \
+		/usr/include/hdf5/serial /usr/local/include /usr/include)
+	HDF5_LIB_DIR := $(call firstdir,libhdf5.*,$(call under,$(BREW_PREFIX),/opt/hdf5/lib) \
+		/usr/lib/*-linux-gnu/hdf5/serial /usr/local/lib /usr/local/lib64 \
+		/usr/lib/*-linux-gnu /usr/lib64 /usr/lib)
+endif
+
+########################################################################
+## Select compiler and linker flags
+## (Usually you won't need to modify anything below)
+########################################################################
+
+## MMG, built from the mmg submodule by `prepare`.
+# path to MMG3D header files
+MMG_INCLUDE = ./mmg/build/include
+
+# path of MMG3D library files, if not in standard system location
+MMG_LIB_DIR = ./mmg/build/lib
+
+MMG_CXXFLAGS = -I$(MMG_INCLUDE)
+ifeq ($(ndims), 3)
+	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg3d
+else
+	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
+endif
+ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+endif
+
+MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
+
+## MMG's compilers come from CXX's toolchain, so the archive matches the objects'
+## architecture (a gcc on PATH can be another Homebrew's x86_64 one). nvc++ builds it
+## with GNU, whose C++ library it also uses. CMake takes a compiler path, so only the
+## word of CXX that names the compiler: CXX may start with a wrapper (`env clang++`).
+MMG_CXX_WORD = $(firstword $(foreach w,$(CXX),$(if $(findstring clang++,$(w))$(findstring g++,$(w)),$(w))))
+ifneq (, $(findstring clang++, $(MMG_CXX_WORD)))
+	MMG_CC = $(subst clang++,clang,$(MMG_CXX_WORD))
+	MMG_CXX = $(MMG_CXX_WORD)
+else ifneq (, $(findstring g++, $(MMG_CXX_WORD)))
+	MMG_CC = $(subst g++,gcc,$(MMG_CXX_WORD))
+	MMG_CXX = $(MMG_CXX_WORD)
+else
+	MMG_CC = gcc
+	MMG_CXX = g++
+endif
+
 
 ifeq ($(usegwb), 1)
 	# Geodynamic World Builder (github.com/GeodynamicWorldBuilder/WorldBuilder) for
@@ -366,8 +354,8 @@ ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
 	## -Wno-unused-private-field is the member-field half of the WARNFLAGS suppressions
 	## and has no g++ spelling. It fires on members a sibling configuration uses -- the
-	## THREED-only axis, the ACC-only knn state, the hdf5-only compression level -- which
-	## is the same deliberate pattern, not a finding.
+	## THREED-only axis, the ACC-only knn state -- which is the same deliberate pattern,
+	## not a finding.
 	CXXFLAGS = -g -std=c++17 -DGPP1X $(WARNFLAGS) -Wno-unused-private-field
 	## Everything but opt=0 and opt=-1; those two are the builds that report acc pragmas.
 	ifeq (,$(filter 0 -1,$(opt)))
@@ -540,8 +528,9 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 			GPU_CC := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
 			            | head -1 | tr -d '.')
 		endif
-		## $(warning) and $(error) indented with SPACES, not a tab -- see the note
-		## at the hdf5 $(error) above.
+		## $(warning) indented with SPACES, not a tab: a tab-indented one this early
+		## reads as a recipe line and make reports "commands commence before first
+		## target" instead of the message.
 		ifeq ($(GPU_CC),)
 			## 80 = A100, what the CI matrix targets. Nothing is known about
 			## the local host here, so this is a guess that at least links.
@@ -592,16 +581,17 @@ else
 ## down (make warned "overriding commands for target 'all'" and used the other).
 endif
 
-ifeq ($(hdf5), 1)
-	## Named, like MMG_CXXFLAGS, so the stamp split can subtract it. Folded into
-	## CXXFLAGS it would perturb the global stamp and rebuild everything.
-	HDF5_CXXFLAGS = -DHDF5 -I$(HDF5_INCLUDE_DIR)
-	CXXFLAGS += $(HDF5_CXXFLAGS)
-	LDFLAGS += -L$(HDF5_LIB_DIR) -lhdf5
-	ifneq ($(OSNAME), Darwin)
-		LDFLAGS += -Wl,-rpath,$(HDF5_LIB_DIR)
-	endif
-endif
+## The library file the link takes: the shared library when the directory has one,
+## else the static libhdf5.a. Linked by its path, not -L/-l: on macOS -L on a conda env
+## would also answer the implicit -lc++.
+HDF5_SHLIB_EXT := $(if $(filter Darwin,$(OSNAME)),dylib,so)
+HDF5_LIB := $(firstword $(call firstfile,libhdf5.$(HDF5_SHLIB_EXT),$(HDF5_LIB_DIR)) \
+	$(call firstfile,libhdf5.a,$(HDF5_LIB_DIR)))
+
+CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
+## Its directory is an rpath: a conda or hand-built libhdf5 lies off the loader's path, and a
+## conda one names itself @rpath/... on macOS. Apple ld takes this spelling, not -rpath=.
+LDFLAGS += $(HDF5_LIB) -Wl,-rpath,$(abspath $(HDF5_LIB_DIR))
 
 ## Is git in the path?
 HAS_GIT := $(shell git --version 2>/dev/null)
@@ -725,10 +715,8 @@ ifeq ($(useexo), 1)
 	LDFLAGS += $(EXO_LDFLAGS)
 endif
 
-ifeq ($(usemmg), 1)
-	CXXFLAGS += $(MMG_CXXFLAGS)
-	LDFLAGS += $(MMG_LDFLAGS)
-endif
+CXXFLAGS += $(MMG_CXXFLAGS)
+LDFLAGS += $(MMG_LDFLAGS)
 
 ifeq ($(usempi), 1)
 	CXXFLAGS += -DUSEMPI -DOMPI_SKIP_MPICXX=1 -DMPICH_SKIP_MPICXX=1
@@ -818,7 +806,7 @@ all: prepare
 ## Rebuild when the FLAGS change, not just when a source file does.
 ##
 ## Objects are named only for ndims and suffix, so every other switch -- openmp,
-## opt, hdf5, usemmg, the compiler under nprof=1 -- reuses whatever was built
+## opt, the compiler under nprof=1 -- reuses whatever was built
 ## last. `make openmp=0` then `make` reports success, relinks nothing, and leaves
 ## a single-threaded executable behind. The stamp holds the last build's flags;
 ## its recipe runs every time (FORCE) but only rewrites the file when they
@@ -835,9 +823,7 @@ LINK_STAMP   = .link-flags.$(ndims)d$(suffix)
 ## the tree. Each needs FEATURE_<macro>_FLAGS naming the chunk to subtract.
 ## Omitted: THREED (ndims already renames outputs), HAS_GOSPL_CPP_INTERFACE
 ## (in parameters.hpp, so it reaches everything).
-FEATURES = HDF5 USEMMG USEEXODUS USEGWB
-FEATURE_HDF5_FLAGS      = $(HDF5_CXXFLAGS)
-FEATURE_USEMMG_FLAGS    = $(MMG_CXXFLAGS)
+FEATURES = USEEXODUS USEGWB
 FEATURE_USEEXODUS_FLAGS = $(EXO_CXXFLAGS)
 FEATURE_USEGWB_FLAGS    = $(GWB_CXXFLAGS)
 
@@ -850,9 +836,9 @@ GLOBAL_CXXFLAGS = $(filter-out $(FEATURE_FLAGS),$(CXXFLAGS))
 
 ## Stamps DELETE what they invalidate; mtime is not trustworthy here. make 3.81
 ## compares to the whole second and treats equal as up to date, and a 4-object
-## feature rebuild finishes in the same second the stamp was written -- two
-## back-to-back builds then linked an object still carrying -DHDF5 with no
-## -lhdf5. A deleted object has no mtime to be wrong about.
+## feature rebuild can finish in the same second the stamp was written, so an
+## object still carrying a feature's -D flag would link without its library.
+## A deleted object has no mtime to be wrong about.
 ##
 ## The delete must run in an earlier PROCESS: make 3.81 stats a target before its
 ## prerequisites' recipes and reuses that mtime, so deleting from the stamp
@@ -925,15 +911,35 @@ FORCE:
 ## $(error), so `make clean` and `make config` still work on a machine that
 ## cannot build yet.
 ##
-## Fatal on macOS only: there this detection is the sole source of -I/-L and
-## there is no Apple omp.h, so a miss is certain. Elsewhere the
-## toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
+## The OpenMP check is fatal on macOS only: there this detection is the sole
+## source of -I/-L and there is no Apple omp.h, so a miss is certain. Elsewhere
+## the toolchain has paths no filesystem probe can see (CPATH, LIBRARY_PATH, a
 ## module sysroot), so a failed guess must not block a working build.
 ifeq ($(OSNAME), Darwin)
 DEP_FATAL = exit 1
 else
 DEP_FATAL = echo "         (continuing: your compiler may find it via CPATH or a module)"
 endif
+
+## $(call hdf5_same_file,<who>,<its include dir>,<its lib dir>): stop when <its lib dir>
+## holds a libhdf5.so that is not the file DES links: on Linux the first libhdf5 loaded
+## answers every H5* call in the process. test -ef follows symlinks.
+define hdf5_same_file
+@f="$(3)/libhdf5.so"; test ! -e "$$f" || test "$$f" -ef "$(HDF5_LIB)" || { \
+		echo "HDF5: $(1) loads $$f, and DES would link another file,"; \
+		echo "      $(HDF5_LIB). On Linux the first libhdf5 loaded answers every HDF5"; \
+		echo "      call in the process, so the calls of $(1) would fail. Link its copy,"; \
+		echo "      with this added to the make line: HDF5_INCLUDE_DIR=$(2) HDF5_LIB_DIR=$(3)"; \
+		exit 1; }
+endef
+
+## The libhdf5 that libexodus loads through seacas's NetCDF: on Linux the first libhdf5
+## loaded answers every H5* call in the process, so it must be the file DES links. ldd
+## follows the chain; awk takes the first libhdf5 that is not the _hl library, which can
+## come first (Debian names the file libhdf5_serial). Empty when libexodus.so or its
+## libhdf5 is missing, or its NetCDF is static.
+EXO_LIBHDF5 = ldd "$(EXO_LIB_DIR)/libexodus.so" 2>/dev/null \
+	| awk '$$1 ~ /^libhdf5/ && $$1 !~ /_hl/ && $$3 ~ /^\// {print $$3; exit}'
 
 check-deps:
 	@test -n "$(CXX_SUPPORTED)" || { \
@@ -942,6 +948,44 @@ check-deps:
 	@test -z "$(MPI_ACC_BACKEND_MISSING)" || { \
 		echo "usempi=1 openacc=1 needs an MPI wrapper around nvc++, but '$(CXX)'"; \
 		echo "runs '$(CXX_BACKEND)'. Set MPI_CXX to an NVHPC MPI wrapper."; exit 1; }
+	@# Each half checked on its own: one without the other is still unbuildable, and
+	@# failing here beats a confusing compile or link error further down. Fatal on every
+	@# OS: a blank include dir leaves a bare -I in the flags, which takes the next word.
+	@test -f "$(strip $(HDF5_INCLUDE_DIR))/hdf5.h" || { \
+		echo "Missing: the HDF5 headers$(if $(strip $(HDF5_INCLUDE_DIR)), (no hdf5.h in '$(HDF5_INCLUDE_DIR)'))."; \
+		echo "         Install: brew install hdf5 (macOS), apt install libhdf5-dev (Debian/Ubuntu),"; \
+		echo "                  dnf install hdf5-devel (Fedora/RHEL)"; \
+		echo "         Or set both dirs (with one set, detection fills neither):"; \
+		echo "         make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
+		exit 1; }
+	@test -n "$(strip $(HDF5_LIB))" || { \
+		echo "Missing: libhdf5 (HDF5 headers found in $(HDF5_INCLUDE_DIR))."; \
+		echo "         $(if $(strip $(HDF5_LIB_DIR)),No libhdf5.$(HDF5_SHLIB_EXT) or libhdf5.a in '$(HDF5_LIB_DIR)'.,HDF5_LIB_DIR is not set.)"; \
+		echo "         Set both dirs (with one set, detection fills neither):"; \
+		echo "         make HDF5_INCLUDE_DIR=/prefix/include HDF5_LIB_DIR=/prefix/lib"; \
+		exit 1; }
+ifneq ($(OSNAME), Darwin)
+ifeq ($(useexo), 1)
+	@f=$$($(EXO_LIBHDF5)); d=$${f%/*}; \
+	if test -z "$$f"; then \
+		echo "HDF5: ldd finds no libhdf5 for $(EXO_LIB_DIR)/libexodus.so; skipped the same-file check."; \
+	elif ! test "$$f" -ef "$(HDF5_LIB)"; then \
+		echo "HDF5: libexodus loads $$f,"; \
+		echo "      and DES would link $(HDF5_LIB)."; \
+		echo "      On Linux the first libhdf5 loaded answers every HDF5 call in the process,"; \
+		echo "      so the calls of libexodus would fail. Build seacas's NetCDF and exodus"; \
+		echo "      on the HDF5 that DES links (see Exodus in README.md)."; \
+		if test -f "$$d/../include/hdf5.h"; then \
+			echo "      Or link its copy, with this added to the make line:"; \
+			echo "      HDF5_INCLUDE_DIR=$$(cd "$$d/../include" && pwd) HDF5_LIB_DIR=$$d"; \
+		fi; \
+		exit 1; \
+	fi
+endif
+ifeq ($(usegospl), 1)
+	$(call hdf5_same_file,GoSPL's h5py,$(PYTHON_PREFIX_INCLUDE),$(PYTHON_LIB_DIR))
+endif
+endif
 ifeq ($(OSNAME), Darwin)
 ifeq ($(openmp), 1)
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))
@@ -978,12 +1022,9 @@ ifeq ($(openmp), 1)
 	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
 endif
 endif
-	@echo "hdf5               $(strip $(hdf5))"
-ifeq ($(hdf5), 1)
-	@echo "  hdf5 include     $(HDF5_INCLUDE_DIR)"
-	@echo "  hdf5 lib dir     $(HDF5_LIB_DIR)"
-endif
-	@echo "usemmg             $(strip $(usemmg))"
+	@echo "hdf5 include       $(if $(strip $(HDF5_INCLUDE_DIR)),$(HDF5_INCLUDE_DIR),** NOT FOUND **)"
+	@echo "hdf5 library       $(if $(strip $(HDF5_LIB)),$(HDF5_LIB),** NOT FOUND **)"
+	@echo "mmg archive        $(MMG_LIB)"
 	@echo "useexo             $(strip $(useexo))"
 	@echo "usegospl           $(strip $(usegospl))"
 	@echo "usegwb             $(strip $(usegwb))"
@@ -1044,8 +1085,7 @@ prepare: check-deps $(FLAG_STAMPS)
 ifeq ($(openacc), 1)
 	$(call ensure_submodule,$(KNN_BVH_DIR),Makefile,openacc=1)
 endif
-ifeq ($(usemmg), 1)
-	$(call ensure_submodule,mmg,CMakeLists.txt,usemmg=1)
+	$(call ensure_submodule,mmg,CMakeLists.txt,DES)
 
 	@# An mmg/build configured at another path (a mounted or copied tree) holds
 	@# another host's objects: rebuild it. -ef compares directories, not strings,
@@ -1060,19 +1100,28 @@ ifeq ($(usemmg), 1)
 	@mkdir -p mmg/build
 	@# MMG is C, so CFLAGS is what reaches its objects -- and cmake caches CMAKE_C_FLAGS
 	@# from the environment on the FIRST configure, so an exported one is baked in.
-	@# USE_VTK=OFF: DES needs no VTK, and the gospl env's VTK breaks MMG's configure.
+	@# MMG's optional SCOTCH, Elas and VTK stay off: cmake would take whichever the
+	@# environment offers (the gospl env's VTK stops the configure), and DES links
+	@# none of them. A cache without a Makefile is another generator's (CMAKE_GENERATOR)
+	@# or a failed configure's, and cmake will not change a cached generator: it goes.
 	@if [ ! -f "mmg/build/Makefile" ]; then \
+		command -v cmake >/dev/null || { \
+			echo "Missing: cmake, which configures the mmg submodule."; \
+			echo "         Install: brew install cmake (macOS), apt install cmake (Debian/Ubuntu)"; \
+			exit 1; }; \
 		echo "   Configuring MMG..."; \
-		cd mmg/build && CFLAGS="" CXXFLAGS="" LDFLAGS="" cmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DUSE_VTK=OFF ..; \
+		cd mmg/build && rm -f CMakeCache.txt && CFLAGS="" CXXFLAGS="" LDFLAGS="" \
+		  cmake -G "Unix Makefiles" -DCMAKE_C_COMPILER="$(MMG_CC)" -DCMAKE_CXX_COMPILER="$(MMG_CXX)" \
+		        -DUSE_SCOTCH=OFF -DUSE_ELAS=OFF -DUSE_VTK=OFF ..; \
 	fi
 	@# The revision IN the archive, stamped only when it is built: the archive is reused
-	@# while the checkout drifts, and one built without a stamp claims no revision.
+	@# while the checkout drifts, and one built without a stamp claims no revision. It builds
+	@# only the two archives DES links, together, so that the one stamp names both.
 	@if [ ! -f "$(MMG_LIB)" ]; then \
 		rm -f mmg/build/.mmg-rev; \
-		$(MAKE) -C mmg/build && { git -C mmg describe --always --dirty \
+		$(MAKE) -C mmg/build libmmg2d_a libmmg3d_a && { git -C mmg describe --always --dirty \
 		  > mmg/build/.mmg-rev 2>/dev/null || rm -f mmg/build/.mmg-rev; }; \
 	fi
-endif
 
 build: $(EXE) tetgen/tetgen triangle/triangle take-snapshot
 
@@ -1113,15 +1162,13 @@ ifeq ($(usegospl), 1)
 		install_name_tool -change libgospl_extensions.so $(abspath $(GOSPL_LIB_DIR))/libgospl_extensions.so $@
 endif
 ifeq ($(useexo), 1)  # fix for dynamic library problem on Mac
-		install_name_tool -change libexodus.dylib $(EXO_LIB_DIR)/libexodus.dylib $@
+		install_name_tool -change libexodus.dylib $(abspath $(EXO_LIB_DIR))/libexodus.dylib $@
 endif
-ifeq ($(usemmg), 1)  # fix for dynamic library problem on Mac
 ifeq ($(ndims), 3)
 		install_name_tool -change libmmg3d.dylib $(MMG_LIB_DIR)/libmmg3d.dylib $@
 else
 		install_name_tool -change libmmg2d.dylib $(MMG_LIB_DIR)/libmmg2d.dylib $@
 endif
-endif # end of usemmg
 endif # end of Darwin
 
 take-snapshot:

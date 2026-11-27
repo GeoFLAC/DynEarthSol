@@ -10,8 +10,8 @@ computation on interior nodes. `usempi=1 openacc=1` additionally builds
 ## Build and run
 
 ```sh
-make -j6 ndims=2 usempi=1 usemmg=1 hdf5=1
-make -j6 ndims=3 usempi=1 usemmg=1 hdf5=1
+make -j6 ndims=2 usempi=1
+make -j6 ndims=3 usempi=1
 cd benchmarks-cores
 OMP_NUM_THREADS=1 mpiexec -n 4 ../dynearthsol2d.mpi test-tiny.cfg
 ```
@@ -33,8 +33,8 @@ allocated for the job. Stage dependencies first on offline compute hosts.
 
 ```sh
 export OMPI_CXX=/path/to/nvc++
-make -j8 ndims=2 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
-make -j8 ndims=3 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx usemmg=1 hdf5=1
+make -j8 ndims=2 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx
+make -j8 ndims=3 usempi=1 openacc=1 openmp=0 MPI_CXX=/path/to/mpicxx
 ```
 
 The Makefile detects the GPU's compute capability; set `GPU_CC` to build for
@@ -113,7 +113,7 @@ equilibrium and restart checks. See [the test guide](../tests/functional/mpi/REA
 Every MPI build partitions the mesh with METIS, so `usempi=1` needs METIS 5:
 
 ```sh
-make ndims=2 usempi=1 usemmg=1 hdf5=1
+make ndims=2 usempi=1
 OMP_NUM_THREADS=1 mpiexec -n 4 ./dynearthsol2d.mpi model.cfg
 ```
 

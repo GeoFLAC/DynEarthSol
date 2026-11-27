@@ -9,6 +9,7 @@
 #include <string>
 #include <sstream>
 #include <set>
+#include <utility>
 
 #ifdef THREED
 
@@ -16,15 +17,11 @@
 #include "tetgen/tetgen.h"
 #undef TETLIBRARY
 
-#ifdef USEMMG
 #include "mmg/mmg3d/libmmg3d.h"
-#endif
 
 #else // !THREED
 
-#ifdef USEMMG
 #include "mmg/mmg2d/libmmg2d.h"
-#endif
 
 #endif // THREED
 
@@ -58,6 +55,14 @@ const double sizefactor = 0.118;
 #else
 const double sizefactor = 0.433;
 #endif
+
+static void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
+                               int n_init_segments, const int *init_segments,
+                               const int *init_segflags, int n_regions, const double *regattr,
+                               double max_elem_size, int vertex_per_polygon,
+                               int &nnode, int &nelem, int &nseg, double *&pcoord,
+                               int *&pconnectivity, int *&psegment, int *&psegflag,
+                               double *&pregattr);
 
 
 namespace { // anonymous namespace
@@ -771,7 +776,6 @@ void set_3d_quality_str(std::string &quality, double max_ratio,
     }
 }
 
-#ifdef USEMMG
 struct CentroidCloud {
     const double *pts;  // AoS layout: x0,y0,z0, x1,y1,z1, ...
     int n;
@@ -896,7 +900,8 @@ static void compute_init_metric(
             if (r < 0 || r >= n_regions) r = 0;
             double vol = regattr[r * attr_stride + NDIMS + 1];
             // A region without a size constraint (.poly size <= 0) keeps each element's as-meshed
-            // size, as on the non-MMG path (a mesh.resolution fallback would refine the region).
+            // size, as a plain Triangle/TetGen initial mesh does (a mesh.resolution fallback would
+            // refine the region).
             double target = (vol > 0)
                 ? std::pow(vol / sizefactor, 1.0 / NDIMS)
                 : std::pow(elem_measure(coord, conn, e) / sizefactor, 1.0 / NDIMS);
@@ -1598,7 +1603,6 @@ static void refine_initial_side_walls(const Param &param, Variables &var,
     std::cout << "  Refined restored side walls of the initial mesh to ~resolution: "
               << nnode << " nodes, " << nelem << " elements\n";
 }
-#endif // USEMMG
 
 
 #ifdef THREED
@@ -1712,18 +1716,18 @@ void tetrahedralize_polyhedron
 
 // Shared tail of every Triangle/TetGen-built initial mesh (points_to_mesh, the 3D .poly path):
 // refine_initial_weak_zone, refine_initial_side_walls (option 13), then var copies the buffers and
-// this function frees them. An imported .exo mesh (meshing_option 95) skips it.
+// this function frees them. An imported .exo mesh (meshing_option 95) skips it. delete[] is right
+// for the mesher's arrays: TetGen allocates them with new[], and the vendored Triangle's trimalloc
+// (triangle/triangle.c) with operator new[].
 void adopt_initial_mesh(const Param &param, Variables &var,
                         double *pcoord, int *pconnectivity, int *psegment, int *psegflag,
                         double *pregattr)
 {
-#ifdef USEMMG
     refine_initial_weak_zone(param, var, var.nnode, var.nelem, var.nseg,
                              pcoord, pconnectivity, psegment, psegflag, pregattr);
     if (param.mesh.remeshing_option == 13 && param.mesh.meshing_elem_shape == 0)
         refine_initial_side_walls(param, var, var.nnode, var.nelem, var.nseg,
                                   pcoord, pconnectivity, psegment, psegflag, pregattr);
-#endif
 
     var.coord = new array_t(pcoord, var.nnode);
     var.connectivity = new conn_t(pconnectivity, var.nelem);
@@ -1752,7 +1756,6 @@ void points_to_mesh(const Param &param, Variables &var,
     std::vector<double> coarse_regattr_vec;
     const double *coarse_regattr_ptr = regattr;
 
-#ifdef USEMMG
     if (param.mesh.use_mmg_init) {
         // Step 1: scale volume for coarse TetGen mesh
         if (max_elem_size > 0) {
@@ -1818,14 +1821,6 @@ void points_to_mesh(const Param &param, Variables &var,
                            var.nnode, var.nelem, var.nseg,
                            pcoord, pconnectivity, psegment, psegflag, pregattr);
     }
-#else // !USEMMG
-    points_to_new_mesh(param.mesh, npoints, points,
-                       n_init_segments, init_segments, init_segflags,
-                       nregions, regattr,
-                       max_elem_size, vertex_per_polygon,
-                       var.nnode, var.nelem, var.nseg,
-                       pcoord, pconnectivity, psegment, psegflag, pregattr);
-#endif
 
     adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 }
@@ -2571,7 +2566,6 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     double *pcoord, *pregattr;
     int *pconnectivity, *psegment, *psegflag;
 
-#ifdef USEMMG
     if (param.mesh.use_mmg_init) {
         // Step 1: scale volume for coarse TetGen mesh
         double coarse_max_elem_size = max_elem_size;
@@ -2628,20 +2622,6 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
                                   &pcoord, &pconnectivity,
                                   &psegment, &psegflag, &pregattr);
     }
-#else // !USEMMG
-    tetrahedralize_polyhedron(param.mesh.max_ratio,
-                              param.mesh.min_tet_angle, max_elem_size,
-                              0,
-                              param.mesh.meshing_verbosity,
-                              param.mesh.tetgen_optlevel,
-                              npoints, n_init_segments, points,
-                              NULL, init_segflags,
-                              facets,
-                              nregions, regattr,
-                              &var.nnode, &var.nelem, &var.nseg,
-                              &pcoord, &pconnectivity,
-                              &psegment, &psegflag, &pregattr);
-#endif
 
     adopt_initial_mesh(param, var, pcoord, pconnectivity, psegment, psegflag, pregattr);
 #else
@@ -3013,12 +2993,13 @@ void create_equilateral_segments(const Variables& var, int_vec &segments, int_ve
     }
 }
 
-void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
-                        int n_init_segments, const int *init_segments, const int *init_segflags,
-                        int n_regions, const double *regattr,
-                        double max_elem_size, int vertex_per_polygon,
-                        int &nnode, int &nelem, int &nseg, double *&pcoord,
-                        int *&pconnectivity, int *&psegment, int *&psegflag, double *&pregattr)
+static void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
+                               int n_init_segments, const int *init_segments,
+                               const int *init_segflags, int n_regions, const double *regattr,
+                               double max_elem_size, int vertex_per_polygon,
+                               int &nnode, int &nelem, int &nseg, double *&pcoord,
+                               int *&pconnectivity, int *&psegment, int *&psegflag,
+                               double *&pregattr)
 {
 #ifdef THREED
 
@@ -3057,32 +3038,6 @@ void points_to_new_mesh(const Mesh &mesh, int npoints, const double *points,
         die(EXIT_MESH_TETGEN);
     }
 
-}
-
-
-void points_to_new_surface(const Mesh &mesh, int npoints, const double *points,
-                           int n_init_segments, const int *init_segments, const int *init_segflags,
-                           int n_regions, const double *regattr,
-                           double max_elem_size, int vertex_per_polygon,
-                           int &nnode, int &nelem, int &nseg, double *&pcoord,
-                           int *&pconnectivity, int *&psegment, int *&psegflag, double *&pregattr)
-{
-#ifdef THREED
-    /* For triangulation of boundary surfaces in 3D */
-
-    triangulate_polygon(mesh.min_angle, max_elem_size,
-                        mesh.meshing_verbosity, mesh.max_steiner_factor,
-                        npoints, n_init_segments, points,
-                        init_segments, init_segflags,
-                        n_regions, regattr,
-                        &nnode, &nelem, &nseg,
-                        &pcoord, &pconnectivity,
-                        &psegment, &psegflag, &pregattr);
-
-    if (nelem <= 0) {
-        die(EXIT_MESH_TETGEN, "surface triangulation failed");
-    }
-#endif
 }
 
 
@@ -3196,7 +3151,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
         for(int j=0; j<NDIMS; j++)
             coord2[i][j] = coord[n][j];
     }
-    coord.steal_ref(coord2);
+    coord = std::move(coord2);
 
     conn_t conn2(nelem);
     for(int i=0; i<nelem; i++) {
@@ -3206,7 +3161,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             conn2[i][j] = nd_inv[k];
         }
     }
-    connectivity.steal_ref(conn2);
+    connectivity = std::move(conn2);
 
     segment_t seg2(nseg);
     for(int i=0; i<nseg; i++) {
@@ -3215,7 +3170,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             seg2[i][j] = nd_inv[k];
         }
     }
-    segment.steal_ref(seg2);
+    segment = std::move(seg2);
 
     if (regattr != NULL) {
         regattr_t regattr2(nelem);
@@ -3223,7 +3178,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             int n = el_idx[i];
             regattr2[i][0] = (*regattr)[n][0];
         }
-        regattr->steal_ref(regattr2);
+        *regattr = std::move(regattr2);
     }
 
     if (init_elem_size_n != nullptr) {
@@ -3842,8 +3797,7 @@ void create_new_mesh(const Param& param, Variables& var)
         die(EXIT_CONFIG_VALUE);
     }
 
-    if (param.mesh.is_discarding_internal_segments)
-        discard_internal_segments(var.nseg, *var.segment, *var.segflag);
+    discard_internal_segments(var.nseg, *var.segment, *var.segflag);
 
     renumbering_mesh(param, *var.coord, *var.connectivity, *var.segment, var.regattr, var.init_elem_size_n);
 

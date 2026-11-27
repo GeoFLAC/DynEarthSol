@@ -421,13 +421,11 @@ static double rsf_coefficient(double static_friction_angle, const double terms[2
 
 // The material vectors hold nmat entries (get_numbers expands one value
 // for all), so they are indexed directly here, on every element's path.
-void MatProps::weakening_means(int e, double pls,
-                               double &cohesion, double &friction_angle,
-                               double &dilation_angle, double &hardening, int &n) const
+MatProps::Weakening MatProps::weakening_means(int e, double pls) const
 {
     double c, f, d, h;
     c = f = d = h = 0;
-    n = 0;
+    int n = 0;
     for (int m=0; m<nmat; m++) {
         const int k = elemmarkers[e][m];
         if (k == 0) continue;
@@ -453,22 +451,8 @@ void MatProps::weakening_means(int e, double pls,
             d += dilation_angle1[m] * k;
         }
     }
-    if (n == 0) {
-        cohesion = friction_angle = dilation_angle = hardening = 0;
-        return;
-    }
-    cohesion = c / n;
-    friction_angle = f / n;
-    dilation_angle = d / n;
-    hardening = h / n;
-}
-
-void MatProps::plastic_weakening(int e, double pls,
-                                 double &cohesion, double &friction_angle,
-                                 double &dilation_angle, double &hardening) const
-{
-    int n;
-    weakening_means(e, pls, cohesion, friction_angle, dilation_angle, hardening, n);
+    if (n == 0) return Weakening{0, 0, 0, 0, 0};
+    return Weakening{c / n, f / n, d / n, h / n, n};
 }
 
 // The piece's angle slopes and end, by the same branches as weakening_means.
@@ -496,11 +480,14 @@ void MatProps::complete_piece(int e, StrengthPiece& piece) const
     piece.has_slopes = true;
 }
 
-void MatProps::strength_here(int e, double pls, StrengthPiece& piece) const
+MatProps::StrengthPiece MatProps::strength_here(int e, double pls) const
 {
-    int n;
-    weakening_means(e, pls, piece.cohesion, piece.friction, piece.dilation,
-                    piece.dcohesion, n);
+    StrengthPiece piece;
+    const Weakening w = weakening_means(e, pls);
+    piece.cohesion = w.cohesion;
+    piece.friction = w.friction;
+    piece.dilation = w.dilation;
+    piece.dcohesion = w.hardening;
     piece.pls = pls;
     piece.rsf = 0;
     piece.rsf_terms[0] = piece.rsf_terms[1] = 0;
@@ -510,12 +497,14 @@ void MatProps::strength_here(int e, double pls, StrengthPiece& piece) const
     piece.dfriction = piece.ddilation = 0;
     piece.has_slopes = false;
     finish_piece(piece);
+    return piece;
 }
 
-void MatProps::strength_piece(int e, double pls, StrengthPiece& piece) const
+MatProps::StrengthPiece MatProps::strength_piece(int e, double pls) const
 {
-    strength_here(e, pls, piece);
+    StrengthPiece piece = strength_here(e, pls);
     complete_piece(e, piece);
+    return piece;
 }
 
 // The angle factors and the strength at the start of the piece.
@@ -523,9 +512,8 @@ void MatProps::finish_piece(StrengthPiece& piece) const
 {
     double phi = piece.friction;
     if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    angle_factors(phi, piece.dilation, piece.rsf != 0, piece.factors);
-    strength_from(piece.cohesion, piece.factors,
-                  piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+    piece.factors = angle_factors(phi, piece.dilation, piece.rsf != 0);
+    piece.strength = strength_from(piece.cohesion, piece.factors);
 }
 
 void MatProps::rsf_terms(int e, double slip_rate, double state_variable, int state_model,
@@ -566,44 +554,42 @@ void MatProps::rsf_terms(int e, double slip_rate, double state_variable, int sta
     }
 }
 
-void MatProps::plastic_weakening_rsf(int e, double pls,
-                                 double &cohesion, double &dynamic_friction_angle,
-                                 double &dilation_angle, double &hardening, double &slip_rate,
-                                 double& dyn_fric_coeff, double& state_variable,
-                                 int state_model, double dt, bool frozen_history) const
+MatProps::Weakening MatProps::plastic_weakening_rsf(int e, double pls, double slip_rate,
+                                                    double& dyn_fric_coeff, double state_variable,
+                                                    int state_model, bool frozen_history) const
 {
-    (void) dt;
-
-    double static_friction_angle;
-    int n;
-    weakening_means(e, pls, cohesion, static_friction_angle, dilation_angle, hardening, n);
-    if (n == 0) {
-        dynamic_friction_angle = 0.0;
+    Weakening w = weakening_means(e, pls);
+    if (w.n == 0) {
+        w.friction = 0.0;
         dyn_fric_coeff = 0.0;
-        return;
+        return w;
     }
 
     if (frozen_history) {
         // Initialization solves an instantaneous skeleton correction. Its
         // numerical correction velocity is not a physical RSF slip rate.
-        dynamic_friction_angle = std::atan(dyn_fric_coeff) / DEG2RAD;
-        return;
+        w.friction = std::atan(dyn_fric_coeff) / DEG2RAD;
+        return w;
     }
 
     double terms[2];
     rsf_terms(e, slip_rate, state_variable, state_model, terms);
-    const double mu_d = rsf_coefficient(static_friction_angle, terms);
-    dynamic_friction_angle = std::atan(mu_d) / DEG2RAD;
+    const double mu_d = rsf_coefficient(w.friction, terms);
+    w.friction = std::atan(mu_d) / DEG2RAD;
     dyn_fric_coeff = mu_d;
+    return w;
 }
 
-void MatProps::rsf_strength_piece(int e, double pls, double slip_rate, double state_variable,
-                                  double dyn_fric_coeff, int state_model, bool frozen_history,
-                                  StrengthPiece& piece) const
+MatProps::StrengthPiece MatProps::rsf_strength_piece(int e, double pls, double slip_rate,
+                                                     double state_variable, double dyn_fric_coeff,
+                                                     int state_model, bool frozen_history) const
 {
-    int n;
-    weakening_means(e, pls, piece.cohesion, piece.friction, piece.dilation,
-                    piece.dcohesion, n);
+    StrengthPiece piece;
+    const Weakening w = weakening_means(e, pls);
+    piece.cohesion = w.cohesion;
+    piece.friction = w.friction;
+    piece.dilation = w.dilation;
+    piece.dcohesion = w.hardening;
     piece.pls = pls;
     piece.has_slopes = false;
     complete_piece(e, piece);
@@ -618,28 +604,23 @@ void MatProps::rsf_strength_piece(int e, double pls, double slip_rate, double st
         rsf_terms(e, slip_rate, state_variable, state_model, piece.rsf_terms);
     }
     finish_piece(piece);
+    return piece;
 }
 
-void MatProps::piece_point(const StrengthPiece& piece, double offset,
-                           double& cohesion, AngleFactors& factors) const
+MatProps::PiecePoint MatProps::piece_point(const StrengthPiece& piece, double offset) const
 {
-    cohesion = piece.cohesion + piece.dcohesion*offset;
-    if (!piece.angles_change()) {
-        factors = piece.factors;
-        return;
-    }
+    const double cohesion = piece.cohesion + piece.dcohesion*offset;
+    if (!piece.angles_change()) return PiecePoint{cohesion, piece.factors};
     double phi = piece.friction + piece.dfriction*offset;
     if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    angle_factors(phi, piece.dilation + piece.ddilation*offset, piece.rsf != 0, factors);
+    return PiecePoint{cohesion,
+                      angle_factors(phi, piece.dilation + piece.ddilation*offset, piece.rsf != 0)};
 }
 
-void MatProps::piece_strength(const StrengthPiece& piece, double offset,
-                              double& amc, double& anphi, double& anpsi, double& ten_max) const
+MatProps::Strength MatProps::piece_strength(const StrengthPiece& piece, double offset) const
 {
-    double cohesion;
-    AngleFactors factors;
-    piece_point(piece, offset, cohesion, factors);
-    strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
+    const PiecePoint p = piece_point(piece, offset);
+    return strength_from(p.cohesion, p.factors);
 }
 
 // Cohesion changes linearly along a piece and so does the friction angle, which the
@@ -656,13 +637,13 @@ void MatProps::piece_strength(const StrengthPiece& piece, double offset,
 // interpolate sin and tan linearly, within h^2/8 of sin and h^2 tan (1 + tan^2)/4 of tan for
 // a table step h, and anphi, sqrt_anphi and cohesion/tan_phi follow them through their
 // derivatives, bounded here twice over.
-void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double y,
-                                    StrengthRange& range) const
+MatProps::StrengthRange MatProps::piece_strength_range(const StrengthPiece& piece,
+                                                       double x, double y) const
 {
-    double c[2];
-    AngleFactors f[2];
-    piece_point(piece, x, c[0], f[0]);
-    piece_point(piece, y, c[1], f[1]);
+    StrengthRange range;
+    const PiecePoint px = piece_point(piece, x), py = piece_point(piece, y);
+    const double c[2] = {px.cohesion, py.cohesion};
+    const AngleFactors f[2] = {px.factors, py.factors};
     const double c_lo = std::min(c[0], c[1]), c_hi = std::max(c[0], c[1]);
     const double t_lo = std::min(f[0].tan_phi, f[1].tan_phi);
     const double t_hi = std::max(f[0].tan_phi, f[1].tan_phi);
@@ -678,7 +659,7 @@ void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double
 
     range.curvature_amc = range.curvature_anphi = range.curvature_ten = -1;
     range.error_amc = range.error_anphi = range.error_ten = 0;
-    if (piece.rsf == 1 && piece.dfriction != 0) return;
+    if (piece.rsf == 1 && piece.dfriction != 0) return range;
     const double dphi = (piece.rsf == 2 ? 0 : piece.dfriction) * DEG2RAD;
     const double dc = std::fabs(piece.dcohesion * dphi);
     range.curvature_anphi = 0.5 * dphi * dphi * (1 + u_hi * u_hi) * (1 + 3 * u_hi * u_hi);
@@ -688,7 +669,7 @@ void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double
         range.curvature_ten = (1 + w * w) * 2 * (dc + c_hi * dphi * dphi * w);
     }
 #ifdef NPROF
-    if (piece.rsf != 0) return;
+    if (piece.rsf != 0) return range;
     const double sin_error = SIN_XDELTA * SIN_XDELTA / 8;
     const double tan_error = TAN_XDELTA * TAN_XDELTA * t_hi * (1 + t_hi * t_hi) / 4;
     // d anphi/d sin = (anphi + 1)^2/2, d sqrt_anphi = d anphi/(2 sqrt_anphi).
@@ -696,6 +677,7 @@ void MatProps::piece_strength_range(const StrengthPiece& piece, double x, double
     range.error_amc = 2 * c_hi * range.error_anphi / u_lo;
     if (t_lo > 0) range.error_ten = 2 * c_hi * tan_error / (t_lo * t_lo);
 #endif
+    return range;
 }
 
 void MatProps::update_state_variable(int e, double slip_rate, double& state_variable,
@@ -773,76 +755,59 @@ void MatProps::update_state_variable(int e, double slip_rate, double& state_vari
     }
 }
 
-void MatProps::plastic_props(int e, double pls,
-                             double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max) const
+MatProps::PlasticProps MatProps::plastic_props(int e, double pls) const
 {
-    double cohesion, phi, psi;
-
-    plastic_weakening(e, pls, cohesion, phi, psi, hardn);
-    ep_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
+    const Weakening w = weakening_means(e, pls);
+    return PlasticProps{derived_strength(w.cohesion, w.friction, w.dilation, false), w.hardening};
 }
 
-void MatProps::ep_derived(double cohesion, double phi, double psi,
-                          double& amc, double& anphi, double& anpsi, double& ten_max) const
+MatProps::Strength MatProps::derived_strength(double cohesion, double phi, double psi,
+                                              bool rsf) const
 {
-    AngleFactors factors;
-    angle_factors(phi, psi, false, factors);
-    strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
+    return strength_from(cohesion, angle_factors(phi, psi, rsf));
 }
 
-void MatProps::angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const
+MatProps::AngleFactors MatProps::angle_factors(double phi, double psi, bool rsf) const
 {
     const double sphi = rsf ? std::sin(phi * DEG2RAD) : sin_safe(sin_table,phi * DEG2RAD);
     const double spsi = rsf ? std::sin(psi * DEG2RAD) : sin_safe(sin_table,psi * DEG2RAD);
 
+    AngleFactors factors;
     factors.anphi = (1 + sphi) / (1 - sphi);
     factors.anpsi = (1 + spsi) / (1 - spsi);
     factors.sqrt_anphi = std::sqrt(factors.anphi);
     factors.zero_friction = phi == 0;
     factors.tan_phi = factors.zero_friction ? 0 :
         rsf ? std::tan(phi*DEG2RAD) : tan_safe(tan_table,phi*DEG2RAD);
+    return factors;
 }
 
-void MatProps::strength_from(double cohesion, const AngleFactors& factors,
-                             double& amc, double& anphi, double& anpsi, double& ten_max) const
+MatProps::Strength MatProps::strength_from(double cohesion, const AngleFactors& factors) const
 {
-    anphi = factors.anphi;
-    anpsi = factors.anpsi;
-    amc = 2 * cohesion * factors.sqrt_anphi;
-    ten_max = factors.zero_friction ? tension_max : std::min(tension_max, cohesion/factors.tan_phi);
+    Strength st;
+    st.anphi = factors.anphi;
+    st.anpsi = factors.anpsi;
+    st.amc = 2 * cohesion * factors.sqrt_anphi;
+    st.ten_max = factors.zero_friction ? tension_max : std::min(tension_max, cohesion/factors.tan_phi);
+    return st;
 }
 
-void MatProps::plastic_props_rsf(int e, double pls,
-                             double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max, double& slip_rate,
-                             double& dyn_fric_coeff, double& state_variable,
-                             double dt, int state_model, bool frozen_history) const
+MatProps::PlasticProps MatProps::plastic_props_rsf(int e, double pls, double slip_rate,
+                                                   double& dyn_fric_coeff, double& state_variable,
+                                                   double dt, int state_model,
+                                                   bool frozen_history) const
 {
-    double cohesion, phi, psi;
-
     if (!frozen_history) update_state_variable(e, slip_rate, state_variable, dt, state_model);
-    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
-                          dyn_fric_coeff, state_variable, state_model, dt, frozen_history);
-    rsf_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
-}
-
-void MatProps::rsf_derived(double cohesion, double phi, double psi,
-                           double& amc, double& anphi, double& anpsi, double& ten_max) const
-{
-    AngleFactors factors;
-    angle_factors(phi, psi, true, factors);
-    strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
+    const Weakening w = plastic_weakening_rsf(e, pls, slip_rate, dyn_fric_coeff, state_variable,
+                                              state_model, frozen_history);
+    return PlasticProps{derived_strength(w.cohesion, w.friction, w.dilation, true), w.hardening};
 }
 
 void MatProps::rsf_friction_from_state(int e, double pls, double slip_rate,
                                        double state_variable, double& dyn_fric_coeff,
                                        int state_model) const
 {
-    double cohesion, phi, psi, hardn;
-    double theta = state_variable;
-    plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
-                          dyn_fric_coeff, theta, state_model, 0.0);
+    plastic_weakening_rsf(e, pls, slip_rate, dyn_fric_coeff, state_variable, state_model);
 }
 
 

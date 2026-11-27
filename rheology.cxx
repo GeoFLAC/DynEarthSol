@@ -654,11 +654,13 @@ static bool finite3(const double p[3])
 // Rate-and-state strength (rsf) evaluates the same
 // piecewise cohesion, friction, dilation and cap law with this step's slip
 // rate, state and friction coefficient held fixed.
+using Strength = MatProps::Strength;
+
 struct StrengthLaw {
     const MatProps* mat;
     int e;
     double pls;
-    double amc, anphi, anpsi, ten_max;   // at delta = 0
+    Strength strength;   // at delta = 0
     bool rsf;
     double slip_rate, state_variable, dyn_fric_coeff;   // rsf only
     int state_model;
@@ -667,10 +669,6 @@ struct StrengthLaw {
     // control.iterative_return_mapping_option 0: friction and dilation stay at
     // their values at pls, and only cohesion follows the increment.
     bool start_angles;
-};
-
-struct Strength {
-    double amc, anphi, anpsi, ten_max;
 };
 
 // The strength law along this step's plastic increment delta, one linear
@@ -705,7 +703,7 @@ static void hold_start_angles(StrengthCurve& curve)
         piece.factors = curve.start_factors;
     }
     piece.dfriction = piece.ddilation = 0;
-    curve.law.mat->piece_strength(piece, 0, piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+    piece.strength = curve.law.mat->piece_strength(piece, 0);
 }
 
 #pragma acc routine seq
@@ -713,11 +711,11 @@ static void prepare_piece(StrengthCurve& curve, double from)
 {
     const StrengthLaw& law = curve.law;
     if (law.rsf)
-        law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate, law.state_variable,
-                                    law.dyn_fric_coeff, law.state_model, law.frozen_history,
-                                    curve.piece);
+        curve.piece = law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate,
+                                                  law.state_variable, law.dyn_fric_coeff,
+                                                  law.state_model, law.frozen_history);
     else
-        law.mat->strength_piece(law.e, law.pls+from, curve.piece);
+        curve.piece = law.mat->strength_piece(law.e, law.pls+from);
     curve.from = from;
     if (law.start_angles) hold_start_angles(curve);
 }
@@ -741,10 +739,7 @@ static StrengthCurve start_curve(const StrengthLaw& law)
 #pragma acc routine seq
 static Strength strength_at(const StrengthCurve& curve, double delta)
 {
-    Strength r;
-    curve.law.mat->piece_strength(curve.piece, delta - curve.from,
-                                  r.amc, r.anphi, r.anpsi, r.ten_max);
-    return r;
+    return curve.law.mat->piece_strength(curve.piece, delta - curve.from);
 }
 
 static constexpr double no_break = std::numeric_limits<double>::max();
@@ -817,8 +812,8 @@ static bool closed_form_consistent(const StrengthCurve& curve, const double p[3]
     const Strength end = strength_at(curve, depls);
     const double tolerance = return_tolerance(p, end.amc, nd);
     const double top = p[nd-1];
-    const bool on_cap = top >= law.ten_max - tolerance;
-    return end.anphi == law.anphi && end.anpsi == law.anpsi &&
+    const bool on_cap = top >= law.strength.ten_max - tolerance;
+    return end.anphi == law.strength.anphi && end.anpsi == law.strength.anpsi &&
         top <= end.ten_max + tolerance &&
         (!on_cap || top >= end.ten_max - tolerance);
 }
@@ -1144,8 +1139,8 @@ static bool find_turn(const double trial[3], double a1, double a2, const Strengt
 static void violation_range(const double trial[3], const StrengthCurve& curve, int nd,
                             double x, double y, double v[2], double tol[2])
 {
-    MatProps::StrengthRange range;
-    curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, range);
+    const MatProps::StrengthRange range =
+        curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from);
     const Strength ends[2] = {strength_at(curve, x), strength_at(curve, y)};
     const double chord = 0.125*(y - x)*(y - x);
     v[0] = v[1] = -std::numeric_limits<double>::max();
@@ -2178,12 +2173,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double shearm = var.mat->shearm(e);
                 // The piece of the weakening law at pls gives the strength
                 // here and is reused by the plastic returns.
-                MatProps::StrengthPiece piece;
-                var.mat->strength_here(e, plstrain[e], piece);
-                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
-                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
+                const MatProps::StrengthPiece piece = var.mat->strength_here(e, plstrain[e]);
+                const double amc = piece.strength.amc, anphi = piece.strength.anphi;
+                const double anpsi = piece.strength.anpsi, ten_max = piece.strength.ten_max;
+                const double hardn = piece.dcohesion;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         piece.strength, false, 0, 0, 0, 0, false,
                                          &piece, start_angles};
                 int failure_mode;
                 if (var.mat->is_plane_strain) {
@@ -2221,12 +2216,12 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
                 // The piece of the weakening law at pls gives the strength
                 // here and is reused by the plastic returns.
-                MatProps::StrengthPiece piece;
-                var.mat->strength_here(e, plstrain[e], piece);
-                const double amc = piece.amc, anphi = piece.anphi, anpsi = piece.anpsi;
-                const double hardn = piece.dcohesion, ten_max = piece.ten_max;
+                const MatProps::StrengthPiece piece = var.mat->strength_here(e, plstrain[e]);
+                const double amc = piece.strength.amc, anphi = piece.strength.anphi;
+                const double anpsi = piece.strength.anpsi, ten_max = piece.strength.ten_max;
+                const double hardn = piece.dcohesion;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, false, 0, 0, 0, 0, false,
+                                         piece.strength, false, 0, 0, 0, 0, false,
                                          &piece, start_angles};
                 // stress due to elasto-plastic rheology
                 double sp[NSTR], spyy;
@@ -2282,13 +2277,16 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     continuum_rate, s, vx, vy, slip_rate);
 #endif
         
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate,
-                                       dyn_fric_coeff[e], state_variable[e],
-                                       var.dt, param.mat.state_var_model, initial_equilibrium);
+                const MatProps::PlasticProps p =
+                    var.mat->plastic_props_rsf(e, plstrain[e], slip_rate,
+                                               dyn_fric_coeff[e], state_variable[e],
+                                               var.dt, param.mat.state_var_model,
+                                               initial_equilibrium);
+                const double amc = p.strength.amc, anphi = p.strength.anphi;
+                const double anpsi = p.strength.anpsi, ten_max = p.strength.ten_max;
+                const double hardn = p.hardn;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, true, slip_rate,
+                                         p.strength, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
                                          param.mat.state_var_model, initial_equilibrium, nullptr,
                                          start_angles};
@@ -2347,13 +2345,16 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     continuum_rate, s, vx, vy, slip_rate);
 #endif
 
-                double amc, anphi, anpsi, hardn, ten_max;
-                var.mat->plastic_props_rsf(e, plstrain[e],
-                                       amc, anphi, anpsi, hardn, ten_max, slip_rate,
-                                       dyn_fric_coeff[e], state_variable[e],
-                                       var.dt, param.mat.state_var_model, initial_equilibrium);
+                const MatProps::PlasticProps p =
+                    var.mat->plastic_props_rsf(e, plstrain[e], slip_rate,
+                                               dyn_fric_coeff[e], state_variable[e],
+                                               var.dt, param.mat.state_var_model,
+                                               initial_equilibrium);
+                const double amc = p.strength.amc, anphi = p.strength.anphi;
+                const double anpsi = p.strength.anpsi, ten_max = p.strength.ten_max;
+                const double hardn = p.hardn;
                 const StrengthLaw law = {var.mat, e, plstrain[e],
-                                         amc, anphi, anpsi, ten_max, true, slip_rate,
+                                         p.strength, true, slip_rate,
                                          state_variable[e], dyn_fric_coeff[e],
                                          param.mat.state_var_model, initial_equilibrium, nullptr,
                                          start_angles};

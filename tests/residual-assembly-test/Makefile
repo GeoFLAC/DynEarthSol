@@ -31,7 +31,7 @@ ifeq ($(backend),acc)
 # NVHPC retains device registrations even for otherwise unused functions.
 # Reuse the production dependency graph instead of substituting test stubs.
 check:
-	env -u MAKEFLAGS -u MFLAGS mode=$(mode) $(MAKE) -C $(ROOT) -f Makefile -f tests/residual-assembly-test/acc.mk ndims=$(ndims) openacc=1 hdf5=0 GPU_CC=$(GPU_CC) residual-assembly-check
+	env -u MAKEFLAGS -u MFLAGS mode=$(mode) $(MAKE) -C $(ROOT) -f Makefile -f tests/residual-assembly-test/acc.mk ndims=$(ndims) openacc=1 GPU_CC=$(GPU_CC) residual-assembly-check
 else
 .DEFAULT_GOAL := $(TARGET)
 $(ROOT)/3x3-C/lib3x3.a: $(wildcard $(ROOT)/3x3-C/*.c $(ROOT)/3x3-C/*.h)
