@@ -36,16 +36,13 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libhdf5-serial-dev make pkg-config
     - name: make debug 2d
-      run: make clean ndims=2; make ndims=2 opt=0 openmp=0 hdf5=0
+      run: make clean ndims=2; make ndims=2 opt=0 openmp=0
     - name: make debug 3d
-      run: make clean ndims=3; make ndims=3 opt=0 openmp=0 hdf5=0
+      run: make clean ndims=3; make ndims=3 opt=0 openmp=0
     - name: make 2d
-      run: make clean ndims=2; make ndims=2 opt=2 openmp=1 hdf5=0
+      run: make clean ndims=2; make ndims=2 opt=2 openmp=1
     - name: make 3d
-      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=0
-    - name: make 3d hdf5
-      # No HDF5_*_DIR: the Makefile finds the paths itself.
-      run: make clean ndims=3; make ndims=3 opt=2 openmp=1 hdf5=1
+      run: make clean ndims=3; make ndims=3 opt=2 openmp=1
     # - name: make check
     #   run: make check
     # - name: make distcheck

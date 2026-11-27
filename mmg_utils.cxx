@@ -11,8 +11,6 @@
 #include "utils.hpp"
 #include "mmg_utils.hpp"
 
-#ifdef USEMMG
-
 #ifdef THREED
 #include "mmg/mmg3d/libmmg3d.h"
 #else
@@ -58,13 +56,10 @@ void dedup_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
 }
 
 // Drop ref=0 facets. After dedup_facets every boundary facet carries a BOUND* ref, so a ref=0 facet
-// is interior: on output, a required element's echo or, with elem_ref (2D), an edge between two
-// references; on input, an internal segment of the initial mesh (refined-zone box, .poly facet).
-// MMG needs neither as a constraint (it drops a ref=0 facet between equal references and derives
-// one between two references from elem_ref), so this never changes what MMG builds. It keeps
-// var.segment boundary-only, which collapse_short_boundary_segments_2d, check_mesh_tangle and
-// mmg_adapt's 2D req_edges append rely on (hence validate_parameters rejects
-// is_discarding_internal_segments = no under MMG).
+// is interior: a required element's echo, an edge between two references, or an internal segment
+// of the initial mesh. MMG needs none as a constraint (elem_ref gives it the edges between two
+// references), so this never changes what MMG builds. It keeps var.segment boundary-only, as
+// collapse_short_boundary_segments_2d, check_mesh_tangle and mmg_adapt's 2D req_edges need.
 void drop_unflagged_facets(int &nseg, std::vector<int> &seg, std::vector<int> &segflag)
 {
     int ns = 0;
@@ -367,5 +362,3 @@ void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out)
 }
 
 #undef MMG_OK
-
-#endif // USEMMG

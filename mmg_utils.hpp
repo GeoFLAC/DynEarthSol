@@ -1,8 +1,6 @@
 #ifndef DYNEARTHSOL3D_MMG_UTILS_HPP
 #define DYNEARTHSOL3D_MMG_UTILS_HPP
 
-#ifdef USEMMG
-
 #include <vector>
 #include "parameters.hpp"
 
@@ -54,5 +52,4 @@ struct MMGOutput {
 // with EXIT_MESH_MMG on any MMG failure, except MMG5_LOWFAILURE under tolerate_low_failure.
 void mmg_adapt(const Mesh &mesh, const MMGInput &in, MMGOutput &out);
 
-#endif // USEMMG
 #endif

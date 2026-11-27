@@ -121,6 +121,11 @@ For a release, the full auto-generated list of merged pull requests is in its
   and `build.sh` reads a layer cache that CI publishes on ghcr.io, so it does
   not rebuild the compilers and the conda environment, unless that cache was
   built from another `Dockerfile` or `ubuntu:22.04` ([#119]).
+- `2vtk-legacy.py` converts des-binary frames, and `utils/convert_checkpoint.py`
+  turns a des-binary checkpoint, or one from a build without MMG, into a
+  `.vtkhdf` checkpoint that restarts ([#145]).
+- A CI workflow builds DES at the last five merges to master and checks that
+  the current tools and DES still convert and restart their output ([#145]).
 
 ### Changed
 
@@ -141,6 +146,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   normal value at its edge with an `n` boundary, keeps its velocity.
   Checkpoints record the velocity conditions in force at their time, tractions
   aside; older ones apply them everywhere, as before ([#146]).
+- For code built on DynEarthSol: the strength functions of `MatProps`
+  (`plastic_props`, `plastic_props_rsf`, `piece_strength`, `strength_here`,
+  `strength_piece`, `rsf_strength_piece`, `piece_strength_range`) return a
+  `MatProps::Strength`, a `PlasticProps`, the `StrengthPiece` or the
+  `StrengthRange` instead of filling `double&` arguments, and `PlasticProps` and
+  `StrengthPiece` hold their strength in a `Strength` member. `Array2D` no longer
+  has `steal_ref` (use a move), `at`, `reset`, `nullify`, the `view` overloads
+  (use `view_const`), `ConstAccessor::subset` or the `element` alias. Results are
+  unchanged ([#150]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
@@ -199,6 +213,22 @@ For a release, the full auto-generated list of merged pull requests is in its
   Makefile are removed; build with g++ 8 or newer, nvc++ 25.7 or newer, or
   clang++ 5 or newer. A build that overrides the standard with one older than
   C++17 now stops at compile time ([#125]).
+- **Breaking.** MMG (built with cmake) and HDF5 are required; the make options
+  `usemmg` and `hdf5` are retired ([#145]).
+- **Breaking.** A build that had no MMG now remeshes unstructured meshes with
+  MMG, so its results change; its checkpoints restart only after
+  `utils/convert_checkpoint.py` ([#145]).
+- **Breaking.** `remeshing_option` 2, 10 and 11 and the keys
+  `is_discarding_internal_segments`, `meshing_sediment` and `sediment_size`
+  stop at startup: use 0 for 10 and 1 for 11, and delete the keys ([#145]).
+- **Breaking.** DES writes and reads only `.vtkhdf` output, and `Dynearthsol.py`
+  and `2vtk.py` read only `.vtkhdf` frames; des-binary frames convert with
+  `2vtk-legacy.py`, and des-binary checkpoints restart after
+  `utils/convert_checkpoint.py` ([#145]).
+- **Breaking.** `HDF5_INCLUDE_DIR` and `HDF5_LIB_DIR` must be set together
+  ([#145]).
+- On Linux, `make check-deps` stops when libexodus or GoSPL's h5py loads a
+  `libhdf5` other than the one DES links ([#145]).
 - A GoSPL step that fails stops the run with exit code 53 instead of skipping
   that coupling, and GoSPL's diffusion solvers no longer fail on a round-off
   overshoot of the coupling interval ("bad hmax", PETSc error 77).
@@ -371,6 +401,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - `make usemmg=1` rebuilds an `mmg/build` configured on another machine (a Mac
   build copied into a container) instead of failing to link its library; a
   failed `./build.sh` keeps the previous image instead of deleting it ([#119]).
+- With `usegospl=1` on Linux, a pip wheel of h5py no longer fails at import
+  ([#145]).
 
 - Plane-strain and 3D plastic shear returns handle two active Mohr-Coulomb
   faces when a single-face correction crosses the principal-stress order.
@@ -606,4 +638,6 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
 [#146]: https://github.com/GeoFLAC/DynEarthSol/pull/146
+[#150]: https://github.com/GeoFLAC/DynEarthSol/pull/150

@@ -3,185 +3,242 @@
 
 #include "mpi_acc.hpp"
 
-#include <vector>
 #include <algorithm>
+#include <cstddef>
 #include <cstring>  // for memcpy
-#include <utility>  // for std::move
+#include <type_traits>
+#include <vector>
 
+// n rows of N components. With SOA, component d of row i is at a_[d*n_ + i]; without, at
+// a_[i*N + d]. The accessors hide the layout; data() does not, and the MPI halo packing reads
+// it as SoA columns.
 template <typename T, int N>
 class Array2D {
 
-    T* a_;
-    int n_;
+#ifdef SOA
+    static constexpr bool soa = true;
+#else
+    static constexpr bool soa = false;
+#endif
+
+    T* a_ = nullptr;
+    int n_ = 0;
+
+    // A view of row i: where its first component is, and how far apart its components are.
+    T* row_start(std::size_t i) const { return soa ? a_ + i : a_ + i * N; }
+    int row_stride() const { return soa ? n_ : 1; }
 
 public:
-    // 
-    // Accessor
-    // 
+    //
+    // Accessors. A row accessor is a view of one row. The two are separate structs, not a
+    // shared base: OpenACC device code built by nvc++ reads out of bounds through the
+    // inherited members.
+    //
+    // Assigning to an Accessor copies the values into the row it views.
     struct Accessor {
-        T* ptr_;      // pointer to the start of the array (e.g., &a_[0])
-        int stride_;  // stride = n_ (total elements) for SoA layout
+        T* ptr_;      // the row's first component
+        int stride_;  // distance between its components
 
-        // Declared copy ctor ends aggregate init in C++20, so Accessor{p, s} needs this ctor
         Accessor(T* p, int s) : ptr_(p), stride_(s) {}
         Accessor(const Accessor&) = default;  // copies the view; operator= copies the values
 
-        T& operator[](const int dim) const {
-            return ptr_[dim * stride_];
-        }
+        T& operator[](int dim) const { return ptr_[dim * stride_]; }
 
         Accessor& operator=(const T& val) {
-            for (int d = 0; d < N; ++d) {
-                (*this)[d] = val;
-            }
+            for (int d = 0; d < N; ++d) (*this)[d] = val;
             return *this;
         }
 
         Accessor& operator=(const Accessor& other) {
-            if (this == &other) return *this;
-            for (int d = 0; d < N; ++d) {
-                (*this)[d] = other[d];
-            }
+            if (this != &other) copy_from(other);
             return *this;
         }
 
         void copy_to(T* dest) const {
-            for (int d = 0; d < N; ++d) {
-                dest[d] = ptr_[d * stride_];
-            }
+            for (int d = 0; d < N; ++d) dest[d] = (*this)[d];
         }
 
         void copy_from(const T* src) {
-            for (int d = 0; d < N; ++d) {
-                ptr_[d * stride_] = src[d];
-            }
+            for (int d = 0; d < N; ++d) (*this)[d] = src[d];
         }
 
         template <typename OtherAccessor>
         void copy_from(const OtherAccessor& other) {
-            for (int d = 0; d < N; ++d) {
-                (*this)[d] = other[d];
-            }
-        }        
+            for (int d = 0; d < N; ++d) (*this)[d] = other[d];
+        }
     };
 
+    // Assigning to a ConstAccessor points it at another row.
     struct ConstAccessor {
         const T* ptr_;
         int stride_;
 
         ConstAccessor(const T* p, int s) : ptr_(p), stride_(s) {}
+        ConstAccessor(const Accessor& other) : ptr_(other.ptr_), stride_(other.stride_) {}
 
-        ConstAccessor(const Accessor& other) 
-            : ptr_(other.ptr_), stride_(other.stride_) 
-        {}
-
-        struct ConstStridedLocalIndirect {
-            const T* ptr_;
-            int stride_;
-            const int* indices_;
-            const T& operator[](int k) const {
-                return ptr_[indices_[k] * stride_];
-            }
-        };
-        
-        ConstStridedLocalIndirect subset(const int* indices) const {
-            return ConstStridedLocalIndirect{ptr_, stride_, indices};
-        }
-
-        const T& operator[](int dim) const {
-            return ptr_[dim * stride_];
-        }
+        const T& operator[](int dim) const { return ptr_[dim * stride_]; }
 
         void copy_to(T* dest) const {
-            for (int d = 0; d < N; ++d) {
-                dest[d] = ptr_[d * stride_];
-            }
+            for (int d = 0; d < N; ++d) dest[d] = (*this)[d];
         }
     };
 
-    //
-    // Component accessor — access all elements for one dimension
-    //
-    struct ComponentAccessor {
-        T*  ptr_;    // a_[d*n_] (SOA) or a_[d] (AoS)
-        int stride_; // 1 (SOA) or N (AoS)
+    // One component of every row.
+    template <typename U>
+    struct Component {
+        U*  ptr_;    // component d of row 0
+        int stride_; // distance between rows
         int n_;
 
-        T& operator[](int i) const { return ptr_[i * stride_]; }
+        U& operator[](int i) const { return ptr_[i * stride_]; }
         int size() const { return n_; }
     };
+    using ComponentAccessor = Component<T>;
+    using ConstComponentAccessor = Component<const T>;
 
-    struct ConstComponentAccessor {
-        const T* ptr_;
-        int stride_;
-        int n_;
-
-        const T& operator[](int i) const { return ptr_[i * stride_]; }
-        int size() const { return n_; }
-    };
-
-    //
-    // View
-    //
+    // The rows named by an index list, such as the nodes of an element.
     struct ConstIndirectAccessor {
-        const Array2D<T, N>* source_array;
+        const Array2D* source_array;
         const int* index_ptr;
         int index_stride;
 
         ConstAccessor operator[](int k) const {
-            int real_idx = index_ptr[k * index_stride];
-            return (*source_array)[real_idx];
+            return (*source_array)[index_ptr[k * index_stride]];
         }
     };
 
-    struct IndirectAccessor {
-        Array2D<T, N>* source_array;
-        const int* index_ptr;
-        int index_stride;
-
-        Accessor operator[](int k) const {
-            int real_idx = index_ptr[k * index_stride];
-            return (*source_array)[real_idx];
-        }
-    };
-
-    IndirectAccessor view(int* indices) {
-        return IndirectAccessor{ this, indices, 1 };
-    }
-
-    IndirectAccessor view(const int* indices) {
-        return IndirectAccessor{ this, indices, 1 };
-    }
-
-    template <typename IntAccessor>
-    IndirectAccessor view(IntAccessor indices_acc) {
-        return IndirectAccessor{ this, indices_acc.ptr_, indices_acc.stride_ };
-    }
-
-    ConstIndirectAccessor view(const int* indices) const {
-        return ConstIndirectAccessor{ this, indices, 1 };
-    }
-    
-    template <typename IntAccessor>
-    ConstIndirectAccessor view(IntAccessor indices_acc) const {
-        return ConstIndirectAccessor{ this, indices_acc.ptr_, indices_acc.stride_ };
-    }
-
-    ConstIndirectAccessor view_const(int* indices) const {
-        return ConstIndirectAccessor{ this, indices, 1 };
-    }
-
-    ConstIndirectAccessor view_const(const int* indices) const {
-        return ConstIndirectAccessor{ this, indices, 1 };
-    }
-
-    template <typename IntAccessor>
-    ConstIndirectAccessor view_const(IntAccessor indices_acc) const {
-        return ConstIndirectAccessor{ this, indices_acc.ptr_, indices_acc.stride_ };
+    // indices is a pointer to row numbers, or an accessor of them (a row of conn_t).
+    template <typename Indices>
+    ConstIndirectAccessor view_const(Indices indices) const {
+        if constexpr (std::is_pointer_v<Indices>)
+            return ConstIndirectAccessor{ this, indices, 1 };
+        else
+            return ConstIndirectAccessor{ this, indices.ptr_, indices.stride_ };
     }
 
     //
-    // I/O and Transition Helpers
+    // constructors & destructor
+    //
+    Array2D() = default;
+
+    explicit Array2D(int size) : a_(size > 0 ? new T[N * size] : nullptr), n_(size) {}
+
+    Array2D(int size, const T& val) : Array2D(size) {
+        if (a_) std::fill_n(a_, N * n_, val);
+    }
+
+    // From row-major (AoS) data; null aos_data gives zeros.
+    Array2D(const T* aos_data, int size) : Array2D(size) {
+        if (!a_) return;
+        if (aos_data == nullptr) {
+            std::fill_n(a_, N * n_, T(0));
+        } else if constexpr (soa) {
+#ifndef ACC
+            #pragma omp parallel for default(none) shared(aos_data) \
+                collapse(2) if(n_ > 10000)
+#endif
+            #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
+            for (int i = 0; i < n_; ++i) {
+                for (int d = 0; d < N; ++d) {
+                    a_[d * n_ + i] = aos_data[i * N + d];
+                }
+            }
+        } else {
+            std::memcpy(a_, aos_data, sizeof(T) * N * n_);
+        }
+    }
+
+    Array2D(const Array2D& src) : Array2D(int(src.size())) {
+        if (a_) std::memcpy(a_, src.data(), sizeof(T) * N * n_);
+    }
+
+    // A move takes the buffer and leaves the source empty.
+    Array2D(Array2D&& src) noexcept : a_(src.a_), n_(src.n_) {
+        src.a_ = nullptr;
+        src.n_ = 0;
+    }
+
+    Array2D& operator=(Array2D&& rhs) noexcept {
+        if (this != &rhs) {
+            delete [] a_;
+            a_ = rhs.a_;
+            n_ = rhs.n_;
+            rhs.a_ = nullptr;
+            rhs.n_ = 0;
+        }
+        return *this;
+    }
+
+    // A copy is explicit: construct one. Assignment would hide an O(n) copy.
+    Array2D& operator=(const Array2D&) = delete;
+
+    ~Array2D() { delete [] a_; }
+
+    //
+    // methods
+    //
+    [[nodiscard]] T* data() noexcept { return a_; }
+    [[nodiscard]] const T* data() const noexcept { return a_; }
+    [[nodiscard]] std::size_t size() const noexcept { return n_; }
+    [[nodiscard]] int num_elements() const noexcept { return N * n_; }
+
+    void resize(int size, bool preserve_data = true) {
+        if (size == n_) return;
+
+        T* new_a = size > 0 ? new T[N * size] : nullptr;
+
+        if (preserve_data && a_ != nullptr && size > 0) {
+            const int copy_count = std::min(size, n_);
+            if constexpr (soa) {
+                // each component separately
+                for (int d = 0; d < N; ++d)
+                    std::memcpy(new_a + d * size, a_ + d * n_, sizeof(T) * copy_count);
+            } else {
+                std::memcpy(new_a, a_, sizeof(T) * N * copy_count);
+            }
+        }
+
+        delete [] a_;
+        a_ = new_a;
+        n_ = size;
+    }
+
+    // Resize, and set every value to val. The new buffer comes first, so a failed allocation
+    // leaves the array as it was.
+    void resize(int size, const T& val) {
+        if (size != n_) {
+            T* new_a = size > 0 ? new T[N * size] : nullptr;
+            delete [] a_;
+            a_ = new_a;
+            n_ = size;
+        }
+        if (a_) std::fill_n(a_, N * n_, val);
+    }
+
+    void fill_component(int d, const T& val = T(0)) {
+        if (!a_ || n_ == 0 || d < 0 || d >= N) return;
+
+        T* ptr = a_;
+        // not const: g++ 8 refuses a const variable in shared(), later g++ require it there
+        int stride = soa ? 1 : N;
+        int offset = soa ? d * n_ : d;
+
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
+            if(n_ > 10000)
+#endif
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
+        for (int i = 0; i < n_; ++i) {
+            ptr[offset + i * stride] = val;
+        }
+    }
+
+    void zero_component(int d) {
+        fill_component(d, T(0));
+    }
+
+    //
+    // I/O and transition helpers, in row-major (AoS) order
     //
     void load_from_buffer(const T* buffer, std::size_t count, bool should_strip = true) {
         if (a_ == nullptr) {
@@ -202,18 +259,6 @@ public:
             }
         }
     }
-
-//     void copy_all_to(T* buffer) const {
-//         if (!a_) return;
-// #ifndef ACC
-//         #pragma omp parallel for collapse(2) if(n_ > 10000)
-// #endif
-//         #pragma acc parallel loop gang vector collapse(2)
-//         for(int i=0; i<n_; ++i) {
-//             for(int d=0; d<N; ++d)
-//                 buffer[i*N + d] = (*this)[i][d];
-//         }
-//     }
 
     void pack_to(std::vector<T>& buffer, std::size_t limit_size = 0) const {
         std::size_t count = (limit_size > 0 && limit_size <= std::size_t(n_)) ? limit_size : n_;
@@ -254,242 +299,28 @@ public:
 #endif
 
     //
-    // constructors & destructor
-    //
-    Array2D() : a_(nullptr), n_(0) {}
-    
-    explicit Array2D(int size) {
-        n_ = size;
-        if (n_ > 0) a_ = new T[N * n_];
-        else a_ = nullptr;
-    }
-
-    Array2D(int size, const T& val) {
-        n_ = size;
-        if (n_ > 0) {
-            a_ = new T[N * n_];
-            std::fill_n(a_, N * n_, val);
-        } else {
-            a_ = nullptr;
-        }
-    }
-
-    // AoS to SoA constructor
-    Array2D(const T* aos_data, int size) {
-        n_ = size;
-        if (n_ > 0) {
-            a_ = new T[N * n_];
-            if (aos_data != nullptr) {
-#ifdef SOA
-#ifndef ACC
-                #pragma omp parallel for default(none) shared(aos_data) \
-                    collapse(2) if(n_ > 10000)
-#endif
-                #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector collapse(2)
-                for (int i = 0; i < n_; ++i) {
-                    for (int d = 0; d < N; ++d) {
-                        // AoS(i, d) -> SoA(i, d)
-                        a_[d * n_ + i] = aos_data[i * N + d];
-                    }
-                }
-#else
-                // If data is already in AoS layout, we can copy it directly
-                std::memcpy(a_, aos_data, sizeof(T) * N * n_);
-#endif
-            } else {
-                std::fill_n(a_, N * n_, T(0));
-            }
-        } else {
-            a_ = nullptr;
-        }
-    }
-
-    Array2D(const Array2D& src) {
-        n_ = src.size();
-        if (n_ > 0) {
-            a_ = new T[N * n_];
-            std::memcpy(a_, src.data(), sizeof(T) * N * n_);
-        } else {
-            a_ = nullptr;
-        }
-    }
-
-    // A move takes the buffer and leaves the source empty, as steal_ref does.
-    Array2D(Array2D&& src) noexcept : a_(src.a_), n_(src.n_) {
-        src.a_ = nullptr;
-        src.n_ = 0;
-    }
-
-    Array2D& operator=(Array2D&& rhs) noexcept {
-        if (this != &rhs) {
-            if (a_) delete [] a_;
-            a_ = rhs.a_;
-            n_ = rhs.n_;
-            rhs.a_ = nullptr;
-            rhs.n_ = 0;
-        }
-        return *this;
-    }
-
-    ~Array2D() { if (a_) delete [] a_; }
-
-    //
-    // methods
-    //
-    T* data() {return a_;}
-    const T* data() const {return a_;}
-    std::size_t size() const {return n_;}
-    int num_elements() const {return N*n_;}
-
-    void resize(int size, bool preserve_data = true) {
-        if (size == n_) return;
-
-        T* new_a = nullptr;
-        if (size > 0) new_a = new T[N * size];
-
-        if (preserve_data && a_ != nullptr && size > 0) {
-            int copy_count = (size < n_) ? size : n_; 
-#ifdef SOA
-            // SoA Resize: move each dimension separately
-            for (int d = 0; d < N; ++d) {
-                T* src = a_ + d * n_;
-                T* dst = new_a + d * size;
-                std::memcpy(dst, src, sizeof(T) * copy_count);
-            }
-#else
-            // AoS Resize: move all data at once
-            std::memcpy(new_a, a_, sizeof(T) * N * copy_count);
-#endif
-        }
-
-        if (a_) delete [] a_;
-        a_ = new_a;
-        n_ = size;
-    }
-
-    void resize(int size, const T& val) {
-        if (size != n_) {
-            T* new_a = nullptr;
-            if (size > 0) new_a = new T[N * size];
-
-            if (a_) delete [] a_;
-            a_ = new_a;
-            n_ = size;
-        }
-        if (a_) std::fill_n(a_, N * n_, val);
-    }
-
-    // The move assignment under its older name.
-    void steal_ref(Array2D& other) { *this = std::move(other); }
-
-    void reset(T* a, int n) {
-        // Warning: this will take ownership of the pointer a, and delete it when destructed or resized
-        if (a_) delete [] a_;
-        a_ = a;
-        n_ = n;
-    }
-
-    void nullify() {
-        a_ = nullptr;
-        n_ = 0;
-    }
-
-    void fill_component(int d, const T& val = T(0)) {
-        if (!a_ || n_ == 0 || d < 0 || d >= N) return;
-
-        T* ptr = a_;
-        int stride;
-        int offset;
-
-#ifdef SOA
-        stride = 1;
-        offset = d * n_;
-#else
-        stride = N;
-        offset = d;
-#endif
-
-#ifndef ACC
-        #pragma omp parallel for default(none) shared(ptr, offset, stride, val) \
-            if(n_ > 10000)
-#endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
-        for (int i = 0; i < n_; ++i) {
-            ptr[offset + i * stride] = val;
-        }
-    }
-
-    void zero_component(int d) {
-        fill_component(d, T(0));
-    }
-
-    //
     // index accessing
     //
-    Accessor operator[](std::size_t i) {
-        // pass n_ as stride
-#ifdef SOA
-        return Accessor{ a_ + i, n_ };
-#else
-        return Accessor{ a_ + i*N, 1 };
-#endif
-    }
-
-    ConstAccessor operator[](std::size_t i) const {
-#ifdef SOA
-        return ConstAccessor{ a_ + i, n_ };
-#else
-        return ConstAccessor{ a_ + i*N, 1 };
-#endif
-    }
-
-    Accessor at(std::size_t i) {
-#ifdef SOA
-        return Accessor{ a_ + i, n_ };
-#else
-        return Accessor{ a_ + i*N, 1 };
-#endif
-    }
-
-    ConstAccessor at(std::size_t i) const {
-#ifdef SOA
-        return ConstAccessor{ a_ + i, n_ };
-#else
-        return ConstAccessor{ a_ + i*N, 1 };
-#endif
-    }
+    Accessor operator[](std::size_t i) { return Accessor{ row_start(i), row_stride() }; }
+    ConstAccessor operator[](std::size_t i) const { return ConstAccessor{ row_start(i), row_stride() }; }
 
     ComponentAccessor component(int d) {
-#ifdef SOA
-        return ComponentAccessor{ a_ + d * n_, 1, n_ };
-#else
-        return ComponentAccessor{ a_ + d, N, n_ };
-#endif
+        return soa ? ComponentAccessor{ a_ + d * n_, 1, n_ } : ComponentAccessor{ a_ + d, N, n_ };
     }
 
     ConstComponentAccessor component_const(int d) const {
-#ifdef SOA
-        return ConstComponentAccessor{ a_ + d * n_, 1, n_ };
-#else
-        return ConstComponentAccessor{ a_ + d, N, n_ };
-#endif
+        return soa ? ConstComponentAccessor{ a_ + d * n_, 1, n_ } : ConstComponentAccessor{ a_ + d, N, n_ };
     }
 
     //
-    // iterators
+    // iterators, over the whole buffer in storage order
     //
-    typedef T* iterator;
-    typedef const T* const_iterator;
-    iterator begin() {return a_;}
-    const_iterator begin() const {return a_;}
-    iterator end() {return a_ + N*n_;}
-    const_iterator end() const {return a_ + N*n_;}
-
-    typedef T element;
-
-private:
-    // disable assignment operator
-    Array2D<T,N>& operator=(const Array2D<T,N>& rhs);
+    using iterator = T*;
+    using const_iterator = const T*;
+    iterator begin() { return a_; }
+    const_iterator begin() const { return a_; }
+    iterator end() { return a_ + N * n_; }
+    const_iterator end() const { return a_ + N * n_; }
 };
 
 #endif
