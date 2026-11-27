@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include "constants.hpp"
@@ -188,60 +189,70 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
 
 namespace {
 
+constexpr double screen_tolerance = 1e-10;
+
+struct ElementBounds {
+    double lower[NDIMS], upper[NDIMS];
+};
+
 // The pieces of the segment a + t d, t0 <= t <= t1, in the elements of the whole
 // mesh, appended to pieces in order of t, each part counted once. Along a piece
 // the barycentric coordinates are affine in t, N_i = l0 + dl t; scale converts a
 // span of t to the length a piece records. Returns the length covered.
-double clip_segment(const Variables &var, const double a[NDIMS], const double d[NDIMS],
+double clip_segment(const Variables &var, const std::vector<ElementBounds> &bounds,
+                    const double a[NDIMS], const double d[NDIMS],
                     double t0, double t1, double scale, int well, WellPieces &pieces)
 {
-    // Barycentric tolerance, so that screens on element faces or edges are kept.
-    const double tol = 1e-10;
     struct Piece { int e; double t0, t1, l0[NODES_PER_ELEM], dl[NODES_PER_ELEM]; };
+    double covered = 0;
+    auto append = [&](const Piece &pc, double lo, double hi) {
+        const double mid = 0.5 * (lo + hi);
+        pieces.well.push_back(well);
+        pieces.element.push_back(pc.e);
+        for (int i = 0; i < NODES_PER_ELEM; ++i) {
+            pieces.start.push_back(pc.l0[i] + pc.dl[i] * lo);
+            pieces.end.push_back(pc.l0[i] + pc.dl[i] * hi);
+            pieces.mean.push_back(pc.l0[i] + pc.dl[i] * mid);
+        }
+        pieces.length.push_back((hi - lo) * scale);
+        covered += hi - lo;
+    };
     std::vector<Piece> found;
-    // Elements away from the segment's bounding box cannot hold any of it; the
-    // margin is far wider than the barycentric tolerance below.
     double lower[NDIMS], upper[NDIMS];
     for (int i = 0; i < NDIMS; ++i) {
         lower[i] = std::min(a[i] + d[i] * t0, a[i] + d[i] * t1);
         upper[i] = std::max(a[i] + d[i] * t0, a[i] + d[i] * t1);
     }
     for (int e = 0; e < var.nelem; ++e) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        double low[NDIMS], high[NDIMS], size = 0;
-        for (int i = 0; i < NDIMS; ++i) low[i] = high[i] = (*var.coord)[conn[0]][i];
-        for (int k = 1; k < NODES_PER_ELEM; ++k)
-            for (int i = 0; i < NDIMS; ++i) {
-                low[i] = std::min(low[i], (*var.coord)[conn[k]][i]);
-                high[i] = std::max(high[i], (*var.coord)[conn[k]][i]);
-            }
-        for (int i = 0; i < NDIMS; ++i) size = std::max(size, high[i] - low[i]);
+        const ElementBounds &box = bounds[e];
         bool apart = false;
         for (int i = 0; i < NDIMS; ++i)
-            apart = apart || high[i] + 1e-6 * size < lower[i] || upper[i] < low[i] - 1e-6 * size;
+            apart = apart || box.upper[i] < lower[i] || upper[i] < box.lower[i];
         if (apart) continue;
+        ConstConnAccessor conn = (*var.connectivity)[e];
         ConstArrayAccessor v0 = (*var.coord)[conn[0]];
-        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-#ifdef THREED
-        double shpdy[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
-#else
-        get_local_shape_fn(var, e, shpdx, shpdz);
-#endif
+        double grad[NDIMS][NODES_PER_ELEM];
+        get_shape_gradients(var, e, grad);
         Piece pc = {e, t0, t1, {}, {}};
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double l0 = (i == 0) + shpdx[i] * (a[0] - v0[0]) + shpdz[i] * (a[NDIMS-1] - v0[NDIMS-1]);
-            double dl = shpdx[i] * d[0] + shpdz[i] * d[NDIMS-1];
+            double l0 = (i == 0) + grad[0][i] * (a[0] - v0[0]) + grad[NDIMS-1][i] * (a[NDIMS-1] - v0[NDIMS-1]);
+            double dl = grad[0][i] * d[0] + grad[NDIMS-1][i] * d[NDIMS-1];
 #ifdef THREED
-            l0 += shpdy[i] * (a[1] - v0[1]);
-            dl += shpdy[i] * d[1];
+            l0 += grad[1][i] * (a[1] - v0[1]);
+            dl += grad[1][i] * d[1];
 #endif
             pc.l0[i] = l0;
             pc.dl[i] = dl;
-            // Keep t with l0 + dl*t >= -tol.
-            if (dl > 0) pc.t0 = std::max(pc.t0, (-tol - l0) / dl);
-            else if (dl < 0) pc.t1 = std::min(pc.t1, (-tol - l0) / dl);
-            else if (l0 < -tol) pc.t1 = pc.t0 - 1;
+            // Allow boundary roundoff for a contained segment. Otherwise
+            // split at the face, where the two elements share the weights.
+            if (l0 + dl*t0 >= -screen_tolerance && l0 + dl*t1 >= -screen_tolerance) continue;
+            if (dl > 0) pc.t0 = std::max(pc.t0, -l0 / dl);
+            else if (dl < 0) pc.t1 = std::min(pc.t1, -l0 / dl);
+            else pc.t1 = pc.t0 - 1;
+        }
+        if (pc.t0 == t0 && pc.t1 == t1) {
+            append(pc, t0, t1);
+            return covered * scale;
         }
         if (pc.t1 > pc.t0) found.push_back(pc);
     }
@@ -254,57 +265,65 @@ double clip_segment(const Variables &var, const double a[NDIMS], const double d[
         cuts.push_back(pc.t1);
     }
     std::sort(cuts.begin(), cuts.end());
-    double covered = 0;
+    const Piece *owner = nullptr;
+    double start = t0;
     for (std::size_t k = 0; k + 1 < cuts.size(); ++k) {
         const double lo = cuts[k], hi = cuts[k+1], mid = 0.5 * (lo + hi);
         if (hi <= lo) continue;
-        for (const Piece &pc : found) {
-            if (pc.t0 > mid || mid > pc.t1) continue;
-            pieces.well.push_back(well);
-            pieces.element.push_back(pc.e);
-            for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                pieces.start.push_back(pc.l0[i] + pc.dl[i] * lo);
-                pieces.end.push_back(pc.l0[i] + pc.dl[i] * hi);
-                pieces.mean.push_back(pc.l0[i] + pc.dl[i] * mid);
-            }
-            pieces.length.push_back((hi - lo) * scale);
-            covered += hi - lo;
-            break;
-        }
+        const auto it = std::find_if(found.begin(), found.end(),
+                                     [mid](const Piece &pc) { return pc.t0 <= mid && mid <= pc.t1; });
+        const Piece *next = it == found.end() ? nullptr : &*it;
+        if (next == owner) continue;
+        if (owner) append(*owner, start, lo);
+        owner = next;
+        start = lo;
     }
+    if (owner) append(*owner, start, t1);
     return covered * scale;
 }
 
-// Consecutive pieces in one element become one, so that the count stays that of
-// the elements crossed: the chord between the outer ends stands for the material
-// line inside the element. Lengths add, and the mean coordinates, weighted by
-// length, keep each node's share.
+// A single segment can represent adjacent pieces only if their join is at the
+// same fraction of the straight line and of the configured screen length,
+// within the placement tolerance in barycentric coordinates.
 void merge_pieces(WellPieces &pieces)
 {
     WellPieces merged;
     for (std::size_t k = 0; k < pieces.element.size(); ++k) {
         const std::size_t n = merged.element.size();
-        const double *mean = &pieces.mean[k*NODES_PER_ELEM], length = pieces.length[k];
+        const double *start = &pieces.start[k*NODES_PER_ELEM];
+        const double *end = &pieces.end[k*NODES_PER_ELEM];
+        const double *mean = &pieces.mean[k*NODES_PER_ELEM];
+        const double length = pieces.length[k];
         if (n && merged.well[n-1] == pieces.well[k] && merged.element[n-1] == pieces.element[k]) {
-            const double total = merged.length[n-1] + length;
+            const double previous_length = merged.length[n-1];
+            const double total = previous_length + length;
+            const double fraction = previous_length / total;
+            const std::size_t offset = (n-1)*NODES_PER_ELEM;
+            bool straight = true;
             for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                double &m = merged.mean[(n-1)*NODES_PER_ELEM+i];
-                m = (m * merged.length[n-1] + mean[i] * length) / total;
-                merged.end[(n-1)*NODES_PER_ELEM+i] = pieces.end[k*NODES_PER_ELEM+i];
+                const double first = merged.start[offset+i];
+                const double join = first + fraction * (end[i] - first);
+                straight &= std::fabs(start[i] - merged.end[offset+i]) <= screen_tolerance &&
+                            std::fabs(start[i] - join) <= screen_tolerance;
             }
-            merged.length[n-1] = total;
-            continue;
+            if (straight) {
+                for (int i = 0; i < NODES_PER_ELEM; ++i) {
+                    double &m = merged.mean[offset+i];
+                    m = (m * previous_length + mean[i] * length) / total;
+                    merged.end[offset+i] = end[i];
+                }
+                merged.length[n-1] = total;
+                continue;
+            }
         }
         merged.well.push_back(pieces.well[k]);
         merged.element.push_back(pieces.element[k]);
-        for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            merged.start.push_back(pieces.start[k*NODES_PER_ELEM+i]);
-            merged.end.push_back(pieces.end[k*NODES_PER_ELEM+i]);
-            merged.mean.push_back(mean[i]);
-        }
+        merged.start.insert(merged.start.end(), start, start+NODES_PER_ELEM);
+        merged.end.insert(merged.end.end(), end, end+NODES_PER_ELEM);
+        merged.mean.insert(merged.mean.end(), mean, mean+NODES_PER_ELEM);
         merged.length.push_back(length);
     }
-    pieces = merged;
+    pieces = std::move(merged);
 }
 
 } // namespace
@@ -322,11 +341,32 @@ void well_screen_positions(const Variables &var, double_vec &ends)
 void place_well_screens(const Param &param, Variables &var, const double_vec *ends)
 {
     const BC &bc = param.bc;
-    WellPieces placed;
     if (!param.control.has_hydraulic_diffusion || bc.num_wells == 0) {
-        var.well_pieces = placed;
+        var.well_pieces = {};
         return;
     }
+    // Pad the element boxes to include points admitted by the barycentric
+    // tolerance in clip_segment.
+    std::vector<ElementBounds> bounds(var.nelem);
+    for (int e = 0; e < var.nelem; ++e) {
+        ConstConnAccessor conn = (*var.connectivity)[e];
+        ElementBounds &box = bounds[e];
+        double size = 0;
+        for (int d = 0; d < NDIMS; ++d) {
+            box.lower[d] = box.upper[d] = (*var.coord)[conn[0]][d];
+            for (int j = 1; j < NODES_PER_ELEM; ++j) {
+                const double x = (*var.coord)[conn[j]][d];
+                box.lower[d] = std::min(box.lower[d], x);
+                box.upper[d] = std::max(box.upper[d], x);
+            }
+            size = std::max(size, box.upper[d] - box.lower[d]);
+        }
+        for (int d = 0; d < NDIMS; ++d) {
+            box.lower[d] -= 1e-6 * size;
+            box.upper[d] += 1e-6 * size;
+        }
+    }
+    WellPieces placed;
     const WellPieces &previous = var.well_pieces;
     for (int w = 0; w < bc.num_wells; ++w) {
         const double zb = bc.well_z_bottom[w], zt = bc.well_z_top[w];
@@ -338,7 +378,7 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
             a[1] = bc.well_y[w];
 #endif
             d[NDIMS-1] = 1;
-            covered = clip_segment(var, a, d, zb, zt, 1, w, placed);
+            covered = clip_segment(var, bounds, a, d, zb, zt, 1, w, placed);
         } else {
             // Each piece of the previous mesh, straight between its two ends,
             // keeps its length in the material.
@@ -347,7 +387,7 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
                 const double *a = &(*ends)[(2*k)*NDIMS], *b = &(*ends)[(2*k+1)*NDIMS];
                 double d[NDIMS];
                 for (int i = 0; i < NDIMS; ++i) d[i] = b[i] - a[i];
-                covered += clip_segment(var, a, d, 0, 1, previous.length[k], w, placed);
+                covered += clip_segment(var, bounds, a, d, 0, 1, previous.length[k], w, placed);
             }
         }
         if (covered < (1 - 1e-9) * (zt - zb)) {
@@ -356,7 +396,7 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
         }
     }
     if (ends) merge_pieces(placed);
-    var.well_pieces = placed;
+    var.well_pieces = std::move(placed);
 }
 
 void assemble_well_source(const Param &param, const Variables &var)

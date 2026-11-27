@@ -1980,6 +1980,77 @@ static void test_point_sources() {
     delete m;
 }
 
+static void test_well_screens() {
+    std::printf("[Material screen rate through repeated placement]\n");
+    Fixture m;
+    build_mesh(m);
+    m.param.control.has_hydraulic_diffusion = true;
+    BC &bc = m.param.bc;
+    bc.num_wells = 1;
+    bc.well_z_bottom = {0};
+    bc.well_z_top = {1};
+    bc.well_rate = {1};
+    double_vec rate(m.var.nnode, 0);
+    m.var.fluid_source = &rate;
+    const double first = .125, last = .5;
+    const struct { double join_x, join_z; int segments; } cases[] = {
+        {.25, .5*(first+last), 2},
+        {.125, .25, 2},
+        {.125, .5*(first+last), 1},
+    };
+    for (const auto &test : cases) {
+        auto &pieces = m.var.well_pieces;
+        pieces.well = {0, 0};
+        pieces.element = {0, 0};
+        pieces.length = {.5, .5};
+        double_vec ends(4*NDIMS, .125);
+        ends[NDIMS] = ends[2*NDIMS] = test.join_x;
+        ends[2*NDIMS-1] = ends[3*NDIMS-1] = test.join_z;
+        ends[4*NDIMS-1] = last;
+        double centroid[NDIMS];
+        for (int d = 0; d < NDIMS; ++d)
+            centroid[d] = .25*(ends[d] + 2*ends[NDIMS+d] + ends[3*NDIMS+d]);
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            place_well_screens(m.param, m.var, &ends);
+            assemble_well_source(m.param, m.var);
+            double total = 0, moment[NDIMS] = {};
+            for (int n = 0; n < m.var.nnode; ++n) {
+                total += rate[n];
+                for (int d = 0; d < NDIMS; ++d) moment[d] += rate[n]*m.coord[n][d];
+            }
+            check("screen rate", total, 1);
+            for (int d = 0; d < NDIMS; ++d)
+                check("screen rate centroid", moment[d], centroid[d]);
+            check("screen pieces", pieces.length.size(), test.segments);
+            well_screen_positions(m.var, ends);
+        }
+    }
+
+    // The two simplices share the horizontal face crossed by the screen.
+    for (int i = 0; i < NDIMS; ++i) m.connectivity[1][i] = i;
+    std::swap(m.connectivity[1][0], m.connectivity[1][1]);
+    m.connectivity[1][NDIMS] = 2*NDIMS;
+    bc.well_x = {.2};
+    bc.well_y = {.2};
+    bc.well_z_bottom = {-.5};
+    bc.well_z_top = {.5};
+    place_well_screens(m.param, m.var);
+    for (int repeat = 0; repeat < 4; ++repeat) {
+        check("shared face gives two screen pieces", m.var.well_pieces.length.size(), 2);
+        assemble_well_source(m.param, m.var);
+        double total = 0, elevation = 0;
+        for (int n = 0; n < m.var.nnode; ++n) {
+            total += rate[n];
+            elevation += rate[n]*m.coord[n][NDIMS-1];
+        }
+        check("shared-face screen rate", total, 1);
+        check("shared-face screen centroid", elevation, 0);
+        double_vec ends;
+        well_screen_positions(m.var, ends);
+        place_well_screens(m.param, m.var, &ends);
+    }
+}
+
 int main(int argc, char** argv) {
     if(argc==2 && (std::strcmp(argv[1],"--reject-mc-return")==0 ||
                    std::strcmp(argv[1],"--reject-mc-return-pure-2d")==0)) {
@@ -1992,6 +2063,7 @@ int main(int argc, char** argv) {
         return 1;  // check.sh requires status 54 from update_stress
     }
     test_point_sources();
+    test_well_screens();
     test_strain_pressure();
     test_strain_pressure(true);
     test_darcy_gravity_limit();
