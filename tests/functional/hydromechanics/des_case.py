@@ -152,17 +152,12 @@ def layer_strain(coord, conn, ezz, h, origin, height):
     return np.bincount(layer, weights=ezz, minlength=n)/count
 
 
-def hydraulic_row_bound(x, conn, storage, mobility):
-    """Least lumped storage over absolute P1 diffusion row sum: the longest single hydraulic substep."""
+def hydraulic_substeps(x, conn, storage, mobility, dt):
+    """Hydraulic substeps of step dt: dt over the least lumped storage over absolute P1 diffusion row sum."""
     volume = simplex_volumes(x, conn)
     gradients = simplex_gradients(x, conn)
     operator = mobility*volume[:, None, None]*(gradients @ gradients.swapaxes(1, 2))
     mass, row_bound = lumped_volumes(x, conn, storage*volume), np.zeros(len(x))
     np.add.at(row_bound, conn, np.abs(operator).sum(axis=2))
     active = row_bound > 0
-    return float(np.min(mass[active]/row_bound[active]))
-
-
-def hydraulic_substeps(x, conn, storage, mobility, dt):
-    """Hydraulic substeps of step dt: dt over hydraulic_row_bound."""
-    return math.ceil(dt/hydraulic_row_bound(x, conn, storage, mobility))
+    return math.ceil(dt/float(np.min(mass[active]/row_bound[active])))

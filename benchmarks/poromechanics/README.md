@@ -42,28 +42,18 @@ It does not qualify conservative fluid-content transfer across remeshing.
 and checkpoint continuation. The [explicit formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics)
 describes the component tests and diagnostic fields.
 
-The [refinement and multi-well qualification](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi)
-records separate mesh/time trends, the small-strain superposition limits,
-acceptance budgets and measured results. Run the cases sequentially:
+The [multi-well qualification](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi)
+records the small-strain superposition limits, acceptance budgets and
+measured results. Run the cases sequentially:
 
 ```sh
 (
   ulimit -v 6291456
   export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
-  python3 benchmarks/poromechanics/consolidation_refinement.py --output /new/refinement-results
   python3 tests/functional/hydromechanics/check_multiwell.py ./dynearthsol2d /new/multiwell-2d
   python3 tests/functional/hydromechanics/check_multiwell.py ./dynearthsol3d /new/multiwell-3d --ndims 3
 )
 ```
-
-The refinement runner saves CSV metrics and checksummed JSON provenance. Its
-`--analyze-only` option checks recorded inputs and raw saves.
-
-`pumping_slab.py` compares a uniform thin slab against the averaged-aquifer
-reference with pressure/strain error limits and executable/config hashes.
-For example, run `python3 benchmarks/poromechanics/pumping_slab.py /new/slab-results
---resolution 20` under a memory ceiling. Refinement studies remain separate
-from passing this coarse comparison.
 
 For a behavior-preserving production refactor, keep the parent output and
 compare every save/checkpoint physical payload, for each dimension:
@@ -119,8 +109,6 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
   for an infinite aquifer or finite annulus, with numerical Laplace inversion
   for the finite case. Bear-Corapcioglu is a limiting case. See the
   [derivation and storage convention](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer).
-  `pumping_slab.py` supplies a DES pressure/strain comparison within its
-  small-strain slab and finite-domain assumptions.
 - `unsaturated_reference.py`: retention laws, conservative explicit column
   updates and transient/steady infiltration references. The
   [unsaturated formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics#partly-saturated-flow) describes
@@ -131,30 +119,3 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
   explicitly disable heat for these isothermal comparisons.
 
 The manual figure scripts read saved unsaturated 2D/3D profiles.
-
-## Ordinary explicit, GVS and PT comparisons
-
-`mechanical_methods.py` compares the same sudden-traction Terzaghi column
-with PT0/PT1, ordinary explicit mechanics and GVS shear/bulk. Defaults sweep
-S=1e4/1e5/1e6 and initial velocity scales 1e-12/1e-6 m/s. The column has
-K/G=2 to distinguish the GVS ceilings, zero gravity, a fixed mesh and no
-heat diffusion. Comparisons use actual saved physical times. This is an
-exploration, not an acceptance test: a `complete` execution may have large
-analytical or force errors. Failures and incomplete time coverage remain
-in the report. See [method qualification and limits](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi#coupled-gvs-and-pt-in-3d).
-
-```sh
-ulimit -v 6291456
-export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-python3 benchmarks/poromechanics/mechanical_methods.py benchmarks/poromechanics/results/methods-2d --dimension 2
-python3 benchmarks/poromechanics/mechanical_methods.py benchmarks/poromechanics/results/methods-2d --analyze-only
-```
-
-Run dimensions sequentially. `--spacing`, `--dt-fraction`, `--duration`,
-`--initial-speeds`, `--scalings` and `--methods` support controlled followups;
-`--max-steps` and `--timeout` bound each run. GVS uses adaptive `fixed_dt=0`.
-The output contains CSV histories, JSON metrics and provenance,
-input/executable/output hashes and raw saves. Figure scripts live in the manual.
-Replay refuses changed inputs or raw saves. Reported physical-reference
-kinetic and skeleton strain energies are diagnostics, not a coupled energy
-balance or a substitute for force and analytical-error checks.
