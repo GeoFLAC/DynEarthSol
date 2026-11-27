@@ -126,6 +126,18 @@ def main():
                 expected.append(1e-9/6)
                 pairs.append((unit+shift, unit+shift+[1e-6, 0., 0.]))
                 expected.append((1-1e-6)**3/6)
+            # A dyadic width stays exactly representable after translating
+            # along the same axis as the thin or separated region.
+            width = 2.**-29
+            sliver[1, 0] = width
+            for origin in (0., 2.**20):
+                shift = np.array([origin, 0., 0.])
+                thin = sliver + shift
+                a = unit + shift
+                b = a + [width, 0., 0.]
+                assert thin[1, 0] - thin[0, 0] == width and np.all(b[:, 0] - a[:, 0] == width)
+                pairs.extend(((thin, thin), (a, b)))
+                expected.extend((width/6, (1-width)**3/6))
         volume, product = calculate(exe, pairs)
         reverse, transpose = calculate(exe, [(b, a) for a, b in pairs])
         np.testing.assert_allclose(volume, expected, rtol=2e-10, atol=2e-12)

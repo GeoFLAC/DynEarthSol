@@ -2487,6 +2487,9 @@ static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
 {
     SimplexOverlap result;
     Real scale = 0;
+#ifdef THREED
+    Real span[NDIMS];
+#endif
     for (int d = 0; d < NDIMS; ++d) {
         Real alo=source[0][d], ahi=alo, blo=target[0][d], bhi=blo;
         for (int j = 1; j < N; ++j) {
@@ -2495,6 +2498,9 @@ static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
         }
         if (bhi <= alo || ahi <= blo) return result;
         scale=std::max(scale,ahi-alo);
+#ifdef THREED
+        span[d]=std::max(ahi-alo,bhi-blo);
+#endif
     }
     Simplex old, current;
     for (int j = 0; j < N; ++j)
@@ -2506,23 +2512,16 @@ static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
     if (!old_shape.build(old) || !current_shape.build(current))
         die(EXIT_MESH_QUALITY, "Degenerate simplex in conservative remapping.");
 #ifdef THREED
-    // The coordinates are doubles: a vertex that two meshes share can differ
-    // between them in each coordinate by a few units in the last place of that
-    // coordinate's magnitude, far more than long double rounding. Planes and
-    // points that close, direction by direction, coincide.
-    constexpr Real eps = 128*std::numeric_limits<Real>::epsilon();
-    Real position[NDIMS] = {}, merge[NDIMS];
-    for (int d = 0; d < NDIMS; ++d) {
-        for (int j = 0; j < N; ++j)
-            position[d] = std::max({position[d],std::fabs(source[j][d]),std::fabs(target[j][d])});
-        position[d] *= 16*std::numeric_limits<double>::epsilon()/scale;
-        merge[d] = eps+position[d];
-    }
+    // The inputs are doubles. Scale the coordinate tolerance by the
+    // local extent of the simplex pair in each direction.
+    constexpr Real eps = 128*std::numeric_limits<double>::epsilon();
+    Real merge[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) merge[d] = eps*(span[d]/scale);
     Real tolerance[N];
     for (int p = 0; p < N; ++p) {
         tolerance[p] = eps;
         for (int d = 0; d < NDIMS; ++d)
-            tolerance[p] += position[d]*std::fabs(current_shape.coefficient[p][d+1]);
+            tolerance[p] += merge[d]*std::fabs(current_shape.coefficient[p][d+1]);
     }
     return clip(old,old_shape,current_shape,tolerance,merge,scale);
 #else
