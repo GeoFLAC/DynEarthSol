@@ -914,6 +914,9 @@ static double pressure_step_limit(const Variables &var, elem_cache &work)
 {
     // Gershgorin bound on the lumped operator, including rotated tensors.
     // Reuse assembly scratch; no pressure or material history is copied.
+    // These kernels run off the async queue: let it finish with work and the
+    // masses first.
+    #pragma acc wait
     double limit = std::numeric_limits<double>::max();
     const int mpi_ee = mpi_element_end(var);
 #ifndef ACC

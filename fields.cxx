@@ -278,6 +278,9 @@ static double temperature_step_limit(const Param &param, const Variables &var, e
 {
     // Absolute element rows bound the assembled lumped diffusion operator.
     // Half the forward-Euler spectral bound leaves a stability margin.
+    // These kernels run off the async queue: let it finish with work and the
+    // masses first.
+    #pragma acc wait
     const int mpi_ee = mpi_element_end(var);
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, work) firstprivate(mpi_ee)
