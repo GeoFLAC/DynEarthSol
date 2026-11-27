@@ -23,7 +23,7 @@ sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT/'tests/functional'))
 from Dynearthsol import Dynearthsol,scan_frames,YEAR2SEC
 
 
-from des_case import digest, expect_exit, read_config, reset_boundaries, restart_check, run_des, write_json
+from des_case import digest, expect_exit, mean_stress_modulus, read_config, reset_boundaries, restart_check, run_des, write_json
 from des_test_utils import checkpoint_arrays, fields, lumped_volumes, physical_differences, runtime_key
 
 
@@ -58,9 +58,7 @@ def check_balance(folder,cfg):
     x=model.read_field(0,'coordinate');conn=model.read_field(0,'connectivity')
     nodal=lumped_volumes(x,conn)
     mat=lambda k:json.loads(cfg['mat'][k])[0]
-    # DES records in-plane mean stress in 2D; its fixed-stress compliance is
-    # 1/(K+G/3), rather than the three-dimensional 1/K.
-    bulk=mat('bulk_modulus')+(mat('shear_modulus')/3 if dim==2 else 0)
+    bulk=mean_stress_modulus(dim,mat('bulk_modulus'),mat('shear_modulus'))
     sb=mat('porosity')/mat('fluid_bulk_modulus')+(mat('biot_coeff')-mat('porosity'))/mat('bulk_modulus_s')+mat('biot_coeff')**2/bulk
     p0=model.read_field(0,'pore pressure')
     report=[]
@@ -171,7 +169,7 @@ def main():
     shutil.copy2(Path(__file__),out/'runner.py')
     result=dict(executable_sha256=digest(exe),checks={},runner_sha256=digest(Path(__file__)))
     modes=['fluid-only','total-amount','half-step','subcycled',
-           'millimetres','centimetres','kilometres','point-and-well']
+           'millimetres','centimetres','kilometres','point-and-well','physical-inertia']
     if dim==2:modes.append('legacy-coordinate')
     for mode in modes:
         cfg=config()
@@ -182,6 +180,7 @@ def main():
             del cfg['injection']['end_time_in_yr']
         if mode=='half-step':cfg['control']['fixed_dt']='.5';cfg['sim']['max_steps']='8'
         if mode=='subcycled':cfg['mat']['hydraulic_perm']='[1e-10]'
+        if mode=='physical-inertia':cfg['control']['is_quasi_static']='false'
         if mode=='point-and-well':
             cfg['bc'].update(num_wells='1',well_x='[0.5]',well_y='[0.5]',
                 well_z_top='[-0.2]',well_z_bottom='[-0.8]',well_rate='[5e-9]')
@@ -218,8 +217,20 @@ def main():
     if dim==2:del cfg['injection']['points_y']
     cfg['injection']['points_x']='[0,0]'
     cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
-    run(exe,out/'injection-fixed-node',cfg,51)
-    result['checks']['injection-fixed-node']=True
+    folder=out/'injection-fixed-node'
+    run(exe,folder,cfg)
+    model=Dynearthsol(str(folder/'fresh'))
+    reactions=[]
+    previous=0.
+    for row in scan_frames(model.modelname):
+        time,frame=row['time'],row['frame']
+        injected=amount(time,RATES)-amount(previous,RATES)
+        np.testing.assert_array_equal(model.read_field(frame,'pore pressure'),0.)
+        balance=model.read_field(frame,'fluid balance')
+        np.testing.assert_allclose(balance,[0.,0.,-injected,-injected,0.],rtol=3e-12,atol=1e-18)
+        reactions.append(float(balance[3]))
+        previous=time
+    result['checks']['injection-fixed-node']=dict(reactions=reactions,restart=restart(exe,folder,cfg))
     result['checks']['remesh']=material(exe,out,dim)
     assert digest(exe)==result['executable_sha256']
     write_json(out/'summary.json',result)

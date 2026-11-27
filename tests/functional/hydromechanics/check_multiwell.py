@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 
-from check_wells import ROOT, balance, config
+from check_wells import BALANCE_RTOL, ROOT, balance, config
 
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
@@ -72,7 +72,7 @@ def main():
         np.testing.assert_allclose([f['time'] for f in frames], np.arange(7) * 3700,
                                    rtol=0, atol=1e-8)
         residual, count = balance(folder, dim, records[label]['net_rate'])
-        assert residual < 1e-9, (label, residual)
+        assert residual < BALANCE_RTOL, (label, residual)
         strain = max(float(np.max(np.abs(model.read_field(frame, 'strain')))) for frame in model.frames)
         assert strain < 1e-5, ('Superposition fixture must stay in the small-strain limit', label, strain)
         for frame in model.frames:

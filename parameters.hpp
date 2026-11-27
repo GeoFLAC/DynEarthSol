@@ -868,8 +868,8 @@ struct PointSourceOwners {
 // Well screens fixed in the material: the screen in pieces, each a straight
 // segment in one element of the whole mesh, in order from bottom to top. The
 // barycentric coordinates of its ends, and their mean over it, which weights its
-// nodal source, stay fixed while the mesh moves. length is its share of the
-// configured screen length.
+// nodal source, stay fixed while the mesh moves. length weights the prescribed
+// rate and sums to the configured screen length over the active pieces.
 struct WellPieces {
     int_vec well, element;
     double_vec start, end, mean;  // NODES_PER_ELEM per piece

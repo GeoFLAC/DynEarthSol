@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -96,13 +98,6 @@ void schedule_ratios(const BC &bc, double start, double stop,
         schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, stop, stop) : 1.0;
 }
 
-// Darcy mobility k/mu.
-#pragma acc routine seq
-inline double hydraulic_mobility(const MatProps &mat, int e)
-{
-    return mat.perm(e) / mat.mu_fluid(e);
-}
-
 // Fixed-stress lag L = alpha^2*compliance, in 1/Pa.
 #pragma acc routine seq
 inline double hydraulic_fixed_stress_lag(const MatProps &mat, int e)
@@ -133,7 +128,7 @@ void pressure_increments(const Variables &var, const double_vec &ppressure, cons
     #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(owned)
     for (int e = 0; e < owned; ++e) {
         const auto value = element_pressure<true>(var,e,ppressure,dppressure,true,false);
-        work[e][pressure_d_slot] = value.raw;
+        work[e][pressure_d_slot] = value.increment;
     }
 }
 
@@ -161,30 +156,6 @@ void reset_hydraulic_assembly(const Param &param, Variables &var)
     }
     // Pressure and its pending increment were already transferred by the
     // nodal remapper. Reallocating them here would discard the remapped state.
-}
-
-void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
-{
-    if (!param.control.has_hydraulic_diffusion) return;
-    double diffusivity = 0;
-    int invalid = 0;
-    const int owned = mpi_element_end(var);
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var) firstprivate(owned) reduction(max:diffusivity) reduction(|:invalid)
-#endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(owned) reduction(max:diffusivity) reduction(|:invalid)
-    for (int e = 0; e < owned; ++e) {
-        const double diff = hydraulic_diffusivity(param, *var.mat, e);
-        if (!std::isfinite(diff) || diff < 0) invalid = 1;
-        diffusivity = std::max(diffusivity, diff);
-    }
-    if (mpi_any(var, invalid))
-        die_together(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties.");
-#ifdef USEMPI
-    if (var.mpi && var.mpi->in_kernel()) diffusivity = var.mpi->maximum(diffusivity);
-#endif
-    var.mat->hydro_diff_max = diffusivity;
-    var.mat->hydro_step_limit = 0;
 }
 
 namespace {
@@ -370,6 +341,7 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
     const WellPieces &previous = var.well_pieces;
     for (int w = 0; w < bc.num_wells; ++w) {
         const double zb = bc.well_z_bottom[w], zt = bc.well_z_top[w];
+        const std::size_t first = placed.length.size();
         double covered = 0;
         if (!ends) {
             // The configured vertical screen, with z for t.
@@ -390,10 +362,19 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
                 covered += clip_segment(var, bounds, a, d, 0, 1, previous.length[k], w, placed);
             }
         }
-        if (covered < (1 - 1e-9) * (zt - zb)) {
+        if (covered >= (1 - 1e-9) * (zt - zb)) continue;
+        if (!ends) {
             std::cerr << "Error: the screen of well " << w << " is not entirely inside the mesh.\n";
             die(EXIT_CONFIG_VALUE);
         }
+        if (!(covered > 0)) {
+            std::cerr << "Error: the screen of well " << w << " has no length inside the remeshed domain.\n";
+            die(EXIT_RUNTIME_LOOKUP);
+        }
+        // The prescribed rate is for the whole well. Redistribute it over
+        // the in-domain pieces in proportion to their remaining material lengths.
+        for (std::size_t k = first; k < placed.length.size(); ++k)
+            placed.length[k] = (placed.length[k] / covered) * (zt - zb);
     }
     if (ends) merge_pieces(placed);
     var.well_pieces = std::move(placed);
@@ -518,16 +499,16 @@ static void pressure_step(const Param &param, const Variables &var,
     nvtxRangePush(__FUNCTION__);
 #endif
 
-    double diff_max_local = 0, source = 0;
+    double source = 0;
     const bool plastic_source = has_plastic_source(param);
     const bool strain_source = hydraulic_strain_form(param) || plastic_source;
     const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source)
+        firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(+:source)
 #endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(max:diff_max_local) reduction(+:source) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(+:source) async
     for (int e = 0; e < mpi_ee; e++) {
         ElemCacheAccessor tr = tmp_result[e];
         double current_mean_stress = trace(stress[e])/NDIMS;
@@ -541,9 +522,6 @@ static void pressure_step(const Param &param, const Variables &var,
         // it is algebraically equivalent to the head form
         //   (k * gamma_w / mu) * grad(p / gamma_w + z).
         const double kv_pressure = hydraulic_mobility(*var.mat, e) * (*var.volume)[e];
-
-        const double diff_e = hydraulic_diffusivity(param, *var.mat, e);
-        diff_max_local = std::max(diff_max_local, diff_e);
 
         // volume term (poroelastic effect)
         double pe = 0;
@@ -579,13 +557,8 @@ static void pressure_step(const Param &param, const Variables &var,
     // Wells extract their exact schedule volume over this step [time - dt, time].
     const bool has_wells = param.bc.num_wells > 0;
     const bool has_points = param.injection.enabled;
-    if (has_points) {
+    if (has_points)
         assemble_point_sources(param.injection,var.fluid_points,var,time-dt,time,*var.fluid_point_source);
-        for (int n=0;n<mpi_ne;++n)
-            if ((*var.fluid_point_source)[n] != 0 &&
-                (pressure_boundary(n,var) >= 0 || !((*var.hmass)[n]>0 && std::isfinite((*var.hmass)[n]))))
-                die(EXIT_RUNTIME_LOOKUP, "A fluid point source reaches a fixed-pressure node or nonpositive hydraulic storage.");
-    }
     double well_ratio, boundary_ratio, pressure_ratio;
     schedule_ratios(param.bc, time - dt, time, well_ratio, boundary_ratio, pressure_ratio);
     #pragma acc wait
@@ -597,13 +570,14 @@ static void pressure_step(const Param &param, const Variables &var,
             tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
     });
     double stored = 0, wells = 0, boundary = -prescribed_flux;
+    int bad_point_storage = 0;
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) \
         firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, mpi_ne) \
-        reduction(+:stored, wells, boundary)
+        reduction(+:stored, wells, boundary) reduction(|:bad_point_storage)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) firstprivate(has_points, mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) reduction(|:bad_point_storage) firstprivate(has_points, mpi_ne)
     for (int n = 0; n < mpi_ne; n++) {
         tdot[n] = 0.0;
         {
@@ -615,9 +589,11 @@ static void pressure_step(const Param &param, const Variables &var,
         }
         if (has_wells)
             tdot[n] += well_ratio * (*var.fluid_source)[n];
-        if (has_points) tdot[n] -= (*var.fluid_point_source)[n];
+        const double point_rate = has_points ? (*var.fluid_point_source)[n] : 0;
+        if (has_points) tdot[n] -= point_rate;
 
         const double p0 = ppressure[n], mass = (*var.hmass)[n];
+        bad_point_storage |= point_rate != 0 && !(mass > 0 && std::isfinite(mass));
         const int side = pressure_boundary(n, var);
         double increment = 0;
         if (side < 0 && mass > 0)
@@ -629,25 +605,25 @@ static void pressure_step(const Param &param, const Variables &var,
         dppressure[n] += increment;
         stored += change;
         if (has_wells) wells += well_ratio * (*var.fluid_source)[n] * dt;
-        if (has_points) wells -= (*var.fluid_point_source)[n]*dt;
+        if (has_points) wells -= point_rate*dt;
         if (side >= 0) boundary += change + tdot[n]*dt;
 
     }
 
     #pragma acc wait
+    if (bad_point_storage)
+        die(EXIT_RUNTIME_LOOKUP, "A fluid point source reaches a node with invalid hydraulic storage.");
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
         double sums[] = {stored, source, wells, boundary};
         var.mpi->sum(sums, 4);
         stored = sums[0]; source = sums[1]; wells = sums[2]; boundary = sums[3];
-        diff_max_local = var.mpi->maximum(diff_max_local);
     }
 #endif
     if (var.fluid_balance) {
         const double value[] = {stored, source, wells, boundary, stored + source + wells - boundary};
         for (int i = 0; i < 5; ++i) (*var.fluid_balance)[i] += value[i];
     }
-    var.mat->hydro_diff_max = diff_max_local;
 #ifdef NPROF
     nvtxRangePop();
 #endif
@@ -766,7 +742,7 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
     #pragma acc wait
     // Centroid of a simplex and the radius about it that encloses the simplex.
     auto enclose = [](const auto &coordinate, double center[NDIMS]) {
-        double radius = 0;
+        double radius2 = 0;
         for (int d = 0; d < NDIMS; ++d) {
             center[d] = 0;
             for (int j = 0; j < NODES_PER_ELEM; ++j) center[d] += coordinate[j][d]/NODES_PER_ELEM;
@@ -774,24 +750,43 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
             double distance2 = 0;
             for (int d = 0; d < NDIMS; ++d) distance2 += (coordinate[j][d]-center[d])*(coordinate[j][d]-center[d]);
-            radius = std::max(radius,std::sqrt(distance2));
+            radius2 = std::max(radius2,distance2);
         }
-        return radius;
+        return std::sqrt(radius2);
     };
     const int count = old_connectivity.size();
     array_t centers(count);
     double_vec radii(count, 0.0);
-    double radius = 0;
+    // A power-of-two group bounds the search radius by donors of similar size.
+    // A large donor widens only its own group's query.
+    struct DonorGroup {
+        int_vec elements;
+        double radius = 0;
+        array_t points;
+        PointCloud cloud{points};
+        std::unique_ptr<NANOKDTree> tree;
+    };
+    std::map<int, DonorGroup> groups;
     for (int e = 0; e < count; ++e) {
         double center[NDIMS];
-        radii[e] = enclose(old_coordinate.view_const(old_connectivity[e]),center);
+        const double radius = enclose(old_coordinate.view_const(old_connectivity[e]),center);
+        radii[e] = radius;
         for (int d = 0; d < NDIMS; ++d) centers[e][d] = center[d];
-        radius = std::max(radius,radii[e]);
+        DonorGroup &group = groups[std::ilogb(radius)];
+        group.radius = std::max(group.radius,radius);
+        group.elements.push_back(e);
     }
-    PointCloud cloud(centers);
-    NANOKDTree tree(NDIMS,cloud);
-    std::vector<nanoflann::ResultItem<std::uint32_t,double>> candidates;
+    for (auto &entry : groups) {
+        DonorGroup &group = entry.second;
+        group.points.resize(group.elements.size());
+        for (std::size_t i = 0; i < group.elements.size(); ++i)
+            for (int d = 0; d < NDIMS; ++d) group.points[i][d] = centers[group.elements[i]][d];
+        group.tree = std::make_unique<NANOKDTree>(NDIMS,group.cloud);
+    }
+    using Candidate = nanoflann::ResultItem<std::uint32_t,double>;
+    std::vector<Candidate> candidates, nearby;
     candidates.reserve(64);
+    nearby.reserve(64);
     outside.resize(var.nelem,0.0);
     for (int e = 0; e < var.nelem; ++e) {
         const auto coordinate = var.coord->view_const((*var.connectivity)[e]);
@@ -799,14 +794,22 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
         double center[NDIMS];
         const double local_radius = enclose(coordinate,center);
         for (int j = 0; j < NODES_PER_ELEM; ++j) outside[e][j] = volume/NODES_PER_ELEM;
-        const double search_radius = (radius+local_radius)*(1+1e-12);
-        tree.radiusSearch(center,search_radius*search_radius,candidates);
+        candidates.clear();
+        for (const auto &entry : groups) {
+            const DonorGroup &group = entry.second;
+            const double reach = (group.radius+local_radius)*(1+1e-12);
+            group.tree->radiusSearch(center,reach*reach,nearby,nanoflann::SearchParameters(0,false));
+            for (const Candidate &item : nearby) {
+                const int old = group.elements[item.first];
+                const double bound = (radii[old]+local_radius)*(1+1e-12);
+                if (item.second <= bound*bound) candidates.emplace_back(old,item.second);
+            }
+        }
+        std::sort(candidates.begin(),candidates.end(),[](const Candidate &a, const Candidate &b) {
+            return a.second < b.second || (a.second == b.second && a.first < b.first);
+        });
         for (const auto &candidate : candidates) {
             const int old = candidate.first;
-            // The search radius covers the largest donor. Simplices whose
-            // enclosing balls about their centroids are apart cannot overlap.
-            const double reach = (radii[old]+local_radius)*(1+1e-12);
-            if (candidate.second > reach*reach) continue;
             const SimplexOverlap overlap = simplex_overlap(old_coordinate.view_const(old_connectivity[old]),coordinate);
             if (overlap.volume == 0) continue;
             for (int i = 0; i < NODES_PER_ELEM; ++i)

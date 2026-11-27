@@ -52,9 +52,8 @@ inline double hydraulic_storage(const MatProps &mat, int e)
     return hydraulic_inverse_biot_modulus(mat, e) + alpha * alpha * hydraulic_mean_stress_compliance(mat, e);
 }
 
-// Coupled explicit steps use the current strain increment before evaluating
-// stress, including when the mechanical mass is scaled. PT and the reduced
-// quasistatic flow model use the fixed-stress split and pending increment.
+// Advance pressure before stress in physical-inertia or coupled explicit steps.
+// PT and the reduced quasistatic flow model advance pressure after mechanics.
 #pragma acc routine seq
 inline bool hydraulic_strain_form(const Param &param)
 {
@@ -66,14 +65,22 @@ inline bool hydraulic_strain_form(const Param &param)
 #pragma acc routine seq
 inline double hydraulic_storage(const Param &param, const MatProps &mat, int e)
 {
-    return hydraulic_strain_form(param) ? hydraulic_inverse_biot_modulus(mat, e) :
-                                       hydraulic_storage(mat, e);
+    // Without mechanical feedback, use the reduced fixed-stress capacity
+    // at either inertia setting.
+    return hydraulic_strain_form(param) && param.control.has_poroelastic_pressure_feedback
+        ? hydraulic_inverse_biot_modulus(mat, e) : hydraulic_storage(mat, e);
+}
+
+#pragma acc routine seq
+inline double hydraulic_mobility(const MatProps &mat, int e)
+{
+    return mat.perm(e) / mat.mu_fluid(e);
 }
 
 #pragma acc routine seq
 inline double hydraulic_diffusivity(const Param &param, const MatProps &mat, int e)
 {
-    return mat.perm(e) / mat.mu_fluid(e) / hydraulic_storage(param, mat, e);
+    return hydraulic_mobility(mat, e) / hydraulic_storage(param, mat, e);
 }
 
 // Bulk density of the saturated solid and fluid mixture.
@@ -85,7 +92,7 @@ inline double hydraulic_bulk_density(const MatProps &mat, int e)
 }
 
 struct ElementPressure {
-    double raw, strength;
+    double increment, mean;
 };
 
 // The hydraulic residual and constitutive increment use opposite signs.
@@ -93,7 +100,7 @@ struct ElementPressure {
 template <bool residual>
 inline ElementPressure element_pressure(const Variables &var, int e,
                                         const double_vec &p, const double_vec &dp,
-                                        bool increment, bool strength)
+                                        bool increment, bool mean)
 {
     ConstConnAccessor conn = (*var.connectivity)[e];
     ElementPressure value = {0, 0};
@@ -101,10 +108,10 @@ inline ElementPressure element_pressure(const Variables &var, int e,
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
         const int n = conn[j];
         if (increment) {
-            if constexpr (residual) value.raw -= dp[n] / NODES_PER_ELEM;
-            else value.raw += dp[n] / double(NODES_PER_ELEM);
+            if constexpr (residual) value.increment -= dp[n] / NODES_PER_ELEM;
+            else value.increment += dp[n] / double(NODES_PER_ELEM);
         }
-        if (strength) value.strength += p[n] / NODES_PER_ELEM;
+        if (mean) value.mean += p[n] / NODES_PER_ELEM;
     }
     return value;
 }
@@ -115,9 +122,6 @@ void validate_hydraulic_boundaries(const Param &param, const Variables &var);
 // After nodal remapping, reset derived assembly data without replacing the
 // transferred pressure or pending increment.
 void reset_hydraulic_assembly(const Param &param, Variables &var);
-// Seed the transport timestep before the first step and after material/remesh
-// changes. The pressure update also refreshes this bound from current properties.
-void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
 // Fix the well screens in the material of the whole mesh (var.well_pieces): the
 // configured vertical screens, or, after a remesh, the previous pieces from the
 // positions of their ends (2*NDIMS per piece, see well_screen_positions).
@@ -153,9 +157,8 @@ void update_old_mean_stress(const Param &param, const Variables &var,
                            tensor_t &stress, double_vec &old_mean_stress);
 
 // dppressure is the negative pressure change across one physical interval.
-// Physical-inertia steps consume it in the current stress update; quasistatic/
-// PT steps consume it in the next mechanical update. tdot and tmp_result are
-// caller-owned assembly scratch and retain no hydraulic history.
+// hydraulic_strain_form selects the pressure order. tdot and tmp_result
+// are assembly scratch.
 void update_pore_pressure(const Param &param, const Variables &var,
                          double_vec &ppressure, double_vec &dppressure,
                          double_vec &tdot, elem_cache &tmp_result,

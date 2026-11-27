@@ -1209,8 +1209,7 @@ int main(int argc, const char* argv[])
     // Publish and monitor the accepted initial state, not the pre-equilibrium
     // candidate. The first checkpoint therefore records initialization as done.
     if (param.bc.vbc_z1 == 8) {
-        VelocityConstraints constraints(var.nnode);
-        build_velocity_constraints(param, var, constraints);
+        validate_platen_constraints(param, var);
         apply_platen_velocity(param, var, *var.vel);
     }
     if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {

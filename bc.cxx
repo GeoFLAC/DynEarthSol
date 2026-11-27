@@ -2062,6 +2062,28 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
 }
 
+static constexpr const char *platen_constraint_error =
+    "A rigid top platen requires free vertical motion at every top node.";
+
+void validate_platen_constraints(const Param& param, const Variables& var)
+{
+    for (int side = iboundn0; side <= iboundn3; ++side) {
+        if (var.vbc_types[side] == 0) continue;
+        VelocityConstraints constraints(var.nnode);
+        build_velocity_constraints(param, var, constraints);
+        return;
+    }
+    // An axis-aligned velocity BC fixes a component or leaves it free.
+    // Only the vertical basis at the top is needed for the platen.
+    array_t basis(var.nnode, 0.0);
+    for (int n : *var.bnodes[iboundz1]) basis[n][NDIMS-1] = 1;
+    apply_vbcs(param, var, basis, true, true);
+    #pragma acc wait
+    int constrained = 0;
+    for (int n : *var.bnodes[iboundz1]) constrained |= basis[n][NDIMS-1] != 1;
+    if (mpi_any(var, constrained)) die_together(EXIT_CONFIG_VALUE, platen_constraint_error);
+}
+
 void build_velocity_constraints(const Param& param, const Variables& var,
                                 VelocityConstraints& constraints, bool homogeneous)
 {
@@ -2149,7 +2171,7 @@ void build_velocity_constraints(const Param& param, const Variables& var,
         if (param.bc.vbc_z1 == 8 && ((*var.bcflag)[n] & BOUNDZ1))
             for (int d=0; d<NDIMS; ++d)
                 if (std::abs(p[n][d*NDIMS+NDIMS-1] - (d == NDIMS-1)) > 1e-12)
-                    die(EXIT_CONFIG_VALUE, "A rigid top platen requires free vertical motion at every top node.");
+                    die(EXIT_CONFIG_VALUE, platen_constraint_error);
     }
     if (mpi_any(var, inconsistent))
         die_together(EXIT_CONFIG_VALUE, "The velocity boundary constraints have no consistent fixed point.");

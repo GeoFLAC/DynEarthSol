@@ -50,6 +50,11 @@ def material_properties(cfg):
     return {name: float(json.loads(cfg['mat'][key])[0]) for name, key in MATERIAL_KEYS.items()}
 
 
+def mean_stress_modulus(dim, bulk, shear):
+    """Relate mean total stress to volume strain, using the in-plane mean in 2D."""
+    return bulk + shear/3 if dim == 2 else bulk
+
+
 def write_poly(path, points, edges, regions):
     """Triangle .poly file of points (x, z), edges (start, end, marker), no holes and regions
     (x, z, attribute, maximum area)."""
@@ -72,7 +77,13 @@ def reset_boundaries(bc, **values):
 
 
 def source_revision(root=ROOT):
-    return subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    try:
+        top, revision = subprocess.check_output(
+            ['git', 'rev-parse', '--show-toplevel', 'HEAD'], cwd=root,
+            stderr=subprocess.DEVNULL, text=True).splitlines()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return None
+    return revision if Path(top).resolve() == Path(root).resolve() else None
 
 
 def source_diff(root=ROOT):
@@ -81,10 +92,11 @@ def source_diff(root=ROOT):
 
 def provenance(executable, runner, output=None):
     """Executable path and sha256, runner sha256, source commit; writes output/source.diff if given."""
-    if output is not None:
+    revision = source_revision()
+    if output is not None and revision is not None:
         (Path(output)/'source.diff').write_bytes(source_diff())
     return dict(executable=str(executable), executable_sha256=digest(executable),
-                runner_sha256=digest(runner), source_commit=source_revision())
+                runner_sha256=digest(runner), source_commit=revision)
 
 
 def check_manifest(manifest, binary_hash):
@@ -133,16 +145,6 @@ def restart_check(executable, cfg_or_path, case, steps, restart_frame, require_r
     command += ['--require-remesh']*require_remesh + ['--require-stationary']*require_stationary
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     return run_solver(command, log=case.parent/(case.name+'.log'), env=env, check=True, timeout=timeout)
-
-
-def layer_strain(coord, conn, ezz, h, origin, height):
-    """Mean element ezz of each layer of thickness h in a structured column, counted from z = origin."""
-    distance = np.abs(coord[conn][:, :, -1].mean(axis=1) - origin)
-    layer = np.floor(distance/h).astype(int)
-    n = int(round(height/h))
-    count = np.bincount(layer, minlength=n).astype(float)
-    assert len(count) == n and count.min() > 0, 'the column mesh must be structured in layers of height h'
-    return np.bincount(layer, weights=ezz, minlength=n)/count
 
 
 def hydraulic_substeps(x, conn, storage, mobility, dt):

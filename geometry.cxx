@@ -1682,7 +1682,7 @@ double compute_dt(const Param& param, Variables& var,
     double dt_maxwell = std::numeric_limits<double>::max();
     double dt_rsf = std::numeric_limits<double>::max();
     double dt_diffusion = std::numeric_limits<double>::max();
-    double dt_hydro_diffusion = std::numeric_limits<double>::max();
+    double hydro_diffusivity = 0;
     double dt_hydro_wave = std::numeric_limits<double>::max();
     double hydro_wave_length = std::numeric_limits<double>::max();
     double hydro_wave_floor = std::numeric_limits<double>::max();
@@ -1706,13 +1706,13 @@ double compute_dt(const Param& param, Variables& var,
     int nan_elem_count = 0;
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
+        reduction(max: global_max_vem, hydro_diffusivity) reduction(+: nan_elem_count) \
         default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
+        reduction(max: global_max_vem, hydro_diffusivity) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -1796,11 +1796,9 @@ double compute_dt(const Param& param, Variables& var,
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
         
-        if (param.control.has_hydraulic_diffusion)
-            if (var.mat->hydro_diff_max > 0) {
-                dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-                                            0.5 * minh * minh / var.mat->hydro_diff_max);
-            }
+        const double diffusivity = param.control.has_hydraulic_diffusion
+            ? hydraulic_diffusivity(param, *var.mat, e) : 0;
+        hydro_diffusivity = std::max(hydro_diffusivity, diffusivity);
         minl = std::min(minl, minh);
 
         if (hydraulic_strain_form(param)) {
@@ -1836,13 +1834,15 @@ double compute_dt(const Param& param, Variables& var,
 
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
-        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min,
+        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, global_dt_min,
                            dt_hydro_wave, hydro_wave_length, hydro_wave_floor};
         var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
         minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
-        dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
-        dt_hydro_wave=limits[6]; hydro_wave_length=limits[7]; hydro_wave_floor=limits[8];
-        global_max_vem=var.mpi->maximum(global_max_vem);
+        global_dt_min=limits[4]; dt_hydro_wave=limits[5];
+        hydro_wave_length=limits[6]; hydro_wave_floor=limits[7];
+        double maxima[] = {global_max_vem, hydro_diffusivity};
+        var.mpi->maximum(maxima, 2);
+        global_max_vem=maxima[0]; hydro_diffusivity=maxima[1];
         nan_elem_count=var.mpi->sum(nan_elem_count);
     }
 #endif
@@ -1905,6 +1905,8 @@ double compute_dt(const Param& param, Variables& var,
     }
 
     // The step is the smallest of the limits, times dt_fraction.
+    const double dt_hydro_diffusion = hydro_diffusivity > 0
+        ? 0.5 * minl * minl / hydro_diffusivity : std::numeric_limits<double>::max();
     double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
                           dt_diffusion, dt_hydro_diffusion, dt_hydro_wave}) *
                 param.control.dt_fraction;
@@ -1951,20 +1953,21 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    refresh_hydraulic_diffusivity(param, var);
+    var.mat->hydro_step_limit = 0;
+    int invalid_hydraulics = 0;
 
 #ifndef ACC
 #ifdef GPP1X
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
 #else
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
 #endif
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
         for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
@@ -1982,7 +1985,11 @@ void compute_mass(const Param &param, const Variables &var,
 
             double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
             double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
-            double hm = hydraulic_storage(param, *var.mat, e) * (*var.volume)[e] / NODES_PER_ELEM;
+            const double storage = hydraulic_storage(param, *var.mat, e);
+            const double diffusivity = param.control.has_hydraulic_diffusion
+                ? hydraulic_mobility(*var.mat, e) / storage : 0;
+            invalid_hydraulics |= !std::isfinite(diffusivity) || diffusivity < 0;
+            double hm = storage * (*var.volume)[e] / NODES_PER_ELEM;
             double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
             tr[0] = (*var.volume)[e];
@@ -2040,6 +2047,11 @@ void compute_mass(const Param &param, const Variables &var,
         }
     }
 
+    if (param.control.has_hydraulic_diffusion) {
+        #pragma acc wait
+        if (mpi_any(var, invalid_hydraulics))
+            die_together(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties.");
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif

@@ -7,6 +7,7 @@ On a sealed fixed mesh with zero hydraulic mobility, the pressure storage
 change must equal minus the projected volumetric strain.
 """
 
+import json
 import math
 from pathlib import Path
 import sys
@@ -16,10 +17,55 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'tests/functional'))
-from Dynearthsol import Dynearthsol, scan_frames
+from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 from des_case import digest, read_config, reset_boundaries, write_json
-from des_test_utils import fields, lumped_volumes, mesh_measures, run_des, simplex_volumes
+from des_test_utils import checkpoint_arrays, fields, lumped_volumes, mesh_measures, run_des, simplex_volumes
+
+
+def stress_coupling(executable, output, dim, method, rheology):
+    """An isochoric pressure ramp and decaying shear select the viscous EVP branch."""
+    cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    dt, viscosity, shear, biot, pressure = .01, 1e5, 1e7, .6, 4e4
+    cfg['sim'].update(modelname='ramp', max_steps='2')
+    cfg['mesh'].update(resolution='1', largest_size='1', smallest_size='1')
+    cfg['control'].update(has_PT='false', gravity='0', has_thermal_diffusion='false',
+                          fixed_dt=repr(dt), is_using_mixed_stress='false',
+                          use_global_velocity_scaling=str(method == 'gvs'))
+    initial = [5000., -5000.] + [0.] * (1 if dim == 2 else 4)
+    cfg['ic'].update(has_body_force_adjustment='false', weakzone_option='0',
+                     initial_stress_option='1', initial_stress=json.dumps(initial),
+                     pore_pressure_option='2', pore_pressure_value='0')
+    reset_boundaries(cfg['bc'], vbc='3', vbc_val='0', stress_bc='0', hbc='2')
+    cfg['bc'].update(hbc_pressure=json.dumps([pressure]*6), num_hbc_schedule='2',
+                     hbc_schedule_time_in_yr=json.dumps([0., 2*dt/YEAR2SEC]),
+                     hbc_schedule_ratio='[0,1]')
+    cfg['mat'].update(rheology_type=rheology, is_plane_strain=str(dim == 2),
+                      min_viscosity=repr(viscosity), max_viscosity=repr(viscosity),
+                      biot_coeff=f'[{biot}]', hydraulic_perm='[0]',
+                      cohesion0='[1e7]', cohesion1='[1e7]')
+    output.mkdir()
+    run_des(executable, output, 'input', cfg, timeout=60)
+    model = Dynearthsol(str(output/'ramp'))
+    rows = scan_frames(model.modelname)
+    assert model.ndims == dim and [row['steps'] for row in rows] == [0, 1, 2]
+    relax = (1 - dt*shear/(2*viscosity))/(1 + dt*shear/(2*viscosity))
+    errors = []
+    for row in rows[1:]:
+        frame, step = row['frame'], row['steps']
+        p = pressure*step/2
+        np.testing.assert_allclose(model.read_field(frame, 'pore pressure'), p, rtol=1e-12, atol=0)
+        np.testing.assert_array_equal(model.read_field(frame, 'strain'), 0.)
+        effective = np.zeros(len(initial)) if rheology == 'viscous' else np.array(initial)*relax**step
+        total = effective.copy()
+        total[:dim] -= biot*p
+        s = model.read_field(frame, 'stress')
+        np.testing.assert_allclose(s, np.broadcast_to(total, s.shape), rtol=0, atol=1e-10)
+        errors.append(float(np.max(np.abs(s-total))))
+        if dim == 2:
+            yy = checkpoint_arrays(output/f'ramp.chkpt.{frame:06d}', ['stressyy'])['stressyy']
+            np.testing.assert_allclose(yy, -biot*p, rtol=0, atol=1e-10)
+    return max(errors)
 
 def main():
     executable, output = (Path(p).resolve() for p in sys.argv[1:])
@@ -90,9 +136,18 @@ def main():
                     assert a[key] == b[key], (method, key)
         summary[method] = dict(dimension=dim, frames=len(rows), exact_physical_restart=True,
                              max_local_content_error=max_content_error)
-        write_json(output / 'summary.json', dict(executable_sha256=executable_hash, cases=summary))
         print(method, 'PASS', flush=True)
+    for method in ('explicit', 'gvs'):
+        rheologies = ['viscous', 'maxwell', 'elasto-visco-plastic']
+        if method == 'gvs':
+            rheologies.append('elasto-visco-plastic-rsf')
+        for rheology in rheologies:
+            name = f'{method}-{rheology}'
+            error = stress_coupling(executable, output/name, dim, method, rheology)
+            summary[name] = dict(dimension=dim, max_stress_error_pa=error)
+            print(name, 'PASS', flush=True)
     assert digest(executable) == executable_hash
+    write_json(output / 'summary.json', dict(executable_sha256=executable_hash, cases=summary))
 
 
 if __name__ == '__main__':

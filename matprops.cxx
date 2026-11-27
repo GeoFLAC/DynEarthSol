@@ -190,7 +190,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   visc_max(p.mat.visc_max),
   tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
-  hydro_diff_max(1e-1),
   coord(*var.coord),
   connectivity(*var.connectivity),
   temperature(*var.temperature),

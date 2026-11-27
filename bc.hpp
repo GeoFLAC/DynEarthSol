@@ -18,6 +18,7 @@ struct VelocityConstraints {
 };
 void build_velocity_constraints(const Param& param, const Variables& var,
                                 VelocityConstraints& constraints, bool homogeneous = false);
+void validate_platen_constraints(const Param& param, const Variables& var);
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,
                           array_t& vectors, bool include_prescribed = false);
 void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,

@@ -2103,19 +2103,16 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
         double dpp = 0.0;
         double pore_strength_pressure = 0;
-        const bool increment = has_hydraulic_diffusion;
+        const bool viscous_material = param.mat.rheol_type == MatProps::rh_viscous;
+        const bool increment = has_hydraulic_diffusion && !viscous_material;
         const bool strength = param.control.has_hydraulic_diffusion &&
                               (var.mat->rheol_type & MatProps::rh_plastic);
-        if (increment || strength) {
-            const auto pressure = element_pressure<false>(var,e,ppressure,dppressure,increment,strength);
-            // Biot-weighted pore-pressure INCREMENT, not a rate: update_pore_pressure()
-            // folded dt in, and stores dppressure with the sign OPPOSITE to its change
-            // to ppressure. elastic_effective() adds this to the diagonal components.
-            // Initial equilibrium must test skeleton strength too; it only
-            // suppresses consumption of pending pressure increments.
+        const bool mean = strength || (has_hydraulic_diffusion && viscous_material);
+        if (increment || mean) {
+            const auto pressure = element_pressure<false>(var,e,ppressure,dppressure,increment,mean);
             const double alpha = var.mat->alpha_biot(e);
-            if (increment) dpp = pressure.raw * alpha;
-            if (strength) pore_strength_pressure = pressure.strength * alpha;
+            dpp = pressure.increment * alpha;
+            pore_strength_pressure = pressure.mean * alpha;
         }
 
         // No vz in 2D: compute_slip_rate2 takes the vertical component as its second
@@ -2138,6 +2135,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // stress, strain and strain_rate of this element
         TensorAccessor s = stress[e];
         double& syy = stressyy[e];
+        const bool plane_viscous = var.mat->is_plane_strain &&
+                                   (trial_reference_geometry || has_hydraulic_diffusion);
         TensorAccessor es = strain[e];
         TensorAccessor edot = strain_rate[e];
         double old_s = trace(s);
@@ -2209,14 +2208,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double bulkm = var.mat->bulkm(e);
                 viscosity[e] = var.mat->visc(e);
                 double total_dv = trace(es);
-                double pressure = 0;
-                if (trial_reference_geometry && has_hydraulic_diffusion) {
-                    for (int j=0; j<NODES_PER_ELEM; ++j)
-                        pressure += ppressure[conn[j]] / NODES_PER_ELEM;
-                    pressure *= var.mat->alpha_biot(e);
-                }
                 viscous(bulkm, viscosity[e], total_dv, edot, s,
-                        trial_reference_geometry && var.mat->is_plane_strain ? &syy : nullptr, pressure);
+                        plane_viscous ? &syy : nullptr, pore_strength_pressure);
             }
             break;
         case MatProps::rh_maxwell:
@@ -2227,8 +2220,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 double dv = trial_reference_geometry ? trace(edot)*var.dt
                     : (*var.volume)[e] / (*var.volume_old)[e] - 1;
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, s,
-                        trial_reference_geometry && var.mat->is_plane_strain ? &syy : nullptr,
-                        trial_reference_geometry ? dpp : 0);
+                        plane_viscous ? &syy : nullptr, dpp);
             }
             break;
         case MatProps::rh_ep:
@@ -2267,10 +2259,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
                 double svyy = syy;
-                const bool plane_trial = trial_reference_geometry && var.mat->is_plane_strain;
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv,
-                        plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
-                double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
+                        plane_viscous ? &svyy : nullptr, dpp);
+                double svII = plane_viscous ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
                 MatProps::StrengthPiece piece;
                 const StrengthLaw law = weakening_law(var.mat, e, plstrain[e],
@@ -2289,13 +2280,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     elasto_plastic(bulkm, shearm, de, depls, sp, failure_mode,
                                    has_hydraulic_diffusion, dpp, law);
                 }
-                double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
+                double spII = plane_viscous ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
                 // use the smaller as the final stress
                 if (svII < spII) {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
-                    if (plane_trial) syy = svyy;
+                    if (plane_viscous) syy = svyy;
                 }
                 else {
                     #pragma acc loop seq
@@ -2360,10 +2351,9 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                 #pragma acc loop seq
                 for (int i=0; i<NSTR; ++i) sv[i] = s[i];
                 double svyy = syy;
-                const bool plane_trial = trial_reference_geometry && var.mat->is_plane_strain;
                 maxwell(bulkm, shearm, viscosity[e], var.dt, dv, de, sv,
-                        plane_trial ? &svyy : nullptr, trial_reference_geometry ? dpp : 0);
-                double svII = plane_trial ? second_invariant2(sv, svyy) : second_invariant2(sv);
+                        plane_viscous ? &svyy : nullptr, dpp);
+                double svII = plane_viscous ? second_invariant2(sv, svyy) : second_invariant2(sv);
 
                 // slip rate of the friction law (rsf_slip_rate_projection_option)
                 double slip_rate;
@@ -2396,13 +2386,13 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                     elasto_plastic(bulkm, shearm, de, depls, sp, failure_mode,
                                    has_hydraulic_diffusion, dpp, law);
                 }
-                double spII = plane_trial ? second_invariant2(sp, spyy) : second_invariant2(sp);
+                double spII = plane_viscous ? second_invariant2(sp, spyy) : second_invariant2(sp);
 
                 // use the smaller as the final stress
                 if (svII < spII) {
                     #pragma acc loop seq
                     for (int i=0; i<NSTR; ++i) s[i] = sv[i];
-                    if (plane_trial) syy = svyy;
+                    if (plane_viscous) syy = svyy;
                 }
                 else {
                     #pragma acc loop seq

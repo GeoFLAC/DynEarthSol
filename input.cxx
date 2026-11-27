@@ -598,7 +598,7 @@ static void declare_parameters(opt::Registry &cfg,
          "Assuming the width of the channel is 50 km, 5e7 ton/yr ~= 2.e-5 m^2/s")
 
         ("control.has_poroelastic_pressure_feedback", opt::value<bool>(&p.control.has_poroelastic_pressure_feedback)->default_value(true),
-         "Include mechanical volumetric/mean-stress changes in the hydraulic source; transport remains active when false.")
+         "Include mechanical changes in the hydraulic source. Set false for pressure-only transport with fixed-stress storage.")
         ("control.has_thermal_diffusion", opt::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),

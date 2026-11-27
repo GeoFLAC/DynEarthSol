@@ -149,7 +149,6 @@ public:
     const double visc_max;
     const double tension_max;
     const double therm_diff_max;
-    double hydro_diff_max;
 
     // rheol_type is a sum of these bits; the combinations are the cases of the stress update.
     static constexpr int rh_elastic = 1 << 0;                   // 1

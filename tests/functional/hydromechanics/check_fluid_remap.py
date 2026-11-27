@@ -21,8 +21,8 @@ sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
 
 
-from des_case import read_config, reset_boundaries, run_des, write_json
-from des_test_utils import checkpoint_file, fields, physical_differences, runtime_key, simplex_volumes
+from des_case import material_properties, mean_stress_modulus, read_config, reset_boundaries, run_des, write_json
+from des_test_utils import checkpoint_file, fields, physical_differences, runtime_key, simplex_heights, simplex_volumes
 
 def configuration(case):
     cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
@@ -58,9 +58,8 @@ def inventories(model, frame, cfg):
     phi, alpha = value('porosity'), value('biot_coeff')
     storage = phi/value('fluid_bulk_modulus')+(alpha-phi)/value('bulk_modulus_s')
     feedback = cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=True)
-    mean_bulk = value('bulk_modulus')+(value('shear_modulus')/3 if dim == 2 else 0)
     if not feedback:
-        storage += alpha**2/mean_bulk
+        storage += alpha**2/mean_stress_modulus(dim, value('bulk_modulus'), value('shear_modulus'))
     pressure = model.read_field(frame, 'pore pressure')[cells].mean(axis=1)
     strain = model.read_field(frame, 'strain')[:, :dim].sum(axis=1)
     mobile = float(volume@(storage*pressure+(alpha*strain if feedback else 0)))
@@ -90,6 +89,33 @@ def continuation(exe, folder, cfg, rows):
             assert not different, (frame, suffix, different)
             count += sum(not runtime_key(key) for key in old)
     return count
+
+
+def diffusion_timestep(exe, folder):
+    cfg = configuration('domain-remove')
+    cfg['sim']['max_steps'] = '2'
+    cfg['control'].update(has_PT='false', fixed_dt='0', dt_fraction='.5',
+                          inertial_scaling='1', has_poroelastic_pressure_feedback='false')
+    cfg['mat']['hydraulic_perm'] = '[1e-7]'
+    folder.mkdir()
+    run_des(exe, folder, 'input', cfg)
+    model = Dynearthsol(str(folder/'flow'))
+    rows = scan_frames(model.modelname)
+    first_step = [row for row in rows if row['steps'] == 1]
+    assert len(first_step) > 1
+    frame, time = first_step[-1]['frame'], first_step[-1]['time']
+    x, cells = (model.read_field(frame, key) for key in ('coordinate', 'connectivity'))
+    assert not np.array_equal(model.read_field(first_step[0]['frame'], 'coordinate'), x)
+    h = simplex_heights(x, cells, simplex_volumes(x, cells)).min()
+    mat = material_properties(cfg)
+    phi, alpha = mat['porosity'], mat['biot']
+    bulk = mean_stress_modulus(model.ndims, mat['bulk'], mat['shear'])
+    storage = phi/mat['fluid_bulk'] + (alpha-phi)/mat['grain_bulk'] + alpha**2/bulk
+    diffusivity = mat['permeability']/mat['viscosity']/storage
+    expected = .5*.5*h*h/diffusivity
+    accepted = next(row['time'] for row in rows if row['steps'] == 2) - time
+    np.testing.assert_allclose(accepted, expected, rtol=2e-12, atol=0)
+    return dict(observed=float(accepted), expected=float(expected))
 
 
 def main():
@@ -138,7 +164,9 @@ def main():
         records.append(dict(case=case, maximum_relative_remap_defect=max(defects),
                             exact_restart_payloads=exact, remeshes=len(remeshes)))
         print('PASS fluid remap', case, flush=True)
-    write_json(output/'summary.json', dict(passed=True, cases=records,
+    dt = diffusion_timestep(exe, output/'diffusion-timestep')
+    print('PASS post-remesh diffusion timestep', flush=True)
+    write_json(output/'summary.json', dict(passed=True, cases=records, dt_after_remesh_s=dt,
         scope='Fixed-property linear Biot inventories'))
 
 

@@ -730,9 +730,6 @@ struct MpiSimulation::Impl {
                 if (param.control.surface_process_option == 1 && !surface_on_root) index_local_surface();
             }
         }
-        double hydro_diff_max = rank == 0 ? master->mat->hydro_diff_max : 0;
-        MPI_Bcast(&hydro_diff_max, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        local.mat->hydro_diff_max = hydro_diff_max;
         peer.resize(part.halos.size());
         requests.resize(2*part.halos.size());
         transfers.resize(part.halos.size());
@@ -870,7 +867,6 @@ struct MpiSimulation::Impl {
         gather_rows(false, element_fields(local), root_element_fields);
         if (surface_on_ranks) collect_surface();
         if (rank == 0) {
-            master->mat->hydro_diff_max = local.mat->hydro_diff_max;
             if (master->fluid_balance && local.fluid_balance) *master->fluid_balance = *local.fluid_balance;
         }
         root_version = version;
