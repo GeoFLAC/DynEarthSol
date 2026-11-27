@@ -14,6 +14,10 @@
 #include "utils.hpp"
 
 
+// The six box boundaries, in the order of the iboundx0 ... iboundz1 flags.
+static const char *const side_name[6] = {"x0", "x1", "y0", "y1", "z0", "z1"};
+
+
 static void declare_point_source(opt::Registry &cfg, const char *section,
                                  Injection &source)
 {
@@ -703,31 +707,17 @@ static void declare_parameters(opt::Registry &cfg,
     const char *thermal_value_help = "Fixed boundary temperature in K; defaults to surface_temperature (mantle_temperature at z0). "
          "It is applied at initialization, so a value that differs from the initial temperature is part "
          "of the initial state, not a thermal load; to heat a boundary at t > 0, restart with the new value.";
+    // Only the top boundary holds a fixed temperature by default.
+    for (int i = 0; i < 6; ++i) {
+        const std::string side = side_name[i];
+        cfg.add_options()
+            (("bc.tbc_" + side).c_str(), opt::value<int>(&p.bc.tbc[i])->default_value(i == iboundz1 ? 1 : 0),
+             thermal_boundary_help)
+            (("bc.tbc_val_" + side).c_str(), opt::value<double>(&p.bc.tbc_value[i])->default_value(std::numeric_limits<double>::quiet_NaN()),
+             thermal_value_help)
+            ;
+    }
     cfg.add_options()
-        ("bc.tbc_x0", opt::value<int>(&p.bc.tbc[0])->default_value(0),
-         thermal_boundary_help)
-        ("bc.tbc_val_x0", opt::value<double>(&p.bc.tbc_value[0])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
-        ("bc.tbc_x1", opt::value<int>(&p.bc.tbc[1])->default_value(0),
-         thermal_boundary_help)
-        ("bc.tbc_val_x1", opt::value<double>(&p.bc.tbc_value[1])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
-        ("bc.tbc_y0", opt::value<int>(&p.bc.tbc[2])->default_value(0),
-         thermal_boundary_help)
-        ("bc.tbc_val_y0", opt::value<double>(&p.bc.tbc_value[2])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
-        ("bc.tbc_y1", opt::value<int>(&p.bc.tbc[3])->default_value(0),
-         thermal_boundary_help)
-        ("bc.tbc_val_y1", opt::value<double>(&p.bc.tbc_value[3])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
-        ("bc.tbc_z0", opt::value<int>(&p.bc.tbc[4])->default_value(0),
-         thermal_boundary_help)
-        ("bc.tbc_val_z0", opt::value<double>(&p.bc.tbc_value[4])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
-        ("bc.tbc_z1", opt::value<int>(&p.bc.tbc[5])->default_value(1),
-         thermal_boundary_help)
-        ("bc.tbc_val_z1", opt::value<double>(&p.bc.tbc_value[5])->default_value(std::numeric_limits<double>::quiet_NaN()),
-         thermal_value_help)
         ("bc.surface_temperature", opt::value<double>(&p.bc.surface_temperature)->default_value(273),
          "Surface temperature (in Kelvin)")
         ("bc.mantle_temperature", opt::value<double>(&p.bc.mantle_temperature)->default_value(1600),
@@ -748,39 +738,23 @@ static void declare_parameters(opt::Registry &cfg,
         ("bc.sea_water_density", opt::value<double>(&p.bc.sea_water_density)->default_value(1030),
          "Density of the loading water (in kg/m^3). Used for the top-boundary "
          "water load and for the free-surface stress pin that must match it.")
+        ;
 
-         // pore pressure boundary condition
-        ("bc.hbc_x0", opt::value<int>(&p.bc.hbc_x0)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
+    // pore pressure boundary condition
+    const char *hydraulic_boundary_help = "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
          "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
          "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-        ("bc.hbc_x1", opt::value<int>(&p.bc.hbc_x1)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-        ("bc.hbc_y0", opt::value<int>(&p.bc.hbc_y0)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-        ("bc.hbc_y1", opt::value<int>(&p.bc.hbc_y1)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-        ("bc.hbc_z0", opt::value<int>(&p.bc.hbc_z0)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-        ("bc.hbc_z1", opt::value<int>(&p.bc.hbc_z1)->default_value(0),
-         "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.")
-
+         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.";
+    int *const hbc[6] = {&p.bc.hbc_x0, &p.bc.hbc_x1, &p.bc.hbc_y0,
+                         &p.bc.hbc_y1, &p.bc.hbc_z0, &p.bc.hbc_z1};
+    for (int i = 0; i < 6; ++i) {
+        const std::string side = side_name[i];
+        cfg.add_options()
+            (("bc.hbc_" + side).c_str(), opt::value<int>(hbc[i])->default_value(0),
+             hydraulic_boundary_help)
+            ;
+    }
+    cfg.add_options()
         ("bc.hbc_pressure", opt::list()->default_value("[0,0,0,0,0,0]"),
          "Pressure in Pa for hbc=2, ordered x0 x1 y0 y1 z0 z1.")
         ("bc.hbc_flux", opt::list()->default_value("[0,0,0,0,0,0]"),
@@ -813,58 +787,34 @@ static void declare_parameters(opt::Registry &cfg,
         ("bc.well_schedule_ratio", opt::list()->default_value("[1]"),
          "Rate multiplier at each schedule time: linear in between, held outside. Each step "
          "applies its exact time average, so the volume pumped is independent of dt.")
+        ;
 
-         // General stress (Neumann) boundary conditions 
-        ("bc.stress_bc_x0", opt::value<int>(&p.bc.stress_bc_x0)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
+    // General stress (Neumann) boundary conditions
+    const char *stress_boundary_help = "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
          "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
          "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-        ("bc.stress_bc_x1", opt::value<int>(&p.bc.stress_bc_x1)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
-         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
-         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-        ("bc.stress_bc_y0", opt::value<int>(&p.bc.stress_bc_y0)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
-         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
-         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-        ("bc.stress_bc_y1", opt::value<int>(&p.bc.stress_bc_y1)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
-         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
-         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-        ("bc.stress_bc_z0", opt::value<int>(&p.bc.stress_bc_z0)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
-         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
-         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-        ("bc.stress_bc_z1", opt::value<int>(&p.bc.stress_bc_z1)->default_value(0),
-         "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
-         "normal-stress component (3D only); 3: z normal-stress component; 4: facet-normal "
-         "stress on any orientation. Use the corresponding bc.stress_val_* in Pa; tension is "
-         "positive and compression negative.")
-
-        ("bc.stress_val_x0", opt::value<double>(&p.bc.stress_val_x0)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-        ("bc.stress_val_x1", opt::value<double>(&p.bc.stress_val_x1)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-        ("bc.stress_val_y0", opt::value<double>(&p.bc.stress_val_y0)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-        ("bc.stress_val_y1", opt::value<double>(&p.bc.stress_val_y1)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-        ("bc.stress_val_z0", opt::value<double>(&p.bc.stress_val_z0)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-        ("bc.stress_val_z1", opt::value<double>(&p.bc.stress_val_z1)->default_value(0.0),
-         "Prescribed stress value (Pa): positive in tension, negative in compression; the "
-         "corresponding bc.stress_bc_* selects the component or facet-normal direction.")
-
+         "positive and compression negative.";
+    const char *stress_value_help = "Prescribed stress value (Pa): positive in tension, negative in compression; the "
+         "corresponding bc.stress_bc_* selects the component or facet-normal direction.";
+    int *const stress_bc[6] = {&p.bc.stress_bc_x0, &p.bc.stress_bc_x1, &p.bc.stress_bc_y0,
+                               &p.bc.stress_bc_y1, &p.bc.stress_bc_z0, &p.bc.stress_bc_z1};
+    double *const stress_val[6] = {&p.bc.stress_val_x0, &p.bc.stress_val_x1, &p.bc.stress_val_y0,
+                                   &p.bc.stress_val_y1, &p.bc.stress_val_z0, &p.bc.stress_val_z1};
+    for (int i = 0; i < 6; ++i) {
+        const std::string side = side_name[i];
+        cfg.add_options()
+            (("bc.stress_bc_" + side).c_str(), opt::value<int>(stress_bc[i])->default_value(0),
+             stress_boundary_help)
+            ;
+    }
+    for (int i = 0; i < 6; ++i) {
+        const std::string side = side_name[i];
+        cfg.add_options()
+            (("bc.stress_val_" + side).c_str(), opt::value<double>(stress_val[i])->default_value(0.0),
+             stress_value_help)
+            ;
+    }
+    cfg.add_options()
         ("bc.vbc_x0", opt::value<int>(&p.bc.vbc_x0)->default_value(1),
          "Type of velocity boundary condition for the left/western side. "
          "Odd number indicates the normal component of the velocity is fixed. "
@@ -1596,6 +1546,76 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
+// Read n coordinates per point from section.points_x, points_y and points_z. In 2D,
+// z_list() is called once points_x is read and names the list that holds z:
+// points_z or its legacy alias points_y.
+template<class F>
+static void get_points(const opt::Registry &vm, const std::string &section, int n,
+                       double_vec &x, double_vec &y, double_vec &z, const F &z_list)
+{
+    const std::string count = section + ".num_points";
+    const auto read = [&](const std::string &name, double_vec &v) {
+        get_numbers(vm, (section + "." + name).c_str(), v, n, count.c_str());
+    };
+    read("points_x", x);
+#ifdef THREED
+    read("points_y", y);
+    read("points_z", z);
+#else
+    read(z_list(), z);
+#endif
+}
+
+
+// Convert n points from unit (mm, cm, m or km) to metres. Returns the factor, or 0
+// for any other unit, leaving the points unchanged.
+static double points_to_metres(const std::string &unit, int n,
+                               double_vec &x, double_vec &y, double_vec &z)
+{
+    double scale;
+    if (unit == "mm") scale = 1e-3;
+    else if (unit == "cm") scale = 1e-2;
+    else if (unit == "m") scale = 1;
+    else if (unit == "km") scale = 1e3;
+    else return 0;
+    for (int i = 0; i < n; ++i) {
+        x[i] *= scale;
+#ifdef THREED
+        y[i] *= scale;
+#endif
+        z[i] *= scale;
+    }
+    return scale;
+}
+
+
+// Read a schedule of count (>= 1) points from the lists times_name (in yr) and
+// ratios_name. Times must be non-decreasing; otherwise stop with unsorted_msg.
+static void parse_schedule(const opt::Registry &vm, int count, const char *count_name,
+                           const char *times_name, double_vec &times,
+                           const char *ratios_name, double_vec &ratios,
+                           const char *unsorted_msg)
+{
+    if (count < 1) {
+        const std::string msg = std::string(count_name) + " must be positive.";
+        die(EXIT_CONFIG_VALUE, msg.c_str());
+    }
+    get_numbers(vm, times_name, times, count, count_name);
+    get_numbers(vm, ratios_name, ratios, count, count_name);
+    if (! std::is_sorted(times.begin(), times.end()))
+        die(EXIT_CONFIG_VALUE, unsorted_msg);
+}
+
+
+// Stop with msg unless every value in the lists is finite.
+static void require_finite(std::initializer_list<const double_vec*> lists, const char *msg)
+{
+    for (const double_vec *v : lists)
+        for (double x : *v)
+            if (! std::isfinite(x)) die(EXIT_CONFIG_VALUE, msg);
+}
+
+
 #ifdef USEMPI
 // The values of the options that choose code inside the distributed kernels, each
 // checked against the MPI backend: its fields are in mpi_local_fields.hpp and
@@ -1675,24 +1695,15 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
         const std::string name_key = key(name);
         get_numbers(vm,name_key.c_str(),v,n,group.c_str(),broadcast);
     };
-    list("points_x",source.points_x);
-#ifdef THREED
-    list("points_y",source.points_y);
-    list("points_z",source.points_z);
-#else
-    const bool y = !vm.defaulted(key("points_y")), z = !vm.defaulted(key("points_z"));
-    if (y == z) fail("supply points_z in 2D; points_y is a mutually exclusive legacy alias.");
-    list(z ? "points_z" : "points_y",source.points_z);
-#endif
-    double scale = 0;
-    if (source.points_unit == "m") scale=1;
-    else if (source.points_unit == "mm") scale=1e-3;
-    else if (source.points_unit == "cm") scale=1e-2;
-    else if (source.points_unit == "km") scale=1e3;
-    else fail("points_unit must be mm, cm, m or km.");
+    get_points(vm,section,n,source.points_x,source.points_y,source.points_z,[&]() {
+        const bool y = !vm.defaulted(key("points_y")), z = !vm.defaulted(key("points_z"));
+        if (y == z) fail("supply points_z in 2D; points_y is a mutually exclusive legacy alias.");
+        return z ? "points_z" : "points_y";
+    });
+    if (points_to_metres(source.points_unit,n,source.points_x,source.points_y,source.points_z) == 0)
+        fail("points_unit must be mm, cm, m or km.");
     const bool box = p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2;
     const auto coordinate = [&](double &v,double lo,double hi) {
-        v *= scale;
         if (!std::isfinite(v)) fail("point coordinates must remain finite after unit conversion.");
         if (box) {
             const double tol = 5e-11*std::abs(hi-lo);
@@ -1757,10 +1768,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
     //
     // Unspecified thermal side values use bc.surface_temperature and bc.mantle_temperature.
     {
-        const char *side[6] = {"x0", "x1", "y0", "y1", "z0", "z1"};
         for (int i = 0; i < 6; ++i) {
-            const std::string type = std::string("bc.tbc_") + side[i];
-            const std::string value = std::string("bc.tbc_val_") + side[i];
+            const std::string type = std::string("bc.tbc_") + side_name[i];
+            const std::string value = std::string("bc.tbc_val_") + side_name[i];
             const bool supplied = !vm.defaulted(value);
             p.bc.custom_temperature_boundary |= supplied || !vm.defaulted(type);
             if (p.bc.tbc[i] < 0 || p.bc.tbc[i] > 1 ||
@@ -1968,43 +1978,22 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             die(EXIT_CONFIG_VALUE, "monitor.num_points must be >= 0.");
         }
 
-        const char *npts = "monitor.num_points";
-        get_numbers(vm, "monitor.points_x", p.monitor.points_x, p.monitor.num_points, npts);
-#ifdef THREED
-        get_numbers(vm, "monitor.points_y", p.monitor.points_y, p.monitor.num_points, npts);
-        get_numbers(vm, "monitor.points_z", p.monitor.points_z, p.monitor.num_points, npts);
-#else
         // 2D: points_y supplies z when points_z is not given
-        const bool z_from_y = vm.str("monitor.points_z") == "[]" &&
-                              vm.str("monitor.points_y") != "[]";
-        get_numbers(vm, z_from_y ? "monitor.points_y" : "monitor.points_z", p.monitor.points_z,
-                    p.monitor.num_points, npts);
-#endif
+        get_points(vm, "monitor", p.monitor.num_points,
+                   p.monitor.points_x, p.monitor.points_y, p.monitor.points_z, [&]() {
+            return vm.str("monitor.points_z") == "[]" && vm.str("monitor.points_y") != "[]" ?
+                   "points_y" : "points_z";
+        });
 
         if (p.monitor.enabled && p.monitor.num_points <= 0) {
             die(EXIT_CONFIG_VALUE, "monitor.enabled=true requires monitor.num_points > 0.");
         }
 
-        if (p.monitor.points_unit == "mm")
-            p.monitor.points_scale_to_m = 1e-3;
-        else if (p.monitor.points_unit == "cm")
-            p.monitor.points_scale_to_m = 1e-2;
-        else if (p.monitor.points_unit == "m")
-            p.monitor.points_scale_to_m = 1.0;
-        else if (p.monitor.points_unit == "km")
-            p.monitor.points_scale_to_m = 1e3;
-        else {
+        p.monitor.points_scale_to_m = points_to_metres(p.monitor.points_unit, p.monitor.num_points,
+                                                       p.monitor.points_x, p.monitor.points_y,
+                                                       p.monitor.points_z);
+        if (p.monitor.points_scale_to_m == 0) {
             die(EXIT_CONFIG_VALUE, "monitor.points_unit must be one of mm, cm, m, km.");
-        }
-
-        for (int i = 0; i < p.monitor.num_points; ++i) {
-            p.monitor.points_x[i] *= p.monitor.points_scale_to_m;
-#ifdef THREED
-            p.monitor.points_y[i] *= p.monitor.points_scale_to_m;
-            p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
-#else
-            p.monitor.points_z[i] *= p.monitor.points_scale_to_m;
-#endif
         }
 
         const std::string point_type = vm.str("monitor.point_type");
@@ -2265,12 +2254,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                     "ic.initial_stress_option=1 prescribes an absolute stress "
                     "tensor and requires control.gravity=0.");
             }
-            for (int i = 0; i < NSTR; ++i) {
-                if (!std::isfinite(p.ic.initial_stress[i])) {
-                    die(EXIT_CONFIG_VALUE,
-                        "ic.initial_stress must contain only finite values.");
-                }
-            }
+            require_finite({&p.ic.initial_stress}, "ic.initial_stress must contain only finite values.");
         }
 
         if (p.ic.temperature_option == 3) {
@@ -2549,22 +2533,17 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                 die(EXIT_CONFIG_VALUE, "Linear initial pressure needs prescribed pressures on x0 and x1.");
         }
         get_numbers(vm, "bc.hbc_flux", p.bc.hbc_flux, 6, "six boundaries");
-        if (p.bc.num_hbc_schedule < 1)
-            die(EXIT_CONFIG_VALUE, "bc.num_hbc_schedule must be positive.");
-        get_numbers(vm, "bc.hbc_schedule_time_in_yr", p.bc.hbc_schedule_time_in_yr,
-                    p.bc.num_hbc_schedule, "bc.num_hbc_schedule");
-        get_numbers(vm, "bc.hbc_schedule_ratio", p.bc.hbc_schedule_ratio,
-                    p.bc.num_hbc_schedule, "bc.num_hbc_schedule");
-        if (!std::is_sorted(p.bc.hbc_schedule_time_in_yr.begin(), p.bc.hbc_schedule_time_in_yr.end()))
-            die(EXIT_CONFIG_VALUE, "Boundary schedule times must be nondecreasing.");
+        parse_schedule(vm, p.bc.num_hbc_schedule, "bc.num_hbc_schedule",
+                       "bc.hbc_schedule_time_in_yr", p.bc.hbc_schedule_time_in_yr,
+                       "bc.hbc_schedule_ratio", p.bc.hbc_schedule_ratio,
+                       "Boundary schedule times must be nondecreasing.");
         const int hbc[] = {p.bc.hbc_x0,p.bc.hbc_x1,p.bc.hbc_y0,p.bc.hbc_y1,p.bc.hbc_z0,p.bc.hbc_z1};
         for (int i = 0; i < 6; ++i)
             if (hbc[i] < 0 || hbc[i] > 3)
                 die(EXIT_CONFIG_VALUE, "Hydraulic boundary types must be 0, 1, 2 or 3.");
-        for (const double_vec *v : {&p.bc.hbc_pressure, &p.bc.hbc_flux,
-                                   &p.bc.hbc_schedule_time_in_yr, &p.bc.hbc_schedule_ratio})
-            for (double x : *v)
-                if (!std::isfinite(x)) die(EXIT_CONFIG_VALUE, "Hydraulic boundary data must be finite.");
+        require_finite({&p.bc.hbc_pressure, &p.bc.hbc_flux,
+                        &p.bc.hbc_schedule_time_in_yr, &p.bc.hbc_schedule_ratio},
+                       "Hydraulic boundary data must be finite.");
         if (p.bc.num_wells > 0) {
             if (! p.control.has_hydraulic_diffusion) {
                 die(EXIT_CONFIG_VALUE, "bc.num_wells > 0 requires control.has_hydraulic_diffusion.");
@@ -2585,20 +2564,14 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                     die(EXIT_CONFIG_VALUE);
                 }
             }
-            if (p.bc.num_well_schedule < 1) {
-                die(EXIT_CONFIG_VALUE, "bc.num_well_schedule must be positive.");
-            }
-            const char *ns = "bc.num_well_schedule";
-            get_numbers(vm, "bc.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr, p.bc.num_well_schedule, ns);
-            get_numbers(vm, "bc.well_schedule_ratio", p.bc.well_schedule_ratio, p.bc.num_well_schedule, ns);
-            for (const double_vec *v : {&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
-                                       &p.bc.well_z_bottom, &p.bc.well_rate,
-                                       &p.bc.well_schedule_time_in_yr, &p.bc.well_schedule_ratio})
-                for (double x : *v)
-                    if (!std::isfinite(x)) die(EXIT_CONFIG_VALUE, "Well coordinates, rates and schedules must be finite.");
-            if (! std::is_sorted(p.bc.well_schedule_time_in_yr.begin(), p.bc.well_schedule_time_in_yr.end())) {
-                die(EXIT_CONFIG_VALUE, "bc.well_schedule_time_in_yr must be non-decreasing.");
-            }
+            parse_schedule(vm, p.bc.num_well_schedule, "bc.num_well_schedule",
+                           "bc.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr,
+                           "bc.well_schedule_ratio", p.bc.well_schedule_ratio,
+                           "bc.well_schedule_time_in_yr must be non-decreasing.");
+            require_finite({&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
+                            &p.bc.well_z_bottom, &p.bc.well_rate,
+                            &p.bc.well_schedule_time_in_yr, &p.bc.well_schedule_ratio},
+                           "Well coordinates, rates and schedules must be finite.");
         }
 
         if (p.ic.nhlayer < 0) {
