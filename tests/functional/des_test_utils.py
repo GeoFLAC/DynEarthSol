@@ -16,17 +16,9 @@ def digest(path):
 
 
 def checkpoint_file(path):
-    """The native file at path or its .vtkhdf sibling, whichever exists; None if neither."""
-    path = Path(path)
+    """The .vtkhdf file of a save or checkpoint path; None if it does not exist."""
     hdf = Path(str(path) + '.vtkhdf')
-    return path if path.is_file() else hdf if hdf.is_file() else None
-
-
-def native_offsets(data):
-    """Field name -> byte offset, in file order, from a native save or checkpoint header."""
-    header = bytes(data[:4096]).split(b'\0', 1)[0]
-    return {name.decode(): int(pos) for name, pos in
-            (line.rsplit(b'\t', 1) for line in header.splitlines()[1:])}
+    return hdf if hdf.is_file() else None
 
 
 def fields(path):

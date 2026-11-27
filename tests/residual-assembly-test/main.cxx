@@ -811,9 +811,9 @@ static void test_material_trials() {
             if (model==MatProps::rh_elastic && alpha==0) {
                 double first_strength=0;
                 for(double slip : {1e-9,1.0,100.0}) {
-                    double amc,anphi,anpsi,hardn,tenmax,mu=0.6,theta=10;
-                    m->var.mat->plastic_props_rsf(0,0,amc,anphi,anpsi,hardn,tenmax,
-                                                 slip,mu,theta,0.1,0,true);
+                    double mu=0.6,theta=10;
+                    const auto p=m->var.mat->plastic_props_rsf(0,0,slip,mu,theta,0.1,0,true);
+                    const double anphi=p.strength.anphi;
                     if(slip==1e-9) first_strength=anphi;
                     check("initial RSF frozen friction",mu,0.6);
                     check("initial RSF frozen state",theta,10);
@@ -984,9 +984,7 @@ static void compliance_plastic_2d(const Param& param, const double trial[3], con
 // The strength of element 0 at plastic strain pls, as update_stress takes it
 // before a return.
 static MatProps::StrengthPiece element_strength(const MaterialFixture& f, double pls) {
-    MatProps::StrengthPiece piece;
-    f.m->var.mat->strength_here(0,pls,piece);
-    return piece;
+    return f.m->var.mat->strength_here(0,pls);
 }
 
 // The principal stresses of element 0 after a principal trial: in pure 2D the
@@ -1142,7 +1140,7 @@ static void test_mohr_coulomb_returns() {
             }
             const MatProps::StrengthPiece stored=element_strength(f,pls[0]);
             const double high=NDIMS==2 ? yy[0] : stress[0][2];
-            check("MC stored history reproduces yield",stress[0][0]-stored.anphi*high+stored.amc,0);
+            check("MC stored history reproduces yield",stress[0][0]-stored.strength.anphi*high+stored.strength.amc,0);
             f.update();
             for(int e=0;e<ne;++e) {
                 for(int d=0;d<NDIMS;++d)
@@ -1267,8 +1265,9 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     else compliance_plastic(f.m->param,trial,result,plastic);
     const double recorded=recorded_plastic_increment(plastic,nd);
     const double history=(*f.pls)[0];
-    const MatProps::StrengthPiece strength=element_strength(f,start_angles ? initial_history : history);
-    const double amc=strength.amc, anphi=strength.anphi, anpsi=strength.anpsi, cap=strength.ten_max;
+    const MatProps::StrengthPiece piece=element_strength(f,start_angles ? initial_history : history);
+    const double amc=piece.strength.amc, anphi=piece.strength.anphi, anpsi=piece.strength.anpsi,
+                 cap=piece.strength.ten_max;
     double scale=std::fabs(amc);
     for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
     const double shear=result[0]-anphi*result[nd-1]+amc, tension=cap-result[nd-1];
@@ -1460,8 +1459,8 @@ static void test_pure_2d_softening_return() {
         f.set_principal(trial);
         f.update();
         const double history=(*f.pls)[0];
-        const MatProps::StrengthPiece strength=element_strength(f,history);
-        const double amc=strength.amc, anphi=strength.anphi;
+        const MatProps::StrengthPiece piece=element_strength(f,history);
+        const double amc=piece.strength.amc, anphi=piece.strength.anphi;
         double r[3];
         element_principal(f,r);
         check("pure 2D softening stays in the linear range",history>0 && history<1e-4,1);
@@ -1642,8 +1641,8 @@ static void test_rsf_law_returns() {
         f.state->assign(f.m->var.nelem,10.);
         f.update();
         const double history=(*f.pls)[0], mu=(*f.friction)[0];
-        const MatProps::StrengthPiece strength=element_strength(f,start_angles ? 0 : history);
-        const double amc=strength.amc, anphi=strength.anphi;
+        const MatProps::StrengthPiece piece=element_strength(f,start_angles ? 0 : history);
+        const double amc=piece.strength.amc, anphi=piece.strength.anphi;
         const double cohesion=amc/(2*std::sqrt(anphi));
         const double static_mu=std::tan(std::asin((anphi-1)/(anphi+1)));
         check("rate-and-state friction softening yields",history>0,1);

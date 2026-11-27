@@ -33,7 +33,7 @@ struct RemeshScratch {
     std::unique_ptr<int_vec> remesh_is_changed;
 
     // Per OLD node: 1 if this remesh moved (flatten_*), deleted or collapsed it
-    // (record_affected_old_nodes); read by barycentric_node_interpolation's "interior node not
+    // (detect_flatten_broken); read by barycentric_node_interpolation's "interior node not
     // found" warning.
     std::vector<char> affected_old_node;
 

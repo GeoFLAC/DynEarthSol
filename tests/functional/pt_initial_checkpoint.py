@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check PT initialization and exact binary/HDF5 restart with a short PT config.
+"""Check PT initialization and exact restart with a short PT config.
 
 Usage: pt_initial_checkpoint.py EXECUTABLE CONFIG OUTPUT_DIRECTORY [--restart-frame N] [--steps N]
 The output directory keeps the configs, logs and results.

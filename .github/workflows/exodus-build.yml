@@ -29,14 +29,17 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: get exodus
+      # Only the exodus C library, on Ubuntu's NetCDF and HDF5, so libexodus loads the libhdf5
+      # that DES links. /usr/lib/<triple>/hdf5/serial is Debian's prefix for its serial HDF5.
       run: |
         sudo apt-get update
-        sudo apt-get install -y libcurl4-openssl-dev
+        sudo apt-get install -y libnetcdf-dev libhdf5-dev
         git clone https://github.com/sandialabs/seacas.git
         cd seacas && export ACCESS=`pwd`
-        COMPILER=gnu MATIO=NO GNU_PARALLEL=NO CGNS=NO FMT=NO ./install-tpl.sh
         mkdir build; cd build
-        ../cmake-exodus
+        T=$(gcc -dumpmachine)
+        COMPILER=gnu FORTRAN=NO NETCDF_PATH=/usr HDF5_PATH=/usr/lib/$T/hdf5/serial \
+          ../cmake-exodus -DNetCDF_LIBRARY_DIR=/usr/lib/$T
         make; make install
     - name: make 3d
       run: make ndims=3 useexo=1

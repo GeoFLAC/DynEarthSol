@@ -131,7 +131,7 @@ def main():
                         cfg['control'].update(PT_max_iter='1', PT_use_running_scale='no',
                                               PT_relative_tolerance='1e-30', PT_absolute_tolerance='0')
                     if case == 'mmg-remesh':
-                        cfg['mesh']['remeshing_option'] = '11'
+                        cfg['mesh']['remeshing_option'] = '1'
                     if cfg.getint('mesh', 'meshing_option', fallback=1) in (90, 91):
                         cfg['mesh']['poly_filename'] = str((source.parent/cfg['mesh']['poly_filename']).resolve())
                     label = f'{case}-{dim}d-option{option}'

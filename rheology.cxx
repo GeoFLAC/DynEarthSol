@@ -720,11 +720,14 @@ enum ReturnRejection {
 // Rate-and-state strength (rsf) evaluates the same
 // piecewise cohesion, friction, dilation and cap law with this step's slip
 // rate, state and friction coefficient held fixed.
+using Strength = MatProps::Strength;
+
 struct StrengthLaw {
     const MatProps* mat;
     int e;
     double pls;
-    double amc, anphi, anpsi, hardn, ten_max;   // at delta = 0
+    Strength strength;   // at delta = 0
+    double hardn;        // change of cohesion per unit plastic strain at delta = 0
     bool rsf;
     double slip_rate, state_variable, dyn_fric_coeff;   // rsf only
     int state_model;
@@ -736,10 +739,6 @@ struct StrengthLaw {
     // Biot-weighted pore pressure q (Pa). Stored stress is total, so every
     // strength on the law is shifted to skeleton strength (pore_strength).
     double pore;
-};
-
-struct Strength {
-    double amc, anphi, anpsi, ten_max;
 };
 
 // The strength law along this step's plastic increment delta, one linear
@@ -774,7 +773,7 @@ static void hold_start_angles(StrengthCurve& curve)
         piece.factors = curve.start_factors;
     }
     piece.dfriction = piece.ddilation = 0;
-    curve.law.mat->piece_strength(piece, 0, piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+    piece.strength = curve.law.mat->piece_strength(piece, 0);
 }
 
 #pragma acc routine seq
@@ -782,11 +781,11 @@ static void prepare_piece(StrengthCurve& curve, double from)
 {
     const StrengthLaw& law = curve.law;
     if (law.rsf)
-        law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate, law.state_variable,
-                                    law.dyn_fric_coeff, law.state_model, law.frozen_history,
-                                    curve.piece);
+        curve.piece = law.mat->rsf_strength_piece(law.e, law.pls+from, law.slip_rate,
+                                                  law.state_variable, law.dyn_fric_coeff,
+                                                  law.state_model, law.frozen_history);
     else
-        law.mat->strength_piece(law.e, law.pls+from, curve.piece);
+        curve.piece = law.mat->strength_piece(law.e, law.pls+from);
     curve.from = from;
     if (law.start_angles) hold_start_angles(curve);
 }
@@ -822,9 +821,7 @@ static void pore_strength(double q, double anphi, double &amc, double &ten_max)
 #pragma acc routine seq
 static Strength strength_at(const StrengthCurve& curve, double delta)
 {
-    Strength r;
-    curve.law.mat->piece_strength(curve.piece, delta - curve.from,
-                                  r.amc, r.anphi, r.anpsi, r.ten_max);
+    Strength r = curve.law.mat->piece_strength(curve.piece, delta - curve.from);
     pore_strength(curve.law.pore, r.anphi, r.amc, r.ten_max);
     return r;
 }
@@ -899,8 +896,8 @@ static bool closed_form_consistent(const StrengthCurve& curve, const double p[3]
     const Strength end = strength_at(curve, depls);
     const double tolerance = return_tolerance(p, end.amc, nd);
     const double top = p[nd-1];
-    const bool on_cap = top >= law.ten_max - tolerance;
-    return end.anphi == law.anphi && end.anpsi == law.anpsi &&
+    const bool on_cap = top >= law.strength.ten_max - tolerance;
+    return end.anphi == law.strength.anphi && end.anpsi == law.strength.anpsi &&
         top <= end.ten_max + tolerance &&
         (!on_cap || top >= end.ten_max - tolerance);
 }
@@ -1218,8 +1215,8 @@ static bool find_turn(const double trial[3], double a1, double a2, const Strengt
 static void violation_range(const double trial[3], const StrengthCurve& curve, int nd,
                             double x, double y, double v[2], double tol[2])
 {
-    MatProps::StrengthRange range;
-    curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from, range);
+    const MatProps::StrengthRange range =
+        curve.law.mat->piece_strength_range(curve.piece, x - curve.from, y - curve.from);
     const Strength ends[2] = {strength_at(curve, x), strength_at(curve, y)};
     const double chord = 0.125*(y - x)*(y - x);
     // The corners shifted by the pore pressure q as strength_at is: a face is then
@@ -1682,7 +1679,8 @@ static void elasto_plastic(double bulkm, double shearm,
      *  10: shear failure
      *  30: return for the whole strength law (see consistent_return)
      */
-    const double amc = law.amc, anphi = law.anphi, anpsi = law.anpsi, ten_max = law.ten_max;
+    const double amc = law.strength.amc, anphi = law.strength.anphi;
+    const double anpsi = law.strength.anpsi, ten_max = law.strength.ten_max;
 
     // elastic trial stress
     if (has_hydraulic_diffusion)
@@ -1867,7 +1865,8 @@ static void elasto_plastic2d(double bulkm, double shearm,
      *      (see consistent_return): tension, tension-shear corners and
      *      shear returns the closed form does not cover
      */
-    const double amc = law.amc, anphi = law.anphi, anpsi = law.anpsi, ten_max = law.ten_max;
+    const double amc = law.strength.amc, anphi = law.strength.anphi;
+    const double anpsi = law.strength.anpsi, ten_max = law.strength.ten_max;
 
     depls = 0;
     failure_mode = 0;
@@ -2008,11 +2007,11 @@ static void elasto_plastic2d(double bulkm, double shearm,
 static StrengthLaw weakening_law(const MatProps* mat, int e, double pls, double q,
                                  bool start_angles, MatProps::StrengthPiece& piece)
 {
-    mat->strength_here(e, pls, piece);
-    double amc = piece.amc, ten_max = piece.ten_max;
-    pore_strength(q, piece.anphi, amc, ten_max);
-    return {mat, e, pls, amc, piece.anphi, piece.anpsi, piece.dcohesion, ten_max,
-            false, 0, 0, 0, 0, false, &piece, start_angles, q};
+    piece = mat->strength_here(e, pls);
+    Strength strength = piece.strength;
+    pore_strength(q, strength.anphi, strength.amc, strength.ten_max);
+    return {mat, e, pls, strength, piece.dcohesion, false, 0, 0, 0, 0, false, &piece,
+            start_angles, q};
 }
 
 // The rate-and-state strength law of element e at its plastic strain pls,
@@ -2025,13 +2024,13 @@ static StrengthLaw rate_state_law(const MatProps* mat, int e, double pls, double
                                   int state_model, bool frozen_history, double q,
                                   bool start_angles)
 {
-    double amc, anphi, anpsi, hardn, ten_max;
-    mat->plastic_props_rsf(e, pls, amc, anphi, anpsi, hardn, ten_max, slip_rate,
-                           dyn_fric_coeff, state_variable, dt, state_model, frozen_history);
-    pore_strength(q, anphi, amc, ten_max);
-    return {mat, e, pls, amc, anphi, anpsi, hardn, ten_max, true, slip_rate,
-            state_variable, dyn_fric_coeff, state_model, frozen_history, nullptr,
-            start_angles, q};
+    const MatProps::PlasticProps props =
+        mat->plastic_props_rsf(e, pls, slip_rate, dyn_fric_coeff, state_variable, dt,
+                               state_model, frozen_history);
+    Strength strength = props.strength;
+    pore_strength(q, strength.anphi, strength.amc, strength.ten_max);
+    return {mat, e, pls, strength, props.hardn, true, slip_rate, state_variable,
+            dyn_fric_coeff, state_model, frozen_history, nullptr, start_angles, q};
 }
 
 // The iterative return uses the friction of the stored history pls; store

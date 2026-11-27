@@ -135,13 +135,12 @@ jobs:
               -e "s/^output_step_interval = .*/output_step_interval = 100/" \
               ~/DynEarthSol/examples/defaults.cfg > t.cfg
           ~/DynEarthSol/dynearthsol2d t.cfg
-          python3 -c "import numpy, scipy"
+          python3 ~/DynEarthSol/2vtk.py result
           cd ~/DynEarthSol
-          make -j$(nproc) ndims=3 hdf5=1 usemmg=1 $CXX_ARG
+          make -j$(nproc) ndims=3 $CXX_ARG
         '
 
-    # The coupled example from ./runs, run with the image's executable and
-    # with an hdf5=1 usemmg=1 rebuild.
+    # The coupled example from ./runs, run with the image's executable.
     - name: test the GoSPL image
       if: matrix.variant.gospl == 1
       run: |
@@ -152,15 +151,25 @@ jobs:
         grep -qx 'max_steps = 400' runs/t.cfg
         grep -q '^gospl_coupling_frequency = 200\b' runs/t.cfg
         cp gospl_driver/examples/gospl_config_gaussian_weakzone_3D.yml runs/
-        docker run --rm --network none -e CXX_ARG=${{ matrix.variant.cxx == 'clang-14' && 'CXX=clang++' || '' }} -v "$PWD/runs":/home/human/DynEarthSol/runs des-test bash -lc '
+        docker run --rm --network none -v "$PWD/runs":/home/human/DynEarthSol/runs des-test bash -lc '
           set -e
           cd runs
           ../dynearthsol-gospl t.cfg > run-default.log 2>&1
           grep -q "GoSPL: 2 couplings" run-default.log
-          ! grep -q "MMG not compiled in" run-default.log
-          cd .. && make -j$(nproc) usegospl=1 ndims=3 hdf5=1 usemmg=1 $CXX_ARG
-          cd runs && ../dynearthsol-gospl t.cfg > run-hdf5mmg.log
-          grep -q "GoSPL: 2 couplings" run-hdf5mmg.log
+        '
+
+    # A pip wheel of h5py loads its own libhdf5 beside the env's that DES links;
+    # GoSPL must still run (gospl-driver.cxx). The network is for pip only.
+    - name: test the GoSPL image with a pip wheel of h5py
+      if: matrix.variant.gospl == 1
+      run: |
+        docker run --rm -v "$PWD/runs":/home/human/DynEarthSol/runs des-test bash -lc '
+          set -e
+          pip install -q --force-reinstall --no-deps --only-binary=h5py h5py==3.16.0
+          test -d "$(python -c "import h5py, os; print(os.path.dirname(h5py.__file__))")/../h5py.libs"
+          cd runs
+          ../dynearthsol-gospl t.cfg > run-wheel.log 2>&1 || { tail -40 run-wheel.log; exit 1; }
+          grep -q "GoSPL: 2 couplings" run-wheel.log
         '
 
     # After the tests pass. Rebuilds nothing; exports the layers up to env-*,

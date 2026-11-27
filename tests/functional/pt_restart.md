@@ -22,14 +22,14 @@ settings: resume it with its original settings to write a current-format
 checkpoint before changing those settings. GVS already reselects its
 adaptive timestep/mass pair at restart.
 
-The test supports native binary and HDF5. The recorded 2D/3D cells select
-0.05/0.0333 s after a PT checkpoint carrying 1 s; the parent incorrectly
-keeps 1 s. This check does not qualify an earthquake-cycle energy budget.
+The recorded 2D/3D cells select 0.05/0.0333 s after a PT checkpoint
+carrying 1 s; the parent incorrectly keeps 1 s. This check does not
+qualify an earthquake-cycle energy budget.
 
 ## Unchanged physical continuation
 
-From the repository root, use a CPU executable built with either `hdf5=0` or
-`hdf5=1` (HDF5 comparisons require Python h5py and NumPy):
+From the repository root, use a CPU executable (the comparisons require Python
+h5py and NumPy):
 
 ```sh
 OMP_NUM_THREADS=4 python3 tests/functional/pt_initial_checkpoint.py ./dynearthsol2d tests/functional/pt_remesh_restart.cfg /tmp/des-pt-restart-2d --restart-frame 1 --require-remesh
@@ -56,8 +56,8 @@ The test checks the restored velocity before the next solve and compares every
 subsequent save/checkpoint physical payload exactly, excluding wall-clock duration
 and per-process provenance. HDF5 datasets must also have matching shapes and types and finite
 numeric values. `--require-remesh` requires completed remeshing in both runs and
-changed connectivity. The fixture deliberately triggers existing mesh-quality
-loop-limit warnings; a pass does not establish acceptable mesh quality. The
+changed connectivity. The fixture deliberately triggers MMG mesh-quality
+warnings; a pass does not establish acceptable mesh quality. The
 one-year output interval avoids unrelated output-clock rounding in this short,
 step-driven test. The harness suppresses extra remesh output frames so frame
 numbers match physical step numbers.
@@ -74,8 +74,8 @@ requires stress and pore pressure to remain within 1e-8 of their initial maximum
 absolute magnitude (scale floor 1 Pa), with exactly fixed coordinates. Initial
 PT equilibration retains physical sidewall support and body forces; it suppresses
 transport and pressure-increment consumption, not the hydraulic load definition.
-It does not establish general poroelastic analytical accuracy. Binary and HDF5
-executables use the same checker; the stationarity check requires NumPy.
+It does not establish general poroelastic analytical accuracy. The stationarity
+check requires NumPy.
 
 ## Dynamic time interval and oblique boundaries
 
@@ -104,7 +104,7 @@ directories, and the 3D executable. Use `--schedule step-default` to omit the
 time interval and check a finite checkpoint clock. Select `--method pt`,
 `explicit`, or `gvs` to exercise each integration/output path; the driver
 uses elastic material unless `--rsf` retains the RSF fixture (PT/GVS only).
-Repeat with both PT options. The same checks support binary and HDF5 output.
+Repeat with both PT options.
 Use `--schedule step --step-after-restart 6` or
 `--schedule time --time-after-restart 3.5` to change cadence at restart and
 compare physical fields against an independent output-every-step run.

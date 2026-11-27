@@ -100,6 +100,17 @@ public:
     #pragma acc routine seq
     double d_c(int e) const;
 
+    // The Mohr-Coulomb strength: amc = 2 c sqrt(N_phi), N_phi = (1+sin phi)/(1-sin phi), N_psi
+    // likewise for the dilation angle, and the tension cutoff.
+    struct Strength {
+        double amc, anphi, anpsi, ten_max;
+    };
+    // The strength and hardn, the change of cohesion per unit plastic strain.
+    struct PlasticProps {
+        Strength strength;
+        double hardn;
+    };
+
     // Factors of the strength that depend only on the friction and dilation
     // angles, so that a strength with fixed angles needs no trigonometry.
     struct AngleFactors {
@@ -119,7 +130,7 @@ public:
         int rsf;              // 0: none; 1: rate and state; 2: frozen friction
         double rsf_terms[2];  // added to tan(friction), in this order
         AngleFactors factors;               // at pls
-        double amc, anphi, anpsi, ten_max;  // strength at pls
+        Strength strength;                  // at pls
         bool has_slopes;                    // dfriction, ddilation and end are set
 
         // Whether the friction or dilation angle changes along the piece.
@@ -130,29 +141,29 @@ public:
         }
     };
     #pragma acc routine seq
-    void strength_piece(int e, double pls, StrengthPiece& piece) const;
+    StrengthPiece strength_piece(int e, double pls) const;
     // The strength at pls only, for every element; complete_piece adds the
     // angle slopes and the end once the element yields.
     #pragma acc routine seq
-    void strength_here(int e, double pls, StrengthPiece& piece) const;
+    StrengthPiece strength_here(int e, double pls) const;
     #pragma acc routine seq
     void complete_piece(int e, StrengthPiece& piece) const;
+    // Without frozen_history, advances state_variable by dt and sets dyn_fric_coeff from the
+    // rate and state. With it, an element with markers takes its friction angle from the stored
+    // dyn_fric_coeff and changes neither. An element without markers gets dyn_fric_coeff 0.
     #pragma acc routine seq
-    void plastic_props_rsf(int e, double pls,
-                       double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max, double& slip_rate,
-                       double& dyn_fric_coeff, double& state_variable,
-                       double dt, int state_model, bool frozen_history = false) const;
+    PlasticProps plastic_props_rsf(int e, double pls, double slip_rate,
+                                   double& dyn_fric_coeff, double& state_variable,
+                                   double dt, int state_model, bool frozen_history = false) const;
     // The rate-and-state piece at pls with this step's rate and state held
     // fixed: no state update and no change to the stored friction coefficient.
     #pragma acc routine seq
-    void rsf_strength_piece(int e, double pls, double slip_rate, double state_variable,
-                            double dyn_fric_coeff, int state_model, bool frozen_history,
-                            StrengthPiece& piece) const;
+    StrengthPiece rsf_strength_piece(int e, double pls, double slip_rate, double state_variable,
+                                     double dyn_fric_coeff, int state_model,
+                                     bool frozen_history) const;
     // Strength at plastic strain piece.pls + offset, within the piece.
     #pragma acc routine seq
-    void piece_strength(const StrengthPiece& piece, double offset,
-                        double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    Strength piece_strength(const StrengthPiece& piece, double offset) const;
     // The strength of a piece over the offsets from x to y, for a cohesion that is not
     // negative: the lowest and highest amc, anphi and ten_max, and bounds of the size of
     // their second derivatives per unit plastic strain (for ten_max, of cohesion/tan_phi
@@ -164,8 +175,7 @@ public:
         double error_amc, error_anphi, error_ten;
     };
     #pragma acc routine seq
-    void piece_strength_range(const StrengthPiece& piece, double x, double y,
-                              StrengthRange& range) const;
+    StrengthRange piece_strength_range(const StrengthPiece& piece, double x, double y) const;
     #pragma acc routine seq
     void rsf_friction_from_state(int e, double pls, double slip_rate,
                                  double state_variable, double& dyn_fric_coeff,
@@ -182,16 +192,17 @@ public:
     const double therm_diff_max;
     double hydro_diff_max;
 
-    const static int rh_elastic = 1 << 0; // Decimal value 1
-    const static int rh_viscous = 1 << 1; // Decimal value 2
-    const static int rh_plastic = 1 << 2; // Decimal value 4
-    const static int rh_plastic2d = rh_plastic | 1 << 3; // Decimal value 12
-    const static int rh_rsf = 1 << 4; // Decimal value 16
-    const static int rh_maxwell = rh_elastic | rh_viscous; // Decimal value 3
-    const static int rh_ep = rh_elastic | rh_plastic; // Decimal value 5
-    const static int rh_evp = rh_elastic | rh_viscous | rh_plastic; // Decimal value 7
-    const static int rh_ep_rsf = rh_elastic | rh_plastic | rh_rsf;  // Decimal value 21
-    const static int rh_evp_rsf = rh_elastic | rh_viscous | rh_plastic | rh_rsf; // Decimal value 23
+    // rheol_type is a sum of these bits; the combinations are the cases of the stress update.
+    static constexpr int rh_elastic = 1 << 0;                   // 1
+    static constexpr int rh_viscous = 1 << 1;                   // 2
+    static constexpr int rh_plastic = 1 << 2;                   // 4
+    static constexpr int rh_plastic2d = rh_plastic | 1 << 3;    // 12
+    static constexpr int rh_rsf = 1 << 4;                       // 16
+    static constexpr int rh_maxwell = rh_elastic | rh_viscous;  // 3
+    static constexpr int rh_ep = rh_elastic | rh_plastic;       // 5
+    static constexpr int rh_evp = rh_elastic | rh_viscous | rh_plastic;           // 7
+    static constexpr int rh_ep_rsf = rh_elastic | rh_plastic | rh_rsf;            // 21
+    static constexpr int rh_evp_rsf = rh_elastic | rh_viscous | rh_plastic | rh_rsf;  // 23
 
 private:
 
@@ -216,9 +227,9 @@ private:
     // The hot means, rebuilt by refresh_elem_cache(): pure functions of elemmarkers.
     // Not exhaustive -- rho/visc CANNOT be cached (T, stress, edot). Stride 8 keeps one
     // element's slots in a 64 B line; seven separate arrays measured 1.6x slower.
-    static const int MP_STRIDE = 8;
-    enum { MPC_BULKM = 0, MPC_SHEARM, MPC_PHI, MPC_ALPHA_BIOT,
-           MPC_CP, MPC_K, MPC_BETA_FLUID };
+    static constexpr int MP_STRIDE = 8;
+    enum CacheSlot : int { MPC_BULKM = 0, MPC_SHEARM, MPC_PHI, MPC_ALPHA_BIOT,
+                           MPC_CP, MPC_K, MPC_BETA_FLUID };
     double_vec cache_props;
 
     // Flat copy of elemmarkers, kept ONLY to detect that it moved. A version counter
@@ -251,19 +262,21 @@ private:
     double_vec direct_a, evolution_b, characteristic_velocity, characteristic_distance;
     // double_vec static_friction_coefficient;
 
-    // Marker means of cohesion, friction and dilation angles and the cohesion
-    // slope at pls over n markers.
+    // Marker means at pls over n markers: cohesion, friction and dilation angles in degrees,
+    // and the cohesion slope; all zero without markers.
+    struct Weakening {
+        double cohesion, friction, dilation, hardening;
+        int n;
+    };
     #pragma acc routine seq
-    void weakening_means(int e, double pls,
-                         double &cohesion, double &friction_angle,
-                         double &dilation_angle, double &hardening, int &n) const;
+    Weakening weakening_means(int e, double pls) const;
 
+    // The means with the friction angle of rate and state; sets dyn_fric_coeff unless
+    // frozen_history, which takes the angle from it.
     #pragma acc routine seq
-    void plastic_weakening_rsf(int e, double pls,
-                           double &cohesion, double &dynamic_friction_angle,
-                           double &dilation_angle, double &hardening,
-                           double &slip_rate, double& dyn_fric_coeff,
-                           double& state_variable, int state_model, double dt, bool frozen_history = false) const;
+    Weakening plastic_weakening_rsf(int e, double pls, double slip_rate,
+                                    double& dyn_fric_coeff, double state_variable,
+                                    int state_model, bool frozen_history = false) const;
     #pragma acc routine seq
     void update_state_variable(int e, double slip_rate, double& state_variable,
                                double dt, int state_model) const;
@@ -274,21 +287,25 @@ private:
     // rsf selects the library trigonometry of rate-and-state instead of the
     // tables of Mohr-Coulomb.
     #pragma acc routine seq
-    void angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const;
+    AngleFactors angle_factors(double phi, double psi, bool rsf) const;
     // The angle factors of the piece at friction angle phi and dilation angle
     // psi; a piece with rate-and-state terms (rsf 1) adds them to tan(phi).
     #pragma acc routine seq
-    void piece_factors(const StrengthPiece& piece, double phi, double psi,
-                       AngleFactors& factors) const;
+    AngleFactors piece_factors(const StrengthPiece& piece, double phi, double psi) const;
     // The cohesion and angle factors at plastic strain piece.pls + offset.
+    struct PiecePoint {
+        double cohesion;
+        AngleFactors factors;
+    };
     #pragma acc routine seq
-    void piece_point(const StrengthPiece& piece, double offset,
-                     double& cohesion, AngleFactors& factors) const;
+    PiecePoint piece_point(const StrengthPiece& piece, double offset) const;
     #pragma acc routine seq
-    void strength_from(double cohesion, const AngleFactors& factors,
-                       double& amc, double& anphi, double& anpsi, double& ten_max) const;
+    Strength strength_from(double cohesion, const AngleFactors& factors) const;
     #pragma acc routine seq
     void finish_piece(StrengthPiece& piece) const;
+    // The strength of cohesion and angles phi and psi in degrees; rsf as for angle_factors.
+    #pragma acc routine seq
+    Strength derived_strength(double cohesion, double phi, double psi, bool rsf) const;
 };
 
 
