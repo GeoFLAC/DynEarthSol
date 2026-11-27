@@ -27,7 +27,7 @@ BULK, SHEAR, ALPHA, PHI, FLUID, GRAIN = 2e7, 1e7, 1., .25, 1e6, 1e20
 STORAGE = PHI/FLUID+(ALPHA-PHI)/GRAIN
 
 
-from des_case import digest, file_hashes, hydraulic_substeps, reset_boundaries, run_model, write_json
+from des_case import digest, file_hashes, hydraulic_substeps, mean_stress_modulus, reset_boundaries, run_model, write_json
 from des_test_utils import compare_continuation, simplex_gradients, simplex_volumes
 
 def configuration(method, psi, elastic=False, flowing=False):
@@ -54,7 +54,7 @@ def analyze(folder, method, yielding, continuation=None, open_boundary=False):
         records = records[:start+1] + [(resumed, row) for row in scan_frames(resumed.modelname)[1:]]
     x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
     volume = simplex_volumes(x, conn)
-    lag = ALPHA**2/(BULK+(SHEAR/3 if dim == 2 else 0)) if method == 'pt' else 0.
+    lag = ALPHA**2/mean_stress_modulus(dim, BULK, SHEAR) if method == 'pt' else 0.
     cfg = configparser.ConfigParser(); cfg.read(folder/'column.cfg')
     mobility = json.loads(cfg['mat']['hydraulic_perm'])[0]/json.loads(cfg['mat']['fluid_visc'])[0]
     substeps = 1
@@ -154,7 +154,7 @@ def rsf_check(exe, folder, ndims, replay=False):
     axial, lateral = np.zeros(len(conn)), np.zeros(len(conn))
     lame = BULK-2*SHEAR/3
     previous_pressure, reference_pressure = 0., 0.
-    lag = ALPHA**2/(BULK+(SHEAR/3 if ndims == 2 else 0))
+    lag = ALPHA**2/mean_stress_modulus(ndims, BULK, SHEAR)
     worst_state, worst_mu, worst_stress = 0., 0., 0.
     history = []
     for row in scan_frames(str(folder/'column'))[1:]:

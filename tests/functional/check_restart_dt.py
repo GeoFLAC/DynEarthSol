@@ -134,8 +134,8 @@ def main():
         except AssertionError:
             report['failure'] = name;save();raise
         report['cases'].append(dict(name=name,**result));save()
-    report['passed'] = True;save()
     assert digest(executable) == report['executable_sha256']
+    report['passed'] = True;save()
     print(json.dumps(report,indent=2))
 
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """DES Mandel problem with a rigid frictionless platen, on refined meshes.
 
+This refinement study reports numerical errors against the analytical solution.
+
 Quarter of the plane-strain strip: 0 <= x <= a with symmetry at x = 0, and
 -b <= z <= 0 with symmetry at the mid-plane z = -b. The top carries the rigid
 frictionless platen (bc.vbc_z1 = 8) loaded by the uniform traction -P, so the
@@ -34,7 +36,7 @@ REF = Mandel(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['fluid
 TC = A**2/REF.c                      # consolidation time a^2/c
 
 
-from des_case import digest, provenance, read_config, run_des, write_json
+from des_case import digest, material_options, provenance, read_config, run_des, write_json
 
 
 def config(h, steps, duration):
@@ -52,10 +54,7 @@ def config(h, steps, duration):
               hbc_x0='0', hbc_x1='2', hbc_z0='0', hbc_z1='0', hbc_pressure='[0,0,0,0,0,0]',
               stress_bc_z1='3', stress_val_z1=repr(-P))
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
-    cfg['mat'].update(bulk_modulus=f"[{MAT['bulk']}]", shear_modulus=f"[{MAT['shear']}]",
-                      biot_coeff=f"[{MAT['biot']}]", porosity=f"[{MAT['porosity']}]",
-                      fluid_bulk_modulus=f"[{MAT['fluid_bulk']}]", bulk_modulus_s=f"[{MAT['grain_bulk']}]",
-                      hydraulic_perm=f"[{MAT['permeability']}]", fluid_visc=f"[{MAT['viscosity']}]")
+    cfg['mat'].update(material_options(MAT))
     return cfg
 
 

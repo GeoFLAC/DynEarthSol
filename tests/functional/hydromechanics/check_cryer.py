@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """DES Cryer problem: a poroelastic sphere under a sudden external pressure.
 
+This refinement study reports numerical errors against the analytical solution.
+
 One octant (x, y >= 0, z <= 0) of a sphere of radius R is meshed from a .poly
 file. The three flat faces are symmetry planes (normal velocity zero, sealed);
 the curved surface carries the BOUNDZ1 flag, so it is drained (hbc_z1 = 2,
@@ -33,7 +35,7 @@ TC = R**2/REF.c
 BOUNDX0, BOUNDY0, BOUNDZ0, BOUNDZ1 = 1, 4, 16, 32
 
 
-from des_case import digest, provenance, read_config, run_des, write_json
+from des_case import digest, material_options, provenance, read_config, run_des, write_json
 
 
 def write_octant_poly(path, h):
@@ -85,10 +87,7 @@ def config(h, steps, duration):
         bc[f'vbc_{side}'], bc[f'hbc_{side}'] = '0', '0'
     bc.update(hbc_z1='2', hbc_pressure='[0,0,0,0,0,0]', stress_bc_z1='4', stress_val_z1=repr(-P))
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
-    cfg['mat'].update(bulk_modulus=f"[{MAT['bulk']}]", shear_modulus=f"[{MAT['shear']}]",
-                      biot_coeff=f"[{MAT['biot']}]", porosity=f"[{MAT['porosity']}]",
-                      fluid_bulk_modulus=f"[{MAT['fluid_bulk']}]", bulk_modulus_s=f"[{MAT['grain_bulk']}]",
-                      hydraulic_perm=f"[{MAT['permeability']}]", fluid_visc=f"[{MAT['viscosity']}]")
+    cfg['mat'].update(material_options(MAT))
     return cfg
 
 

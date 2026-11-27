@@ -31,8 +31,8 @@ PRESSURE = INFLOW*PROPS['height']/MOBILITY
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import (check_hashes, digest, file_hashes, material_options, read_config, run_des, source_revision,
-                      write_json)
+from des_case import (check_hashes, digest, file_hashes, material_options, mean_stress_modulus,
+                      read_config, run_des, source_revision, write_json)
 from des_test_utils import facet_areas, simplex_gradients, simplex_volumes
 
 
@@ -129,7 +129,8 @@ def analyze(folder, method):
     for e in np.flatnonzero(top):
         facet_area[e] = facet_areas(x[conn[e]][np.isclose(x[conn[e], -1], 0)])
     np.testing.assert_allclose(facet_area.sum(), area, rtol=1e-12)
-    lag_capacity = PROPS['biot']**2/(PROPS['bulk']+(PROPS['shear']/3 if dim == 2 else 0))
+    mean_bulk = mean_stress_modulus(dim, PROPS['bulk'], PROPS['shear'])
+    lag_capacity = PROPS['biot']**2/mean_bulk
     history, boundary, darcy_drain = [], 0., 0.
     previous_time, previous_flux = 0., 0.
     peak_step_error, peak_storage_error, peak_source_error = 0., 0., 0.
@@ -159,8 +160,7 @@ def analyze(folder, method):
             # states, with neither the nodal capacity nor residual copied.
             capacity = REF.storage + (lag_capacity if method == 'pt' else 0.)
             expected_storage = capacity*(p_integral-old_p_integral)
-            expected_source = (PROPS['biot']*(mean_integral-old_mean_integral) /
-                               (PROPS['bulk']+(PROPS['shear']/3 if dim == 2 else 0))
+            expected_source = (PROPS['biot']*(mean_integral-old_mean_integral)/mean_bulk
                                if method == 'pt' else PROPS['biot']*(strain_integral-old_strain_integral))
             peak_storage_error = max(peak_storage_error, abs(b[0]-expected_storage)/scale)
             peak_source_error = max(peak_source_error, abs(b[1]-expected_source)/scale)

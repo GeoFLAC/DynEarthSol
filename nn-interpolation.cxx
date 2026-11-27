@@ -13,7 +13,6 @@
 #include "markerset.hpp"
 #include "nn-interpolation.hpp"
 #include "remesh-scratch.hpp"
-#include "geometry.hpp"
 
 
 namespace {

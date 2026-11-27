@@ -60,8 +60,8 @@ def checkpoint_arrays(path, names):
     return data
 
 
-def edit_checkpoint(path, drop=(), replace=None, rename=None):
-    """Edit a save or checkpoint in place: delete the datasets named in drop, set those in replace
+def edit_checkpoint(path, replace=None, rename=None):
+    """Edit a save or checkpoint in place: set the datasets in replace
     (name -> value, or a function of the current array) and move those in rename (name -> new
     name). A virtual dataset is written through to the part of its source it maps, such as the
     first two columns of a 2D vector stored with three components."""
@@ -70,9 +70,6 @@ def edit_checkpoint(path, drop=(), replace=None, rename=None):
     found = checkpoint_file(path)
     assert found is not None, path
     with h5py.File(found, 'r+') as stream:
-        for name in drop:
-            if name in stream:
-                del stream[name]
         for name, value in (replace or {}).items():
             dataset = stream[name]
             dataset[...] = value(np.asarray(dataset[...]).copy()) if callable(value) else value

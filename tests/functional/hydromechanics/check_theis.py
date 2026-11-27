@@ -10,7 +10,9 @@ the pressure drawdown s_p = Q mu/(4 pi kappa B) E1(r^2 S mu/(4 kappa t)).
 The well pumps, then shuts in; recovery is the superposed solution. The box
 is wide enough that the drawdown at its far sides stays negligible.
 
-    check_theis.py EXECUTABLE OUTPUT [--spacings 5 2.5 1.25]
+Set --max-error to enforce a normalized pressure error bound on the chosen meshes.
+
+    check_theis.py EXECUTABLE OUTPUT [--spacings 5 2.5 1.25] [--max-error 0.01]
 """
 import argparse
 import json
@@ -28,18 +30,18 @@ from theis_reference import scheduled_drawdown
 
 L, B, Q = 60.0, 5.0, 1e-4               # box side, thickness (m), total rate (m3/s)
 PUMP, END, DT = 80.0, 160.0, 2.0        # shut-in time, end time, physical step (s)
-MAT = dict(bulk=1e12, shear=1e12, biot=1.0, porosity=.25, fluid_bulk=2.2e9, grain_bulk=1e20, visc=1e-3)
+MAT = dict(bulk=1e12, shear=1e12, biot=1.0, porosity=.25, fluid_bulk=2.2e9, grain_bulk=1e20, viscosity=1e-3)
 STORAGE = (MAT['porosity']/MAT['fluid_bulk'] + (MAT['biot']-MAT['porosity'])/MAT['grain_bulk']
            + MAT['biot']**2/MAT['bulk'])
 DIFFUSIVITY = 1.0                       # m2/s
-PERM = DIFFUSIVITY*STORAGE*MAT['visc']
-T = PERM*B/MAT['visc']                  # transmissivity in pressure units, m3/(Pa s)
+PERM = DIFFUSIVITY*STORAGE*MAT['viscosity']
+T = PERM*B/MAT['viscosity']             # transmissivity in pressure units, m3/(Pa s)
 S = STORAGE*B                           # storativity in pressure units, m/Pa
 SCALE = Q/(4*math.pi*T)                 # pressure scale of the Theis solution, Pa
 SCHEDULE = [(0.0, Q), (PUMP, 0.0)]
 
 
-from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
+from des_case import digest, material_options, provenance, read_config, reset_boundaries, run_des, write_json
 
 
 def config(h):
@@ -62,16 +64,13 @@ def config(h):
               num_well_schedule='3', well_schedule_time_in_yr='['+', '.join(repr(x/YEAR2SEC) for x in t)+']',
               well_schedule_ratio='[1, 1, 0]')
     cfg['ic'].update(has_body_force_adjustment='false')
-    cfg['mat'].update(bulk_modulus=f"[{MAT['bulk']}]", shear_modulus=f"[{MAT['shear']}]",
-                      biot_coeff=f"[{MAT['biot']}]", porosity=f"[{MAT['porosity']}]",
-                      fluid_bulk_modulus=f"[{MAT['fluid_bulk']}]", bulk_modulus_s=f"[{MAT['grain_bulk']}]",
-                      hydraulic_perm=f'[{PERM!r}]', fluid_visc=f"[{MAT['visc']}]")
+    cfg['mat'].update(material_options(dict(MAT, permeability=PERM)))
     return cfg
 
 
-def study(exe, out, spacings):
+def study(exe, out, spacings, max_error=None):
     out.mkdir(parents=True, exist_ok=False)
-    result = dict(provenance(exe, __file__, out),
+    result = dict(provenance(exe, __file__, out), max_error_limit=max_error,
                   reference=dict(L=L, B=B, Q=Q, pump_until_s=PUMP, end_s=END, dt_s=DT, storage_per_Pa=STORAGE,
                                  diffusivity=DIFFUSIVITY, permeability=PERM, transmissivity=T, storativity=S,
                                  pressure_scale_Pa=SCALE), cases=[])
@@ -79,14 +78,17 @@ def study(exe, out, spacings):
         folder = out/f'h{h:g}'; folder.mkdir()
         run_des(exe, folder, 'theis', config(h), timeout=3600)
         model = Dynearthsol(str(folder/'theis')); rows = scan_frames(str(folder/'theis'))
+        assert model.ndims == 3
+        np.testing.assert_allclose([row['time'] for row in rows], np.linspace(0., END, 9),
+                                   rtol=0, atol=1e-10)
         coord = model.read_field(0, 'coordinate')
+        p0 = model.read_field(0, 'pore pressure')
         r = np.hypot(coord[:, 0], coord[:, 1])
         window = (r >= 10) & (r <= L/2)        # same radii on every mesh: no axis, no far field
         frames = []
         for row in rows[1:]:
             t = row['time']
             p = model.read_field(row['frame'], 'pore pressure')
-            p0 = model.read_field(0, 'pore pressure')
             des = p0 - p                          # drawdown: pressure decrease
             ref = scheduled_drawdown(r[window], np.full(window.sum(), t), SCHEDULE, T, S)
             far = scheduled_drawdown(np.array([L]), np.array([t]), SCHEDULE, T, S)[0]
@@ -103,6 +105,10 @@ def study(exe, out, spacings):
         write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
+    if max_error is not None:
+        for item in result['cases']:
+            assert item['max_error_over_scale'] <= max_error, (
+                item['spacing_m'], item['max_error_over_scale'], max_error)
     return result
 
 
@@ -110,5 +116,8 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('executable', type=Path); p.add_argument('output', type=Path)
     p.add_argument('--spacings', type=float, nargs='+', default=[5, 2.5, 1.25])
+    p.add_argument('--max-error', type=float, help='maximum drawdown error divided by Q/(4 pi T)')
     a = p.parse_args()
-    study(a.executable.resolve(), a.output.resolve(), a.spacings)
+    if a.max_error is not None and not (0 < a.max_error < math.inf):
+        p.error('--max-error must be finite and positive')
+    study(a.executable.resolve(), a.output.resolve(), a.spacings, a.max_error)

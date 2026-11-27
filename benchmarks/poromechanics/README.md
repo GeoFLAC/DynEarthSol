@@ -21,15 +21,24 @@ python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmark
 python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline
 ```
 
-NumPy and SciPy are required for these study runners. It uses
-one OpenMP thread and a 180-second timeout per DES run. An existing output
-directory is refused; use a new destination for another run. To check saved runs without repeating the simulations:
+NumPy and SciPy are required. The consolidation runner uses one OpenMP thread
+and a 180-second timeout per DES run. It reports pressure and settlement
+errors at the sampled times. Use a new output directory for each run. To
+analyze saved runs:
 
 ```sh
 python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline --analyze-only
 ```
 
 Each study saves its configurations, logs, raw fields, metrics and provenance.
+The Cryer, Mandel, Rudnicki and borehole studies report analytical errors
+for their mesh and timestep sequences. Theis can also enforce a pressure error
+budget. This run requires a maximum error of 1% of the pressure scale
+`Q/(4*pi*T)` between radii 10 and 30 m on a 1.25 m grid:
+
+```sh
+python3 tests/functional/hydromechanics/check_theis.py ./dynearthsol3d benchmarks/poromechanics/results/theis-1p25 --spacings 1.25 --max-error 0.01
+```
 
 The [implementation guide](https://geoflac.github.io/DynEarthSol/docs/developer/source-layout) describes physical-step
 ownership and restart boundaries. `check_boundaries.py` verifies scheduled

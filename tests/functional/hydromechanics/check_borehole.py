@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """DES fluid injection into a poroelastic borehole (plane strain).
 
+This refinement study reports numerical errors against the analytical solution.
+
 A quarter annulus a = 1 m, R = 20 m (the Kirsch geometry, refined out to
 5 m) is unstressed at p = 0. At t = 0+ the wall takes fluid at p_w: pore
 pressure p_w (a 1 ms ramp of the scheduled boundary pressure) and normal
@@ -17,6 +19,7 @@ p_w.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 
@@ -27,9 +30,8 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks'/'poromechanics'), str(HERE)]
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 from borehole_reference import Borehole
-import check_kirsch as ck
 
-A, R, RING = ck.A, ck.R, 5.0
+A, R, RING = 1., 20., 5.
 PW, DURATION, RAMP = 1e6, 36.0, 1e-3
 MAT = dict(bulk=2e8, shear=1e8, biot=1.0, porosity=.2, fluid_bulk=2e8, grain_bulk=1e20,
            permeability=1e-12, viscosity=1e-3)
@@ -39,7 +41,47 @@ REF = Borehole(radius=A, outer=R, bulk=MAT['bulk'], shear=MAT['shear'], biot=MAT
 BAND = (1.05*A, 4*A)
 
 
-from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
+from des_case import digest, material_options, provenance, read_config, reset_boundaries, run_des, write_json, write_poly
+
+
+def polygon(path, spacing, refined_radius=None):
+    outer_n = math.ceil(np.pi*R/(8*spacing))
+    inner_n = math.ceil(np.pi*A/(2*spacing))
+    outer = np.linspace(0, np.pi/2, outer_n+1)
+    inner = np.linspace(np.pi/2, 0, inner_n+1)
+    points = [(R*np.cos(t), -R*np.sin(t)) for t in outer]
+    if refined_radius is not None:
+        if not A < refined_radius < R/3:
+            raise ValueError('Refined ring must lie inside the outer region seed')
+        points.append((0., -refined_radius))
+    points += [(A*np.cos(t), -A*np.sin(t)) for t in inner]
+    if refined_radius is not None: points.append((refined_radius, 0.))
+    markers = [32]*outer_n + [1]*(1+(refined_radius is not None)) + [2]*inner_n + [16]*(1+(refined_radius is not None))
+    assert len(points) == len(markers)
+    edges = [(i, (i+1)%len(points), marker) for i, marker in enumerate(markers)]
+    if refined_radius is not None:
+        # A constrained, unlabelled interior arc grades mesh size without a
+        # material or boundary-condition interface. Both regions are material 0.
+        angles = np.linspace(np.pi/2, 0, math.ceil(np.pi*refined_radius/(2*spacing))+1)
+        ids = [outer_n+1]
+        for angle in angles[1:-1]:
+            ids.append(len(points)); points.append((refined_radius*np.cos(angle), -refined_radius*np.sin(angle)))
+        ids.append(len(markers)-1)
+        edges += [(i, j, 0) for i, j in zip(ids[:-1], ids[1:])]
+    regions = [(R/3, -R/3, 0, 16*spacing**2)]
+    if refined_radius is not None:
+        inner_seed = (A+refined_radius)/(2*np.sqrt(2))
+        regions.append((inner_seed, -inner_seed, 0, spacing**2/2))
+    write_poly(path, points, edges, regions)
+
+
+def polar(values, normal):
+    """Radial, hoop and shear components of (xx, zz, xz) tensors for unit radial directions normal."""
+    nx, nz = normal.T
+    rr = nx**2*values[:, 0]+nz**2*values[:, 1]+2*nx*nz*values[:, 2]
+    hoop = nz**2*values[:, 0]+nx**2*values[:, 1]-2*nx*nz*values[:, 2]
+    shear = nx*nz*(values[:, 1]-values[:, 0])+(nx**2-nz**2)*values[:, 2]
+    return rr, hoop, shear
 
 
 def config(h, steps):
@@ -59,12 +101,8 @@ def config(h, steps):
               hbc_pressure=f'[0,{PW!r},0,0,0,0]', num_hbc_schedule='2',
               hbc_schedule_time_in_yr=f'[0, {RAMP/YEAR2SEC!r}]', hbc_schedule_ratio='[0, 1]')
     cfg['ic'].update(pore_pressure_option='0', has_body_force_adjustment='false', weakzone_option='0')
-    m = MAT
-    cfg['mat'].update(rheology_type='elastic', is_plane_strain='true', alpha='[0]',
-                      bulk_modulus=f"[{m['bulk']!r}]", shear_modulus=f"[{m['shear']!r}]", biot_coeff=f"[{m['biot']!r}]",
-                      porosity=f"[{m['porosity']!r}]", fluid_bulk_modulus=f"[{m['fluid_bulk']!r}]",
-                      bulk_modulus_s=f"[{m['grain_bulk']!r}]", hydraulic_perm=f"[{m['permeability']!r}]",
-                      fluid_visc=f"[{m['viscosity']!r}]", fluid_alpha='[0]')
+    cfg['mat'].update(material_options(MAT), rheology_type='elastic',
+                      is_plane_strain='true', alpha='[0]', fluid_alpha='[0]')
     return cfg
 
 
@@ -79,7 +117,7 @@ def compare(folder):
         t = row['time']
         p = model.read_field(row['frame'], 'pore pressure')
         s = model.read_field(row['frame'], 'stress')
-        srr, stt, _ = ck.polar(s, centre/re[:, None])
+        srr, stt, _ = polar(s, centre/re[:, None])
         fn, fe = REF.fields(rn[nodes], t), REF.fields(re[elems], t)
         out.append(dict(time=t, pressure_error=float(np.max(np.abs(p[nodes] - fn['p'])))/PW,
                         pressure_rms=float(np.sqrt(np.mean((p[nodes] - fn['p'])**2)))/PW,
@@ -95,7 +133,7 @@ def study(exe, out, spacings, steps):
                   steps=steps, material=MAT, wall_pressure=PW, diffusivity=REF.c, cases=[])
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        ck.polygon(folder/'annulus.poly', h, refined_radius=RING)
+        polygon(folder/'annulus.poly', h, refined_radius=RING)
         run_des(exe, folder, 'hole', config(h, steps), timeout=40000)
         frames, nodes, elements = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, frames=frames, input_sha256=digest(folder/'hole.cfg'),

@@ -18,15 +18,15 @@ from Dynearthsol import Dynearthsol, scan_frames
 import fluid_content as water
 
 
-from des_case import digest, read_config, write_json
+from des_case import digest, mean_stress_modulus, read_config, write_json
 from des_test_utils import checkpoint_file, simplex_volumes
 
 def analyze(config, until=None):
     config = config.resolve()
     cfg = read_config(config)
     assert cfg.getboolean('control', 'has_hydraulic_diffusion', fallback=False)
-    assert cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=False)
-    assert not cfg.getboolean('control', 'has_moving_mesh', fallback=False)
+    assert cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=True)
+    assert not cfg.getboolean('control', 'has_moving_mesh', fallback=True)
 
     def prop(name):
         values = json.loads(cfg['mat'][name])
@@ -41,7 +41,7 @@ def analyze(config, until=None):
         rows = [row for row in rows if row['time'] <= until]
     assert rows
     dim = int(model.ndims)
-    lag = alpha**2/(prop('bulk_modulus')+(prop('shear_modulus')/3 if dim == 2 else 0)) \
+    lag = alpha**2/mean_stress_modulus(dim, prop('bulk_modulus'), prop('shear_modulus')) \
         if cfg.getboolean('control', 'has_PT', fallback=False) else 0.
     x = model.read_field(rows[0]['frame'], 'coordinate')
     conn = model.read_field(rows[0]['frame'], 'connectivity')

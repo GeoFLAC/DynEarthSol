@@ -54,18 +54,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The saturated fluid-content check includes the pending PT pressure increment
   when integrating from a checkpoint.
 
-- Terzaghi load-history superposition and prescribed material-regime
-  studies check consolidation and recovery after partial unloading, with
-  separate mesh/time sequences and explicit hydraulic-substep controls.
-
-- Coupled restart controls verify the manual explicit/GVS transition to
-  physical mixture inertia at scalings 1e4–1e6, preserving physical state
-  and distinguishing artificial kinetic energy from heat.
-
-- Selected hydromechanics review pages for coupled water content and fluid
-  conservation through plastic yielding, with shared schematics, derivations
-  and portable every-step tables.
-
 - A coupled inflow/drainage column checks fluid content from pressure and
   strain, quantifies the PT coupling lag, and verifies water budgets through
   adaptive GVS timesteps and exact restarts against an analytical reference.
@@ -75,29 +63,24 @@ For a release, the full auto-generated list of merged pull requests is in its
   consolidation benchmarks.
 - Scheduled fluid point sources support signed rates or total amounts,
   exact partial-step schedules, mesh-aware distribution and independent
-  volume balance checks. Existing wells retain their extraction-positive
-  convention. Point sources and well screens move with the material, as
-  monitor points do, through remeshing and restarts.
+  volume balance checks. Positive point rates inject fluid. Contributions
+  at prescribed-pressure nodes enter the boundary reaction.
 - Explicit hydraulic transport supports scheduled pressure/flux boundaries and
   a checkpointed fluid-balance diagnostic.
   Large fixed timesteps use stable hydraulic substeps.
 
 - Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
-  through a screen with a shared rate schedule. Each step applies the exact
-  scheduled volume, so a sealed domain balances its fluid content to round-off.
+  through a screen with a shared rate schedule. Positive well rates extract
+  fluid. Screens and point sources move with the material and restart from
+  their saved locations. After a remesh, the in-domain screen carries the
+  prescribed total rate. A screen with no in-domain length stops with exit 51.
 
-- A thickness-averaged Biot pumping reference generalizes Bear-Corapcioglu
-  to finite well/domain radii and compressible fluid/grains, with standalone
-  NumPy/SciPy checks. A reproducible thin-slab DES comparison reports pressure
-  and strain errors within its small-strain slab assumptions.
+- A thickness-averaged Biot pumping reference covers finite well/domain
+  radii and compressible fluid and grains, with standalone NumPy/SciPy checks.
 
-- Reproducible hydromechanics figures compare existing DES 2D/3D Terzaghi
-  runs with analytical pressure and settlement, and show Theis reference
-  curves. See `benchmarks/poromechanics/README.md` for PNG/SVG/PDF exports.
-
-- A separate Terzaghi mesh/timestep study records convergence and replayable
-  figures in 2D/3D. Two-well checks qualify pumping/injection superposition
-  and scheduled-volume closure in the small-strain limit.
+- Analytical comparisons report pressure and settlement for 2D/3D Terzaghi
+  consolidation. Two-well checks verify small-strain superposition and
+  scheduled-volume closure. See `benchmarks/poromechanics/README.md`.
 
 - Independent Theis analytical benchmark reference for pumping, injection,
   rate changes and shut-in, with standalone checks requiring NumPy/SciPy.
@@ -202,11 +185,12 @@ For a release, the full auto-generated list of merged pull requests is in its
   checkpoint written before this, even by one thread, stops the restart with
   exit 22 when an element with two top facets has different entries on them;
   other older checkpoints restart as before.
-- Physical-inertia hydraulic steps (`is_quasi_static=false`, `has_PT=false`)
-  use strain-driven Biot storage and an undrained-wave timestep limit.
-  Nonzero-step checkpoints from the older physical-inertia ordering require
-  their matching solver; incompatible ordering is rejected with exit code 22.
-  Quasistatic/GVS and PT retain their existing formulation.
+- Explicit physical-inertia steps and coupled quasistatic steps, including
+  GVS, advance pressure before stress. With feedback enabled this uses the
+  current strain increment and inverse Biot modulus. PT advances pressure
+  after mechanics and uses fixed-stress storage. Disabling mechanical
+  feedback selects fixed-stress storage at either inertia setting.
+  Checkpoints with an incompatible pressure order stop with exit 22.
 
 - Hydraulic material inputs now require physical finite moduli, viscosity,
   density and permeability, with `0 <= porosity <= biot_coeff <= 1` and
@@ -371,32 +355,18 @@ For a release, the full auto-generated list of merged pull requests is in its
   controls retain exact continuation; older PT checkpoints can switch to
   explicit mechanics without carrying an oversized PT interval.
 
-- The Salençon checker distinguishes completed loading from analytical
-  accuracy and treats saved mixed-stress yield slack as a projection
-  diagnostic. Local return tests remain separate; field and force
-  tolerances are unchanged. The review now records paired mesh/load
-  refinements, reconstructed strain and fixed-load holding, with the
-  selected stress/displacement profile and its numerical limits.
-
-- An elastic trial above the tensile cap can return by shear when that
-  return finishes below the cap. Plane-strain and 3D checks avoid premature
-  tensile corrections in this case, including large affine increments.
-
-- Plane-strain and 3D plastic shear returns handle two active Mohr–Coulomb
-  faces when a single-face correction crosses the principal-stress order.
-  The correction preserves symmetric edge states and their plastic history;
-  general apex and mixed tensile/shear qualification remains separate.
-
 - Imported meshes may prescribe unequal pressures on disjoint tagged
   boundaries. Conflicting pressures at actual shared nodes are rejected
   during initialization, restart and remeshing, including when their tags
   are named as opposite faces of the same nominal axis.
 
-- Coupled explicit and GVS mechanics advance pressure from the current strain
-  increment and bound the undrained wave using actual scaled mass. This avoids
-  the lagged-coupling instability found in sudden-load consolidation tests.
-  Older nonzero-step coupled quasistatic checkpoints need their matching solver.
-
+- Explicit and GVS Maxwell and viscoelastic-plastic stress updates include
+  the Biot-weighted pressure increment. Viscous stress uses the current
+  pressure. Coupled explicit timesteps use the undrained wave speed with the
+  applicable mechanical mass.
+- The first timestep on a remeshed grid uses its current hydraulic
+  diffusivities. Conservative 3D overlap builds the new plane from cut edges
+  and groups remap donors by size before clipping.
 
 - Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
 
@@ -407,9 +377,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - Poroelastic pressure storage and initial excess-pressure loading include
   grain compressibility from `bulk_modulus_s`, with Biot's
-  1/M = phi*beta_f + (alpha - phi)/K_s. The former storage reversed the sign of
-  the porosity term and agreed only at alpha = 1 or phi = 0 ([#144]). The
-  transport timestep uses the same storage from initialization onward.
+  1/M = phi*beta_f + (alpha - phi)/K_s. At alpha = 1 the grain contribution
+  is (1 - phi)/K_s. This storage also sets the hydraulic diffusivity
+  used in the timestep bound ([#144]).
 - The startup check "pseudo speed is too slow, increase mass scaling!" is
   removed. It compared the pseudo wave speed (m/s) with the hydraulic
   diffusivity (m^2/s) and refused permeable crust that runs stably; the
@@ -563,6 +533,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   or dilation weakens: on one thread the 2D accretionary-wedge example runs
   about 6% longer than before with the default and about 13% longer with 1.
   Both give the same result when only cohesion weakens ([#136]).
+
+### Removed
+
+- The old consolidation notebooks `1d_consolidation-plot.ipynb` and
+  `2d_consolidation-plot.ipynb`, the input `2d-consolidation.cfg`, and the
+  `1d-consolidation-des2d_water_loading.cfg` and
+  `1d-consolidation-des3d_water_loading.cfg` inputs in `benchmarks/`.
+  The traction columns and analytical comparison are in
+  `benchmarks/poromechanics/`.
 
 ## [2.0.2] - 2026-09-17
 

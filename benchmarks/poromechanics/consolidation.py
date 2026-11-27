@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and check the DES consolidation columns against the Biot reference."""
+"""Report pressure and settlement errors for DES columns against the Biot reference."""
 import argparse
 import json
 from pathlib import Path

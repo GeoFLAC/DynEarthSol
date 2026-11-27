@@ -16,7 +16,8 @@ starts and stays at steady state, then restarts from its last checkpoint at
 
 - discrete: DES's forward-Euler state update, theta_{n+1} = theta_n +
   (1 - V theta_n/D_c) dt, then mu and t_n = min(t_{n-1} + 2 G de, t_y(mu_n));
-  DES must match this to round-off (one state update per physical step);
+  the relative state and shear errors and absolute friction error must
+  each be below 1e-12 (one state update per physical step).
 - continuum: theta = D_c/V_2 + (theta_1 - D_c/V_2) exp(-V_2 (t - t_1)/D_c),
   approached at first order in the step.
 
@@ -126,6 +127,8 @@ def study(exe, out, refinements):
                     mu_vs_continuum=float(np.max(np.abs(des[after, 2] - exact[after]))),
                     mu_jump=float(A*math.log(RATIO)), mu_drop=float((A - B)*math.log(RATIO)),
                     series=dict(time=des[:, 0].tolist(), mu=des[:, 2].tolist(), stress=des[:, 3].tolist()))
+        for key in ('theta_vs_discrete', 'mu_vs_discrete', 'stress_vs_discrete', 'element_spread'):
+            assert item[key] < 1e-12, (refine, key, item[key])
         result['cases'].append(item)
         write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'series'}), flush=True)

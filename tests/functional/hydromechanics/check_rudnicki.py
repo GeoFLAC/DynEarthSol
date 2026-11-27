@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """DES Rudnicki problem: a continuous fluid point source in a poroelastic solid.
 
+This refinement study reports numerical errors against the analytical solution.
+
 One octant (x, y >= 0, z <= 0) of a large box: symmetry planes x = 0, y = 0 and
 z = 0 (normal displacement zero, sealed); far faces with zero normal
 displacement and p = 0. A scheduled point source at the corner node injects
@@ -33,7 +35,7 @@ REF = Rudnicki(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['flu
                MAT['grain_bulk'], MAT['permeability'], MAT['viscosity'], Q)
 
 
-from des_case import digest, provenance, read_config, run_des, write_json
+from des_case import digest, material_options, provenance, read_config, run_des, write_json
 
 
 def config(h, steps):
@@ -58,10 +60,7 @@ def config(h, steps):
     cfg['injection'] = dict(enabled='true', num_points='1', points_x='[0]', points_y='[0]', points_z='[0]',
                             points_unit='m', rate_model='constant_rate', rate=f'[{Q/8!r}]',
                             start_time_in_yr='[0]', end_time_in_yr=f'[{2*DURATION/YEAR2SEC!r}]')
-    cfg['mat'].update(bulk_modulus=f"[{MAT['bulk']}]", shear_modulus=f"[{MAT['shear']}]",
-                      biot_coeff=f"[{MAT['biot']}]", porosity=f"[{MAT['porosity']}]",
-                      fluid_bulk_modulus=f"[{MAT['fluid_bulk']}]", bulk_modulus_s=f"[{MAT['grain_bulk']}]",
-                      hydraulic_perm=f"[{MAT['permeability']}]", fluid_visc=f"[{MAT['viscosity']}]")
+    cfg['mat'].update(material_options(MAT))
     return cfg
 
 
