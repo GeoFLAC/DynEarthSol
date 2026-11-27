@@ -72,8 +72,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
   through a screen with a shared rate schedule. Positive well rates extract
   fluid. Screens and point sources move with the material and restart from
-  their saved locations. After a remesh, the in-domain screen carries the
-  prescribed total rate. A screen with no in-domain length stops with exit 51.
+  their saved locations. After a remesh cuts a screen, the log reports the
+  retained fraction and the in-domain screen carries the prescribed total
+  rate. A screen with no in-domain length stops with exit 51.
 
 - A thickness-averaged Biot pumping reference covers finite well/domain
   radii and compressible fluid and grains, with standalone NumPy/SciPy checks.
@@ -362,11 +363,12 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - Explicit and GVS Maxwell and viscoelastic-plastic stress updates include
   the Biot-weighted pressure increment. Viscous stress uses the current
-  pressure. Coupled explicit timesteps use the undrained wave speed with the
-  applicable mechanical mass.
+  pressure. In 2D poromechanical plane strain, explicit viscous branches also
+  evolve the out-of-plane stress. Explicit poromechanical timesteps use the
+  undrained wave speed with the applicable mechanical mass.
 - The first timestep on a remeshed grid uses its current hydraulic
-  diffusivities. Conservative 3D overlap builds the new plane from cut edges
-  and groups remap donors by size before clipping.
+  diffusivities. Conservative overlap groups remap donors by size. In 3D,
+  the clipped faces and their cap use the same tolerance-offset plane.
 
 - Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
 

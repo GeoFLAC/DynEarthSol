@@ -2379,12 +2379,11 @@ static void integrate(const Simplex &piece, const Shape &old, const Shape &curre
 
 #ifdef THREED
 // The old simplex clipped by the half-spaces of the current one, face by face.
-// Vertices within tolerance of a plane are kept. The cap follows the cut edges
-// between kept and discarded vertices, so the kept faces and the cap bound
-// the clipped volume.
+// Use one tolerance-offset plane for both classifying vertices and intersecting
+// edges, so the clipped faces and their cap share the same boundary.
 static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
                            const Shape &current_shape, const Real tolerance[N],
-                           const Real merge[NDIMS], Real scale)
+                           Real scale)
 {
     struct Face { int count = 0; Point vertex[MAX_VERTEX] = {}; };
     struct Polyhedron { int count = 0; Face face[2*N] = {}; };
@@ -2402,12 +2401,8 @@ static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
         face.vertex[face.count++] = point;
     };
     auto add_to_cap = [&](const Point &point) {
-        for (int k = 0; k < cap.count; ++k) {
-            bool same = true;
-            for (int d = 0; d < NDIMS; ++d) same &= std::fabs(point[d]-cap.vertex[k][d]) <= merge[d];
-            if (same) return;
-        }
-        append(cap,point);
+        auto end = cap.vertex+cap.count;
+        if (std::find(cap.vertex,end,point) == end) append(cap,point);
     };
     for (int plane = 0; plane < N; ++plane) {
         next.count = 0;
@@ -2416,22 +2411,21 @@ static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
         for (int f = 0; f < poly.count; ++f) {
             const Face &face = poly.face[f];
             Real value[MAX_VERTEX];
-            int side[MAX_VERTEX];
             for (int j = 0; j < face.count; ++j) {
-                value[j] = current_shape.at(plane,face.vertex[j]);
-                side[j] = value[j] > tolerance[plane] ? 1 : value[j] < -tolerance[plane] ? -1 : 0;
-                inside |= side[j] > 0;
-                outside |= side[j] < 0;
+                const Real distance = current_shape.at(plane,face.vertex[j]);
+                value[j] = distance+tolerance[plane];
+                inside |= distance > tolerance[plane];
+                outside |= value[j] < 0;
             }
             clipped.count = 0;
             for (int j = 0; j < face.count; ++j) {
                 const int k = (j+1)%face.count;
-                const bool keep_j = side[j] >= 0;
+                const bool keep_j = value[j] >= 0;
                 if (keep_j) append(clipped,face.vertex[j]);
-                if (keep_j == (side[k] >= 0)) continue;
+                if (keep_j == (value[k] >= 0)) continue;
                 const int kept = keep_j ? j : k;
                 const int removed = keep_j ? k : j;
-                if (side[kept] == 0) {
+                if (value[kept] == 0) {
                     add_to_cap(face.vertex[kept]);
                     continue;
                 }
@@ -2534,15 +2528,15 @@ static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
     // The inputs are doubles. Scale the coordinate tolerance by the
     // local extent of the simplex pair in each direction.
     constexpr Real eps = 128*std::numeric_limits<double>::epsilon();
-    Real merge[NDIMS];
-    for (int d = 0; d < NDIMS; ++d) merge[d] = eps*(span[d]/scale);
+    Real margin[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) margin[d] = eps*(span[d]/scale);
     Real tolerance[N];
     for (int p = 0; p < N; ++p) {
         tolerance[p] = eps;
         for (int d = 0; d < NDIMS; ++d)
-            tolerance[p] += merge[d]*std::fabs(current_shape.coefficient[p][d+1]);
+            tolerance[p] += margin[d]*std::fabs(current_shape.coefficient[p][d+1]);
     }
-    return clip(old,old_shape,current_shape,tolerance,merge,scale);
+    return clip(old,old_shape,current_shape,tolerance,scale);
 #else
     Point normal[2*N]; Real constant[2*N];
     for (int p = 0; p < 2*N; ++p) {

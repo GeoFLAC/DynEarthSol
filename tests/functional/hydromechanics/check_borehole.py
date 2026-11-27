@@ -3,8 +3,8 @@
 
 This refinement study reports numerical errors against the analytical solution.
 
-A quarter annulus a = 1 m, R = 20 m (the Kirsch geometry, refined out to
-5 m) is unstressed at p = 0. At t = 0+ the wall takes fluid at p_w: pore
+A quarter annulus a = 1 m, R = 20 m, refined out to 5 m, is unstressed
+at p = 0. At t = 0+ the wall takes fluid at p_w: pore
 pressure p_w (a 1 ms ramp of the scheduled boundary pressure) and normal
 traction -p_w. The outer arc is sealed and traction-free (DES's input
 check allows prescribed pressures on only one of two intersecting box

@@ -371,6 +371,9 @@ void place_well_screens(const Param &param, Variables &var, const double_vec *en
             std::cerr << "Error: the screen of well " << w << " has no length inside the remeshed domain.\n";
             die(EXIT_RUNTIME_LOOKUP);
         }
+        if (mpi_reports(var))
+            std::cout << "Well " << w << ": prescribed rate redistributed over "
+                      << covered/(zt-zb) << " of the screen after remeshing.\n";
         // The prescribed rate is for the whole well. Redistribute it over
         // the in-domain pieces in proportion to their remaining material lengths.
         for (std::size_t k = first; k < placed.length.size(); ++k)

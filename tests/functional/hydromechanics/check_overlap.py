@@ -106,6 +106,18 @@ def main():
                           [.48439412002364579, .74985644147022801, -9.8441598611665153]])
             pairs.append((a, b))
             expected.append(abs(np.linalg.det(a[1:]-a[0]))/6)
+            # A central mid-edge child and its parent at a large coordinate
+            # offset. The child occupies one eighth of the parent.
+            child = np.array([[1999.7593987985317, -999.81903938273945, -199.95953675301132],
+                              [2000.3303128945452, -999.77435369599243, -200.0272204664073],
+                              [2000.1234576705351, -999.68059688444134, -200.42272172842314],
+                              [1999.92305903944, -999.76920272397729, -199.97951914350364]])
+            parent = np.array([[1999.5590001674364, -999.90764522227539, -199.51633416809182],
+                               [1999.9597974296271, -999.73043354320339, -200.4027393379308],
+                               [2000.3735078776469, -999.91794716630545, -199.61173681389909],
+                               [2000.2871179114434, -999.6307602256793, -200.44270411891549]])
+            pairs.append((child, parent))
+            expected.append(abs(np.linalg.det(parent[1:]-parent[0]))/48)
             # Repeat the perturbation far from the origin, where a coordinate ulp
             # can move a vertex across the clipping tolerance of its local face.
             for origin, ulps in (([0., 0., -10.], 4), ([600., -300., -60.], 2)):
