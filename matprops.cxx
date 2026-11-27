@@ -31,7 +31,7 @@ namespace {
                             1571e3, 1671e3, 1771e3, 1871e3, 1971e3,
                             2071e3, 2171e3, 2271e3, 2371e3, 2471e3,
                             2571e3, 2671e3, 2741e3, 2771e3, 2871e3,
-                            2891e3 };
+                            prem_max_depth };
 
         // pressure in PREM table is given in kilobar, converted to 10^8 Pa
         const double
@@ -49,8 +49,11 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
+        // Deeper than prem_max_depth no row matches: the last segment is extrapolated. mesh.zlength
+        // is checked against the limit at input, so only nodes that move deeper, as in a diverged
+        // run, get there. A NaN depth gives a NaN pressure, which the run's NaN checks catch.
         int n;
-        for (n=1; n<nlayers; n++) {
+        for (n=1; n<nlayers-1; n++) {
             if (depth <= ref_depth[n]) break;
         }
 
@@ -78,7 +81,7 @@ namespace {
                             1571e3, 1671e3, 1771e3, 1871e3, 1971e3,
                             2071e3, 2171e3, 2271e3, 2371e3, 2471e3,
                             2571e3, 2671e3, 2741e3, 2771e3, 2871e3,
-                            2891e3 };
+                            prem_max_depth };
 
         // pressure in PREM table is given in kilobar, converted to 10^8 Pa
         const double
@@ -96,8 +99,11 @@ namespace {
         // PREM model doesn't work if depth is above sea level, always returns 0 pressure
         if (depth <= 0) return 0;
 
+        // Deeper than prem_max_depth no row matches: the last segment is extrapolated. mesh.zlength
+        // is checked against the limit at input, so only nodes that move deeper, as in a diverged
+        // run, get there. A NaN depth gives a NaN pressure, which the run's NaN checks catch.
         int n;
-        for (n=1; n<nlayers; n++) {
+        for (n=1; n<nlayers-1; n++) {
             if (depth <= ref_depth[n]) break;
         }
 
@@ -182,6 +188,15 @@ double ref_pressure(const Param& param, double z)
 }
 
 
+// Only an NPROF build creates the lookup tables, and only there do the *_safe functions read them;
+// elsewhere they are null, and binding a reference to null is undefined even if it is never read.
+static const double_vec& table_or_empty(const double_vec *table)
+{
+    static const double_vec empty;
+    return table ? *table : empty;
+}
+
+
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
@@ -200,9 +215,9 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   elemmarkers(*var.elemmarkers),
   ppressure(*var.ppressure),
   dppressure(*var.dppressure),
-  log_table(*var.log_table),
-  tan_table(*var.tan_table),
-  sin_table(*var.sin_table)
+  log_table(table_or_empty(var.log_table)),
+  tan_table(table_or_empty(var.tan_table)),
+  sin_table(table_or_empty(var.sin_table))
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;

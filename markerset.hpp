@@ -10,7 +10,6 @@ class MarkerSet
 {
 
 public:
-    MarkerSet( const std::string& name );
     MarkerSet( const Param& param, Variables& var, const std::string& name );
     template <class T>
     MarkerSet( const Param& param, Variables& var, T& bin_save, T& bin_chkpt, const std::string& name );
@@ -100,8 +99,6 @@ public:
 
     inline double get_genesis(int m) const { return (*_genesis)[m]; }
 
-    inline double get_tmp(int m) const { return (*_tmp)[m]; }
-    inline void set_tmp(const int m, const double tmp) { (*_tmp)[m] = tmp; }
 
     #pragma acc routine seq
     void get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const;
@@ -131,7 +128,7 @@ private:
     int_vec *_mattype;
     // Unique id
     int_vec *_id;
-    // Deposition time [yr]; 0 when none is set: run start, a hydrous marker, a homogeneous fill
+    // Deposition time [yr]; 0 when none is set: run start, a homogeneous fill
     // of a non-sediment element, replenishment_option 0 or 1, and the side-profile fill outside
     // the deposit (even in a recorded mattype_sediment layer), so a sediment marker can carry 0
     double_vec *_time;
@@ -173,7 +170,5 @@ void remap_markers(const Param&, Variables &,
                    const array_t &, const conn_t &, const SplitParents &split);
 void correct_inflow_band_marker_mattype(const Param&, const Variables&,
                                         const bool *side_in);
-void advect_hydrous_markers(const Param &, const Variables &, double,
-                            MarkerSet &, Array2D<int,1> &);
 
 #endif

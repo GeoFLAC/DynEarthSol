@@ -236,7 +236,6 @@ struct Control {
     double surface_diffusivity;
     double surf_diff_ratio_terrig;
     double surf_diff_ratio_marine;
-    double surf_depo_universal;
     double surf_base_level;
     std::string surface_process_gospl_config_file;
     int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
@@ -260,9 +259,6 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
-
-    bool has_hydration_processes;
-    double hydration_migration_speed;
 
     bool has_PT;
     bool PT_use_running_scale;
@@ -785,7 +781,6 @@ struct SurfaceInfo {
     double diff_ratio_marine;
     double terrig_diffusivity;
     double terrig_dpeth_coeff;
-    double depo_universal;
     double ero_rate;
     double max_surf_vel;
 
@@ -916,7 +911,6 @@ struct Variables {
     int_vec *top_elems = nullptr;   // create_top_elems fills it
     int ntop_elems;
     int_vec2D *markers_in_elem = nullptr;
-    int_vec2D *hydrous_markers_in_elem = nullptr;
 
     Support support;  // node-support graph; rebuilt by create_support()
     conn_t *neighbor = nullptr; // neighboring elements for each element
@@ -976,10 +970,8 @@ struct Variables {
     MatProps *mat = nullptr;
 
     std::vector<MarkerSet*> markersets;
-    int hydrous_marker_index;
 
     int_vec2D *elemmarkers = nullptr; // for marksersets[0] (mattype markers)
-    Array2D<int,1> *hydrous_elemmarkers = nullptr; // for markersets[hydrous_marker_index] (hydrous markers)
 
     bool initial_equilibrium_done = false;
     // Cached marker-cell index (when uses_serpentinization_grid(), see

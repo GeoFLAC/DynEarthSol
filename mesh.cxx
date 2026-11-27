@@ -2060,6 +2060,20 @@ void new_mesh_refined_zone(const Param& param, Variables& var)
     const double z0 = std::max(m.refined_zonez.first, d / Lz);
     const double z1 = std::min(m.refined_zonez.second, 1 - d / Lz);
 
+    // An empty zone gives the mesher coincident corners and zero-length segments.
+    auto check_width = [d](const char *axis, double lo, double hi, double length) {
+        if (lo < hi) return;
+        std::cerr << "Error: mesh.resolution = " << d << " leaves no refined zone along " << axis
+                  << ": the zone keeps one resolution from each end of mesh." << axis << "length = "
+                  << length << ". Lower mesh.resolution or widen mesh.refined_zone" << axis << ".\n";
+        die(EXIT_CONFIG_VALUE);
+    };
+    check_width("x", x0, x1, Lx);
+#ifdef THREED
+    check_width("y", y0, y1, Ly);
+#endif
+    check_width("z", z0, z1, Lz);
+
     const int npoints = 2 * 4 * (NDIMS - 1);
     double *points = new double[npoints*NDIMS];
 
@@ -2298,12 +2312,12 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
 
     int lineno = 0;
     int n;
-    char buffer[2550];
+    char buffer[4096];
 
     // get header of node list
     int npoints;
     {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int dim, nattr, nbdrym;
         n = std::sscanf(buffer, "%d %d %d %d", &npoints, &dim, &nattr, &nbdrym);
@@ -2325,7 +2339,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     // get node list
     double *points = new double[npoints * NDIMS];
     for (int i=0; i<npoints; i++) {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int k;
         double *x = &points[i*NDIMS];
@@ -2349,7 +2363,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     // get header of segment (facet) list
     int n_init_segments;
     {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         int has_bdryflag;
         n = std::sscanf(buffer, "%d %d", &n_init_segments, &has_bdryflag);
@@ -2371,7 +2385,7 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
     auto facets = new tetgenio::facet[n_init_segments];
     int *init_segflags = new int[n_init_segments];
     for (int i=0; i<n_init_segments; i++) {
-        my_fgets(buffer, 2550, fp, lineno, param.mesh.poly_filename);
+        my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
         auto &f = facets[i];
         int npolygons, nholes, bdryflag;
@@ -2403,11 +2417,16 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
         f.numberofholes = 0;
 
         for (int j=0; j<npolygons; j++) {
-            my_fgets(buffer, 4096, fp, lineno, param.mesh.poly_filename);
+            my_fgets(buffer, sizeof(buffer), fp, lineno, param.mesh.poly_filename);
 
-            std::istringstream inbuf(std::string(buffer, 4096));
+            std::istringstream inbuf(buffer);
             int nvertex;
-            inbuf >> nvertex;
+            // A failed read leaves its int unset, and every read after it too.
+            if (!(inbuf >> nvertex)) {
+                std::cerr << "Error: parsing line " << lineno << " of '"
+                          << param.mesh.poly_filename << "'\n";
+                die(EXIT_CONFIG_DATA);
+            }
             if (nvertex < NODES_PER_FACET || nvertex > 9999) {
                 std::cerr << "Error: unsupported number of polygon points in line " << lineno
                           << " of '" << param.mesh.poly_filename << "'\n";
@@ -2417,7 +2436,11 @@ void new_mesh_from_polyfile(const Param& param, Variables& var)
             f.polygonlist[j].vertexlist = new int[nvertex];
             f.polygonlist[j].numberofvertices = nvertex;
             for (int k=0; k<nvertex; k++) {
-                inbuf >> f.polygonlist[j].vertexlist[k];
+                if (!(inbuf >> f.polygonlist[j].vertexlist[k])) {
+                    std::cerr << "Error: line " << lineno << " of '" << param.mesh.poly_filename
+                              << "' has fewer than the " << nvertex << " polygon points it announces\n";
+                    die(EXIT_CONFIG_DATA);
+                }
                 if (f.polygonlist[j].vertexlist[k] < 0 ||
                     f.polygonlist[j].vertexlist[k] >= npoints) {
                     std::cerr << "Error: segment contains out-of-range node # [0-" << npoints
@@ -3441,7 +3464,6 @@ void create_surface_info(const Param& param, const Variables& var, SurfaceInfo& 
     surfinfo.surf_diff = param.control.surface_diffusivity;
     surfinfo.diff_ratio_terrig = param.control.surf_diff_ratio_terrig;
     surfinfo.diff_ratio_marine = param.control.surf_diff_ratio_marine;
-    surfinfo.depo_universal = param.control.surf_depo_universal;
     surfinfo.terrig_diffusivity = param.control.terrig_sediment_diffusivity;
     surfinfo.terrig_dpeth_coeff = param.control.terrig_depth_coefficient;
 
@@ -3727,10 +3749,6 @@ void create_elemmarkers(const Param& param, Variables& var)
 #endif
     var.elemmarkers = new int_vec2D( var.nelem, int_vec(param.mat.nmat, 0) );
     var.markers_in_elem = new int_vec2D(var.nelem, int_vec(0));
-    if (param.control.has_hydration_processes) {
-        var.hydrous_elemmarkers = new Array2D<int,1>( var.nelem, 0 );
-        var.hydrous_markers_in_elem = new int_vec2D(var.nelem, int_vec(0));   
-    }
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -3741,10 +3759,6 @@ void create_elemmarkers(const Param& param, Variables& var)
 void create_markers(const Param& param, Variables& var)
 {
     var.markersets.push_back(new MarkerSet(param, var, std::string("markerset")));
-    if (param.control.has_hydration_processes) {
-        var.hydrous_marker_index = var.markersets.size();
-        var.markersets.push_back(new MarkerSet(std::string("hydrous-markerset")));
-    }
 }
 
 

@@ -123,6 +123,13 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- **Breaking.** Remove `control.surf_depo_universal`, the rate of a deposition
+  routine deleted in 2023, which nothing has read since; delete it from existing
+  inputs. `--help` no longer lists `surface_process_option = 2`, which was never
+  implemented. It, and any value other than 0, 1, 11, 101 and 102, now stops at
+  input with exit 11, as do 11 in a build without GoSPL (exit 31) and 102 in 3D
+  (exit 30); they used to stop at the first surface update, and a fixed-mesh run
+  ended normally without any surface process ([#138]).
 - For code built on DynEarthSol: the strength functions of `MatProps`
   (`plastic_props`, `plastic_props_rsf`, `piece_strength`, `strength_here`,
   `strength_piece`, `rsf_strength_piece`, `piece_strength_range`) return a
@@ -138,8 +145,8 @@ For a release, the full auto-generated list of merged pull requests is in its
 - **Breaking.** Seismic moment uses element plastic-strain increments in N m
   (N m/m in 2D, without Mw), replacing the velocity-based definition ([#135]).
 - The time summary and the manifest time phase changes for every
-  `mat.phase_change_option`, not only option 3, together with hydrous markers and
-  the serpentinization grid, show surface processes on a new `Surface` line, and
+  `mat.phase_change_option`, not only option 3, together with the
+  serpentinization grid, show surface processes on a new `Surface` line, and
   count checkpoints as output. Under MPI the remesh, phase-change and surface times
   include the gather to rank zero and the redistribution, which `Compute` no
   longer contains.
@@ -150,7 +157,24 @@ For a release, the full auto-generated list of merged pull requests is in its
   checkpoint written before this, even by one thread, stops the restart with
   exit 22 when an element with two top facets has different entries on them;
   other older checkpoints restart as before.
-
+- **Breaking.** Remove the experimental `control.has_hydration_processes` and
+  `control.hydration_migration_speed`, with the hydrous marker set they enabled;
+  delete them from existing inputs. The virtual grid of
+  `mat.phase_change_option = 3` models the water that serpentinizes the mantle.
+  `phase_change_option = 1` no longer turns mantle into serpentinite, a rule that
+  needed hydrous markers. A run with hydration stopped with a floating point
+  exception at its first remesh ([#138]).
+- **Breaking.** `mesh.meshing_option = 2` stops at startup (exit 11) with a message
+  naming the axis when `mesh.resolution` leaves no refined zone along it: the zone
+  keeps one resolution from each boundary, so a zone that spans an axis needs a
+  resolution under half its length. In 2D, Triangle crashed on such a mesh. In 3D,
+  TetGen meshed the zone without refinement and the run finished; that run now
+  stops too, for example `benchmarks-cores/test-3d-tiny.cfg` with
+  `resolution = 5e3` (`ylength = 10e3`). Lower `mesh.resolution`, or widen
+  `mesh.refined_zone<axis>` if it does not span the axis.
+  `benchmarks/core-complex_new_mesh.cfg` now sets `resolution = 2.5e3`, and the
+  four `benchmarks/1d-consolidation-*` cfgs use `meshing_option = 1` with
+  `meshing_elem_shape = 1`, which is the uniform grid they asked for ([#138]).
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
 - PT stagnation warns once and continues to the iteration cap; failed or
@@ -269,7 +293,38 @@ For a release, the full auto-generated list of merged pull requests is in its
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
   ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
-
+- `markers.init_marker_option = 2` places markers `init_marker_spacing * mesh.resolution`
+  metres apart, no longer rounded down to whole metres. A model small enough to
+  make that spacing under 1 m crashed at startup; a spacing that is not positive,
+  or that would place more markers than an `int` counts, now stops with a message
+  ([#138]).
+- Reading a 3D `.poly` file no longer overruns a stack buffer: a facet line of up
+  to 4094 characters is accepted (one over 2549 used to corrupt the stack), and a
+  longer one stops with a message, as does a facet line with fewer points than it
+  announces ([#138]).
+- `control.ref_pressure_option` 1 and 2 stop at startup with a message when
+  `mesh.zlength` is deeper than the 2891 km of the PREM table; the run read past
+  the table. Nodes that move deeper during a run, as in a diverged one, get the
+  table's last segment extrapolated instead of a read past it ([#138]).
+- `ic.layer_mattypes` entries outside `[0, mat.num_materials-1]` are rejected at
+  startup with a message; the default `[0,1]` with one material, for example, ran
+  on corrupted marker counts and stopped later with NaN values ([#138]).
+- Every run bound references to null lookup tables at startup, which UBSan reports
+  as undefined behaviour; builds without `nprof` now bind them to an empty table
+  they never read ([#138]).
+- Terrigenous deposition (`control.surface_process_option = 102`) no longer reads
+  past its arrays when a basin stays open to the right edge of the model, and no
+  longer leaks a few bytes at every step that finds no basin ([#138]).
+- `ic.temperature_option = 90` stops with a message naming the node when a node of
+  `ic.Nodes_filename` has no temperature, or more than one, in `ic.Temp_filename`
+  (within 1 mm). It used to read past its list or shift the temperatures of every
+  later node. A connectivity file whose node numbers are not in `[0, number of nodes)`,
+  such as a 1-based one, is rejected the same way instead of overrunning the heap.
+  So is a row of the temperature or node file that is short of a value, which
+  used to give its node 0 K or the coordinate 0 ([#138]).
+- A marker set that starts empty, as with `markers.markers_per_element = 0`, grows
+  when the first marker is added; it used to write through a null array and
+  crash at startup ([#138]).
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
 
@@ -342,8 +397,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   always used; it said km ([#113]).
 - GPU builds: the monitor could record stress and strain from before the
   step's rotation, and a remesh could free arrays a kernel was still reading
-  ([#114]).
-- `2vtk.py` converts the hydrous marker set of `hdf5=1` runs; it was skipped
   ([#114]).
 - An `info_display_step_interval` that is not a multiple of
   `quality_check_step_interval` is rounded up as the message says; the run
@@ -595,5 +648,6 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#138]: https://github.com/GeoFLAC/DynEarthSol/issues/138
 [#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
 [#150]: https://github.com/GeoFLAC/DynEarthSol/pull/150

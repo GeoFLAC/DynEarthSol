@@ -208,35 +208,23 @@ def main():
     # Exercise optional kernels that the stock examples leave disabled.
     optional = [(name,ndims) for name in ("hydraulic","pt-hydraulic","thermal-off")
                 for ndims in ((2,3) if args.serial3d else (2,))]
-    optional.append(("hydration",2))
     for name,ndims in optional:
-        if name=="hydration":
-            cfg=configparser.ConfigParser(inline_comment_prefixes=("#",";"))
-            cfg.optionxform = str
-            cfg.read(ROOT / "examples/subduction.cfg")
-            cfg["sim"].update(modelname="result",max_steps="40",max_time_in_yr="1e20",
-                              output_step_interval="10",output_time_interval_in_yr="1e20",
-                              is_outputting_averaged_fields="no")
-            cfg["mesh"]["poly_filename"]=str(ROOT / "examples/poly-subduction.poly")
-            cfg["control"]["has_hydration_processes"]="yes"
-            cfg["mat"]["phase_change_option"]="1"
+        cfg=configure(ndims,False,1000,steps=8,output_interval=2)
+        if name=="thermal-off":
+            cfg["control"]["has_thermal_diffusion"]="no"
         else:
-            cfg=configure(ndims,False,1000,steps=8,output_interval=2)
-            if name=="thermal-off":
-                cfg["control"]["has_thermal_diffusion"]="no"
-            else:
-                cfg["control"]["has_hydraulic_diffusion"]="yes"
-                cfg["mat"]["porosity"]="[0.01]"
-                cfg["mat"]["hydraulic_perm"]="[1e-20]"
-            if name=="pt-hydraulic":
-                # The physical-step solver must converge, including its
-                # initial equilibrium, so the case starts from the
-                # hydrostatic-equilibrium cfg.
-                cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-                cfg.optionxform = str
-                cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
-                cfg["sim"].update(modelname="result", max_steps="8", max_time_in_yr="1e20",
-                                  output_step_interval="2", output_time_interval_in_yr="1e20")
+            cfg["control"]["has_hydraulic_diffusion"]="yes"
+            cfg["mat"]["porosity"]="[0.01]"
+            cfg["mat"]["hydraulic_perm"]="[1e-20]"
+        if name=="pt-hydraulic":
+            # The physical-step solver must converge, including its
+            # initial equilibrium, so the case starts from the
+            # hydrostatic-equilibrium cfg.
+            cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+            cfg.optionxform = str
+            cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
+            cfg["sim"].update(modelname="result", max_steps="8", max_time_in_yr="1e20",
+                              output_step_interval="2", output_time_interval_in_yr="1e20")
         label=f"optional-{name}-{ndims}d"
         reference,_=run(label+"-parent",cfg,executables["serial" if ndims==2 else "serial3d"])
         current,timing=run(label+"-mpi2",cfg,executables["mpi" if ndims==2 else "mpi3d"],2)

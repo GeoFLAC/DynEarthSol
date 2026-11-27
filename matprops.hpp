@@ -4,6 +4,10 @@
 #include "parameters.hpp"
 
 
+// Depth of the last row of the PREM tables behind control.ref_pressure_option 1 and 2;
+// ref_pressure() extrapolates their last segment below it.
+constexpr double prem_max_depth = 2891e3;
+
 #pragma acc routine seq
 double ref_pressure(const Param& param, double z);
 

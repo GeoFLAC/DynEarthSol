@@ -25,7 +25,6 @@ OUTSIDE = {
     "regattr": "rank zero",
     # Markers stay on rank zero; compute ranks receive the material counts.
     "elemmarkers": "markers on rank zero", "markers_in_elem": "markers on rank zero",
-    "hydrous_markers_in_elem": "markers on rank zero",
     # Scratch arrays that each mesh allocates for itself.
     "ntmp": "scratch", "ctmp": "scratch", "etmp": "scratch", "etmp_int": "scratch",
     "tmp_result": "scratch",

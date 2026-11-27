@@ -22,7 +22,7 @@ enum class MpiOp {
     State, Temperature, PorePressure, StrainRate, Stress, Force, Velocity,
     Coordinate, Rotation, Volume, Dvoldt, Edvoldt, Nmd, Mass, TimeStep,
     OldMeanStress, VelocityBC, Residual, PhysicalPT, InitialPT, Surface, SurfaceIdle, SurfaceTopography, SwapVolume,
-    Remesh, PhaseChange, Hydrous, Collect, Geometry, Boundary, Sample, Average, Metrics, Report, Stop, Count
+    Remesh, PhaseChange, Collect, Geometry, Boundary, Sample, Average, Metrics, Report, Stop, Count
 };
 
 // Root keeps the global management/output mesh. Each compute rank, including

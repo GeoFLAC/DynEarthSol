@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -481,6 +482,7 @@ static void declare_parameters(opt::Registry &cfg,
          "0: using density of the mat.mattype_ref-th material to compute lithostatic pressure.\n"
          "1: computing reference pressure from the PREM model.\n"
          "2: computing reference pressure from the PREM model, modified for continent.\n"
+         "Options 1 and 2 need mesh.zlength <= 2891 km, the depth of the last row of the PREM table.\n"
          "Any other value is rejected at startup.\n")
         ("control.is_using_mixed_stress", opt::value<bool>(&p.control.is_using_mixed_stress)->default_value(true),
          "If use Nodal Mixed Discretization For Stress")
@@ -500,18 +502,16 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
-         "2: using simple deposition. "
          "11: using GoSPL landscape evolution model. "
          "101: custom function. "
-         "102: using simple deposition and diffusion.")
+         "102: diffusion plus terrigenous and, when their rates are positive, hemipelagic and pelagic "
+         "deposition (2D only).")
         ("control.surface_diffusivity", opt::value<double>(&p.control.surface_diffusivity)->default_value(1e-6),
          "Standard diffusition coefficient of surface topography (m^2/s)")
         ("control.surf_diff_ratio_terrig", opt::value<double>(&p.control.surf_diff_ratio_terrig)->default_value(1.),
          "Ratio between terrigenous and standard Diffusition coefficients.")
         ("control.surf_diff_ratio_marine", opt::value<double>(&p.control.surf_diff_ratio_marine)->default_value(1.),
          "Ratio between marine and standard Diffusition coefficients.")
-        ("control.surf_depo_universal", opt::value<double>(&p.control.surf_depo_universal)->default_value(0.),
-         "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",opt::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
         ("control.surface_process_gospl_config_file", opt::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
@@ -559,11 +559,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
-
-        ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
-         "Does the model have hydration processes? It is required to model some types of phase changes.")
-        ("control.hydration_migration_speed", opt::value<double>(&p.control.hydration_migration_speed)->default_value(3e-9),
-         "The upward migration speed of hydrous fluid (in m/s).\n")
 
         ("control.has_PT", opt::value<bool>(&p.control.has_PT)->default_value(false),
          "Does the model have Pseudo-transient (PT) loop?\n")
@@ -825,7 +820,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("ic.num_mattype_layers", opt::value<int>(&p.ic.num_mattype_layers)->default_value(2),
          "Number of material layers")
         ("ic.layer_mattypes", opt::list()->default_value("[0,1]"),
-         "Material type of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2...")
+         "Material type of each material layer '[d0, d1, d2, ...]', each in [0, mat.num_materials-1]")
         ("ic.mattype_layer_depths", opt::list()->default_value("[0.5]"),
          "Depths of the interfaces of each material layer '[d0, d1, d2, ...]', d0<=d1<=d2..., (in unit of zlength)")
 
@@ -2012,6 +2007,18 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                 die(EXIT_CONFIG_VALUE);
             }
         }
+        // Each layer's mattype is counted into the per-material marker arrays, like the base ones above.
+        if (p.ic.mattype_option == 1) {
+            for (std::size_t i = 0; i < p.ic.layer_mattypes.size(); ++i) {
+                const int mt = p.ic.layer_mattypes[i];
+                if (mt < 0 || mt >= p.mat.nmat) {
+                    std::cerr << "Error: ic.layer_mattypes[" << i << "] (" << mt
+                              << ") must be within [0, mat.num_materials-1] = [0, "
+                              << p.mat.nmat - 1 << "].\n";
+                    die(EXIT_CONFIG_VALUE);
+                }
+            }
+        }
         // The continental geotherm indexes rho0 and therm_cond with it.
         if (p.ic.temperature_option == 1 &&
                 (p.mat.mattype_continental_crust < 0 || p.mat.mattype_continental_crust >= p.mat.nmat)) {
@@ -2044,10 +2051,37 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             p.control.ref_pressure_option = 0;
             std::cerr << "Warning: mat.num_materials is 1, using simplest control.ref_pressure_option.\n";
         }
+        // The values surface_processes() handles in this build; another one would stop the run at
+        // its first surface update, and a fixed mesh never reaches one.
+        {
+            const int s = p.control.surface_process_option;
+            if (s != 0 && s != 1 && s != 11 && s != 101 && s != 102) {
+                std::ostringstream msg;
+                msg << "control.surface_process_option = " << s << " is not one of 0, 1, 11, 101 and 102.";
+                die(EXIT_CONFIG_VALUE, msg.str().c_str());
+            }
+#ifndef HAS_GOSPL_CPP_INTERFACE
+            if (s == 11)
+                die(EXIT_UNSUPPORTED_LIB, "control.surface_process_option = 11 (GoSPL) needs a build with usegospl=1.");
+#endif
+#ifdef THREED
+            if (s == 102)
+                die(EXIT_UNSUPPORTED_DIM, "control.surface_process_option = 102 is not available in 3D.");
+#endif
+        }
+        if (p.control.ref_pressure_option != 0 && p.mesh.zlength > prem_max_depth) {
+            std::ostringstream msg;
+            msg << std::setprecision(10) << "control.ref_pressure_option " << p.control.ref_pressure_option
+                << " takes the PREM table, which ends at " << prem_max_depth << " m depth, but mesh.zlength = "
+                << p.mesh.zlength << " m. Lower mesh.zlength or use control.ref_pressure_option 0.";
+            die(EXIT_CONFIG_VALUE, msg.str().c_str());
+        }
         if (p.mat.nmat == 1 && p.markers.replenishment_option != 1) {
             p.markers.replenishment_option = 1;
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
+        if (p.markers.init_marker_option == 2 && !(p.markers.init_marker_spacing > 0))
+            die(EXIT_CONFIG_VALUE, "markers.init_marker_spacing must be positive.");
 
         // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
         // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.

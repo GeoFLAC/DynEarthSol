@@ -172,8 +172,8 @@ timestep bounds. Boundary conditions use global wall extents; node owners supply
 authoritative values. Residual norms use a global sum, whose rounding can vary
 with process count.
 
-Rank zero drives initialization/isostasy, scheduling, phase changes, hydrous-marker
-advection, marker creation/correction, MMG/interpolation, surface management and
+Rank zero drives initialization/isostasy, scheduling, phase changes, marker
+creation/correction, MMG/interpolation, surface management and
 output. Workers wait during this work. Thus **not every operation is parallel**.
 Rank zero runs this work with its OpenMP threads, so models with phase
 changes or frequent remeshing usually run faster with fewer ranks per node and
@@ -323,7 +323,7 @@ The 3D pair is optional. Results, logs, configurations and snapshots are retaine
 in a fresh directory. The driver uses the defaults, anisotropy, core-complex,
 core-complex/MMG and subduction examples, capping duration and adjusting output.
 Additional cases cover hybrid MPI/OpenMP, hydraulic diffusion, pseudo-transient
-iterations, thermal-off, hydration, repeated remeshing, restart, isostasy, averaged
+iterations, thermal-off, repeated remeshing, restart, isostasy, averaged
 outputs, empty partitions and error termination. At least eight local MPI slots
 are needed for the default rank matrix.
 

@@ -176,8 +176,7 @@ class Dynearthsol:
 
 
     def marker_sets(self, frame=None):
-        '''Names of the marker sets in this frame; "hydrous-markerset" is there
-        only with control.has_hydration_processes.'''
+        '''Names of the marker sets in this frame.'''
         if frame is None: frame = self._header_frame
         if frame != self._header_frame: self.read_header(frame)
         import h5py

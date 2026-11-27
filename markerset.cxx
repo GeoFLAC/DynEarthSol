@@ -2,8 +2,8 @@
 #include <iostream> // for std::cerr
 #include <time.h> // for time()
 #include <assert.h>
-#include <unordered_map>
 #include <set>
+#include <limits>
 #include <numeric>
 #include <random>
 
@@ -28,14 +28,6 @@ namespace {
     const int DEBUG = 0;
     const double over_alloc_ratio = 2.0;  // how many extra space to allocate for future expansion
 
-}
-
-
-MarkerSet::MarkerSet(const std::string& name) :
-    _name(name)
-{
-    _last_id = _nmarkers = 0;
-    allocate_markerdata(4 * 1024); // pre-allocate a small amount of markers
 }
 
 
@@ -94,19 +86,12 @@ MarkerSet::MarkerSet(const Param& param, Variables& var, T& bin_save, T& bin_chk
     // init from checkpoint file
     read_chkpt_file(var, bin_save, bin_chkpt);
 
-    if (_name == "markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            int mt = (*_mattype)[i];
-            ++(*var.elemmarkers)[e][mt];
-            (*var.markers_in_elem)[e].push_back(i);
-        }
-    else if (_name == "hydrous-markerset")
-        for( int i = 0; i < _nmarkers; i++ ) {
-            int e = (*_elem)[i];
-            ++(*var.hydrous_elemmarkers)[e][0];
-            (*var.hydrous_markers_in_elem)[e].push_back(i);
-        }
+    for( int i = 0; i < _nmarkers; i++ ) {
+        int e = (*_elem)[i];
+        int mt = (*_mattype)[i];
+        ++(*var.elemmarkers)[e][mt];
+        (*var.markers_in_elem)[e].push_back(i);
+    }
 }
 
 
@@ -183,8 +168,8 @@ void MarkerSet::append_markers(AMD_vec &md)
     int nmarker = md.size();
     // Ensure sufficient array size
     while ( _nmarkers + nmarker > _reserved_space ) {
-        // Resize the marker-related arrays if necessary.
-        const int newsize = _reserved_space * over_alloc_ratio;
+        // Resize the marker-related arrays if necessary. An empty set must still grow.
+        const int newsize = std::max(1, static_cast<int>(_reserved_space * over_alloc_ratio));
         resize( newsize );
     }
 
@@ -233,8 +218,8 @@ void MarkerSet::append_marker(T eta, int el, int mt , double ti, double z, doubl
 {
     // Ensure sufficient array size
     if( _nmarkers == _reserved_space ) {
-        // Resize the marker-related arrays if necessary.
-        const int newsize = _nmarkers * over_alloc_ratio;
+        // Resize the marker-related arrays if necessary. An empty set must still grow.
+        const int newsize = std::max(1, static_cast<int>(_nmarkers * over_alloc_ratio));
         resize( newsize );
     }
 
@@ -568,7 +553,8 @@ void MarkerSet::random_markers( const Param& param, Variables &var, int genesis 
 
 void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, int genesis )
 {
-    const int d = param.markers.init_marker_spacing * param.mesh.resolution;
+    // In metres: a sub-metre spacing is valid.
+    const double spacing = param.markers.init_marker_spacing * param.mesh.resolution;
 
     double domain_min[NDIMS], domain_max[NDIMS];
     {
@@ -585,16 +571,26 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, in
         // print(std::cout, domain_max, NDIMS);
     }
 
+    // The marker count and the array size over_alloc_ratio times it must fit an int.
+    double ngrid = 1;
+    for (int i=0; i<NDIMS; i++)
+        ngrid *= (domain_max[i] - domain_min[i]) / spacing + 1;
+    if (!(ngrid * over_alloc_ratio < std::numeric_limits<int>::max())) {
+        std::cerr << "Error: markers.init_marker_spacing = " << param.markers.init_marker_spacing
+                  << " (" << spacing << " m) gives " << ngrid << " markers. Raise markers.init_marker_spacing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
     const double xlength = domain_max[0] - domain_min[0];
-    const int nx = xlength / d + 1;
-    const double x0 = domain_min[0] + 0.5 * (xlength - (nx-1)*d);
+    const int nx = xlength / spacing + 1;
+    const double x0 = domain_min[0] + 0.5 * (xlength - (nx-1)*spacing);
     const double zlength = domain_max[NDIMS-1] - domain_min[NDIMS-1];
-    const int nz = zlength / d + 1;
-    const double z0 = domain_min[NDIMS-1] + 0.5 * (zlength - (nz-1)*d);
+    const int nz = zlength / spacing + 1;
+    const double z0 = domain_min[NDIMS-1] + 0.5 * (zlength - (nz-1)*spacing);
 #ifdef THREED
     const double ylength = domain_max[1] - domain_min[1];
-    const int ny = ylength / d + 1;
-    const double y0 = domain_min[1] + 0.5 * (ylength - (ny-1)*d);
+    const int ny = ylength / spacing + 1;
+    const double y0 = domain_min[1] + 0.5 * (ylength - (ny-1)*spacing);
 #else
     const int ny = 1;
 #endif
@@ -629,11 +625,11 @@ void MarkerSet::regularly_spaced_markers( const Param& param, Variables &var, in
         int iz = n / (nx * ny);
 
         // Physical coordinate of new marker
-        double x[NDIMS] = { x0 + ix*d,
+        double x[NDIMS] = { x0 + ix*spacing,
 #ifdef THREED
-                            y0 + iy*d,
+                            y0 + iy*spacing,
 #endif
-                            z0 + iz*d };
+                            z0 + iz*spacing };
         bool found = false;
 
         // Look for nearby elements.
@@ -1017,9 +1013,8 @@ void MarkerSet::calculate_marker_coord(const Variables &var, array_t &points) co
 
 namespace {
 
-    template <class T>
     void find_markers_in_element(const Param &param, const Variables& var, MarkerSet& ms,
-                                 T& elemmarkers, int_vec2D& markers_in_elem,
+                                 int_vec2D& elemmarkers, int_vec2D& markers_in_elem,
                                  KNN& kdtree, const Barycentric_transformation &bary,
                                  const array_t& old_coord, const conn_t &old_connectivity)
     {
@@ -1029,6 +1024,13 @@ namespace {
         const int k_neig = std::min((std::size_t) 20, old_connectivity.size());  // how many nearest neighbors to search?
 
         int nmarkers = ms.get_nmarkers();
+        // An empty set has nothing to find, and its block size below would be zero.
+        if (nmarkers == 0) {
+#ifdef NPROF_DETAIL
+            nvtxRangePop();
+#endif
+            return;
+        }
 
         int markers_per_block_max = std::max(kdtree.max_batch_size(k_neig), 1);
         int markers_per_block = std::min(markers_per_block_max, nmarkers);
@@ -1928,10 +1930,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
     // Re-create elemmarkers
     delete var.elemmarkers;
     delete var.markers_in_elem;
-    if (param.control.has_hydration_processes) {
-        delete var.hydrous_elemmarkers;
-        delete var.hydrous_markers_in_elem;
-    }
     create_elemmarkers( param, var );
 
     // Locating markers in new elements
@@ -1968,9 +1966,6 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 
         find_markers_in_element(param, var, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem,
                                 kdtree, bary, old_coord, old_connectivity);
-        if (param.control.has_hydration_processes)
-            find_markers_in_element(param, var, *var.markersets[var.hydrous_marker_index], *var.hydrous_elemmarkers, *var.hydrous_markers_in_elem,
-                                    kdtree, bary, old_coord, old_connectivity);
 
         #pragma acc wait
     }
@@ -2173,102 +2168,3 @@ void correct_inflow_band_marker_mattype(const Param& param, const Variables& var
         std::cout << "      [restore] corrected " << ncorr
                   << " stray marker mattype(s) in the inflow band (element-location rule).\n";
 }
-
-
-namespace {
-
-    Barycentric_transformation* get_bary_from_cache(std::unordered_map<int, Barycentric_transformation*> &cache,
-                                                    int el, const array_t &coordinate, conn_t::ConstAccessor conn,
-                                                    double_vec &volume)
-    {
-        Barycentric_transformation *bary;
-        auto search = cache.find(el);
-        if (search == cache.end()) {
-            ConstArrayIndirectAccessor coord = coordinate.view_const(conn);
-            bary = new Barycentric_transformation(coord, volume[el]);
-            cache[el] =  bary;
-        }
-        else {
-            bary = search->second;
-        }
-        return bary;
-    }
-}
-
-
-void advect_hydrous_markers(const Param& param, const Variables& var, double dt_subtotal,
-                            MarkerSet& hydms, Array2D<int,1>& hydem)
-{
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::Hydrous, var, dt_subtotal)) return;
-#endif
-
-    std::unordered_map<int, Barycentric_transformation*> cache;
-    Barycentric_transformation *bary;
-
-    #pragma acc wait // here is not ACC parallelized yet
-
-    int last_marker = hydms.get_nmarkers();
-    int m = 0;
-    while (m < last_marker) {
-        // Find physical coordinate of the marker
-        int el = hydms.get_elem(m);
-        double x[NDIMS] = {0};
-        ConstConnAccessor conn = (*var.connectivity)[el];
-        for(int i=0; i<NDIMS; i++) {
-            for(int j=0; j<NODES_PER_ELEM; j++)
-                x[i] += hydms.get_eta(m)[j] * (*var.coord)[ conn[j] ][i];
-        }
-
-        // Advect the marker
-        x[NDIMS-1] += dt_subtotal * param.control.hydration_migration_speed;
-
-        // Transform back to barycentric coordinate
-        double r[NDIMS];
-        bary = get_bary_from_cache(cache, el, *var.coord, conn, *var.volume);
-        bary->transform(x, 0, r); // always (local) 0-th element for bary
-
-        if (bary->is_inside(r)) {
-            hydms.set_eta(m, r);
-            ++m;
-            goto next;
-        }
-        else {
-            // Marker has moved out of el. Find the new containing element.
-            for(int j=0; j<NODES_PER_ELEM; j++) {
-                const int npatch = var.support.size(conn[j]);
-                const int* supp = var.support.patch(conn[j]);
-                for (int k=0; k<npatch; k++) {
-                    int ee = supp[k];
-                    ConstConnAccessor conn2 = (*var.connectivity)[ee];
-                    bary = get_bary_from_cache(cache, ee, *var.coord, conn2, *var.volume);
-                    bary->transform(x, 0, r);
-                    if (bary->is_inside(r)) {
-                        hydms.set_elem(m, ee);
-                        hydms.set_eta(m, r);
-                        --hydem[el][0];
-                        ++hydem[ee][0];
-                        ++m;
-                        goto next;
-                    }
-                }
-            }
-            // Since no containing element has been found, delete this marker.
-            // Note m is not inc'd.
-            if (DEBUG) {
-                std::cout << m << "-th hydrous marker not in any element\n";
-            }
-            --last_marker;
-            hydms.remove_marker(m);
-            --hydem[el][0];
-        }
-    next:;
-    }
-
-    // clean up all Barycentric_transformation instances
-    for (auto i=cache.begin(); i!=cache.end(); ++i) {
-        delete i->second;
-    }
-}
-
-

@@ -14,7 +14,7 @@
 
 namespace {
 
-    void simple_subduction(const Param& param, const Variables& var, const MarkerSet& ms, int m, int& new_mt, int& hyd_inc)
+    void simple_subduction(const Param& param, const Variables& var, const MarkerSet& ms, int m, int& new_mt)
     {
         const int mt_mantle = 0;
         const int mt_serpentinized_mantle = 1;
@@ -37,12 +37,8 @@ namespace {
                 // Phase diagram from Hacker, 1996, Subduction: Top to Bottom
                 const double min_eclogite_T = 500 + 273;
                 const double transition_pressure = -0.3e9 + 2.2e6*T;
-                const double dehydration_T = 150 + 273;
                 if (T > min_eclogite_T && P > transition_pressure) {
                     new_mt = mt_eclogite;
-                }
-                else if (T > dehydration_T) {
-                    hyd_inc = 1;
                 }
             }
             break;
@@ -52,12 +48,8 @@ namespace {
                 // from sediment solidus in Nichols et al, 1994, Nature
                 const double min_schist_T = 650 + 273;
                 const double min_schist_Z = -20e3;
-                const double dehydration_T = 150 + 273;
                 if (T > min_schist_T && Z < min_schist_Z) {
                     new_mt = mt_schist;
-                }
-                else if (T > dehydration_T) {
-                    hyd_inc = 1;
                 }
             }
             break;
@@ -70,20 +62,6 @@ namespace {
                 const double min_serpentine_T = 550 + 273;
                 if (T > min_serpentine_T && P > transition_pressure) {
                     new_mt = mt_mantle;
-                    hyd_inc = 1;
-                }
-            }
-            break;
-        case mt_mantle:
-            {
-                const double min_serpentine_T = 550 + 273;
-                const int el = ms.get_elem(m);
-                // The hydrous marker set exists only with has_hydration_processes;
-                // without it no water is present, so the mantle stays dry.
-                if (T <= min_serpentine_T && param.control.has_hydration_processes &&
-                    (*var.hydrous_elemmarkers)[el][0]) {
-                    new_mt = mt_serpentinized_mantle;
-                    //hyd_inc = -1;
                 }
             }
             break;
@@ -745,13 +723,10 @@ static void change_phases(const Param& param, Variables& var)
             int m = (*var.markers_in_elem)[e][i];
             int current_mt = ms.get_mattype(m);
             int new_mt = current_mt;
-            int hyd_inc = 0;
-
 
             switch (param.mat.phase_change_option) {
             case 1:
-                simple_subduction(param, var, ms, m, new_mt, hyd_inc);
-                ms.set_tmp(m, hyd_inc);
+                simple_subduction(param, var, ms, m, new_mt);
                 // marker_loop_wrapper(param, var, ms, *var.elemmarkers, simple_subduction);
                 break;
             case 101:
@@ -783,56 +758,6 @@ static void change_phases(const Param& param, Variables& var)
         std::cerr << "Error: unknown phase_change_option: " << param.mat.phase_change_option << '\n';
         die(EXIT_INTERNAL_UNREACHABLE);
     }
-
-    if (param.control.has_hydration_processes
-#ifdef USEMPI
-        && (!var.mpi || !var.mpi->in_kernel() || var.mpi->is_root())
-#endif
-    ) {
-        MarkerSet& hydms = *var.markersets[var.hydrous_marker_index];
-        auto& hydem = *var.hydrous_elemmarkers;
-
-        for (int e=0; e<var.nelem; ++e) {
-            int nmarkers = (*var.markers_in_elem)[e].size();
-            for (int i=0; i<nmarkers; ++i) {
-                int m = (*var.markers_in_elem)[e][i];
-
-                if( ms.get_tmp(m) == 0) continue; 
-
-                // Dehydration metamorphism, hydrous marker is released.
-                const int el = ms.get_elem(m);
-                ConstShapefnAccessor eta = ms.get_eta(m);
-
-                // #pragma omp critical(phase_change_simple_subduction)
-                {
-                    // Add new marker, which has the same coordinate as the dehydrated marker
-                    hydms.append_marker(eta, el, 0, 0., 0., 0., 0., 0.);
-                    ++hydem[el][0];
-                }
-
-                /*** Disable hyd marker deletion
-                else if (param.control.has_hydration_processes && hyd_inc == -1) {
-                    const int el = ms.get_elem(m);
-                    // Find the hydrous marker belong to el
-                    int mh;
-                    for (mh=0; mh<hydms.get_nmarkers(); mh++) {
-                        if (hydms.get_elem(mh) == el) break;
-                    }
-                    if (mh >= hydms.get_nmarkers()) {
-                        die(EXIT_RUNTIME_LOOKUP, "hydrous marker phase change");
-                    }
-                    #pragma omp critical(phase_change_simple_subduction)
-                    {
-                        // delete the marker
-                        hydms.remove_marker(mh);
-                        --hydem[el][0];
-                    }
-                }
-                */
-            }
-        }
-    }
-
 
 #ifdef NPROF
     nvtxRangePop();
