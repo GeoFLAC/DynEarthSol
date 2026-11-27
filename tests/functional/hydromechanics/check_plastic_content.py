@@ -71,7 +71,7 @@ def analyze(folder, method, yielding, continuation=None, open_boundary=False):
         np.testing.assert_array_equal(current.read_field(frame, 'coordinate'), x)
         p = current.read_field(frame, 'pore pressure')
         strain = current.read_field(frame, 'strain')[:, :dim].sum(axis=1)
-        dp = water.checkpoint_field(current, frame, 'pending pore pressure increment', len(x))
+        dp = water.checkpoint_field(current, frame, 'pending pore pressure increment')
         strain_volume = float(volume @ strain)
         pressure_volume = float(volume @ p[conn].mean(axis=1))
         content = STORAGE*pressure_volume+ALPHA*strain_volume
@@ -157,7 +157,7 @@ def retention_check(exe, folder, ndims, replay=False):
             reference += increment
             previous_increment = increment
             source += ALPHA*de*float(volume @ np.exp(coefficient*previous[conn]).mean(axis=1))
-        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment')
         content = float(volume @ (STORAGE*(p[conn].mean(axis=1)-initial) +
                                   PHI*(np.exp(coefficient*p[conn]).mean(axis=1)-math.exp(coefficient*initial))))
         pending = -lag*float(volume @ dp[conn].mean(axis=1))
@@ -224,7 +224,7 @@ def rsf_check(exe, folder, ndims, replay=False):
         actual = model.read_field(frame, 'stress')
         worst_stress = max(worst_stress, float(np.max(abs(actual-expected)))/(BULK*SPEED*DURATION))
         if ndims == 2:
-            yy = water.checkpoint_field(model, frame, 'stressyy', len(conn))
+            yy = water.checkpoint_field(model, frame, 'stressyy')
             worst_stress = max(worst_stress, float(np.max(abs(yy-lateral+ALPHA*previous_pressure)))/(BULK*SPEED*DURATION))
         actual_theta = model.read_field(frame, 'friction state variable')
         actual_mu = model.read_field(frame, 'dynamic friction coefficient')
@@ -291,7 +291,7 @@ def thermal_check(exe, folder, ndims, replay=False):
         np.testing.assert_allclose(temperature, heat.T0+theta, rtol=0, atol=1e-9)
         p = model.read_field(frame, 'pore pressure')
         strain = model.read_field(frame, 'strain')[:, :ndims].sum(axis=1)
-        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+        dp = water.checkpoint_field(model, frame, 'pending pore pressure increment')
         content = float(volume @ (STORAGE*p[conn].mean(axis=1)+ALPHA*strain-
                                   beta*(temperature[conn].mean(axis=1)-heat.T0)))
         pending = -lag*float(volume @ dp[conn].mean(axis=1))

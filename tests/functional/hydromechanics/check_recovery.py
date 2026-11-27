@@ -62,9 +62,9 @@ def check(model, cfg, method):
         data = {k: model.read_field(frame, k) for k in
                 ('pore dilation', 'plastic volume increment', 'porosity', 'permeability',
                  'strain', 'stress', 'temperature', 'pore pressure', 'fluid balance')}
-        data['syy'] = (plastic.water.checkpoint_field(model, frame, 'stressyy', len(conn))
+        data['syy'] = (plastic.water.checkpoint_field(model, frame, 'stressyy')
                        if dim == 2 else np.zeros(len(conn)))
-        data['pending'] = plastic.water.checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+        data['pending'] = plastic.water.checkpoint_field(model, frame, 'pending pore pressure increment')
         data['time'] = time
         if old:
             dt = time-old['time']

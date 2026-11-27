@@ -137,7 +137,7 @@ jobs:
       run: >-
         python3 displacement_output/run_displacement_output.py
         --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
-        --expected-format hdf5 --threads 1
+        --threads 1
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*

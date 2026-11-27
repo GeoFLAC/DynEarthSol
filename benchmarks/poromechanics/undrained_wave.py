@@ -11,6 +11,7 @@ optional finite-density model with a declared constant fictitious mass.
 import argparse
 import math
 from pathlib import Path
+import shutil
 import sys
 
 import numpy as np
@@ -22,7 +23,8 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
 from des_case import digest, expect_exit, file_hashes, provenance, read_config, reset_boundaries, run_des, write_json
-from des_test_utils import fields, lumped_volumes, native_offsets, simplex_heights, simplex_volumes
+from des_test_utils import (checkpoint_file, edit_checkpoint, fields, lumped_volumes, simplex_heights,
+                            simplex_volumes)
 
 
 def study(executable, output, spacing, steps, amplitude, samples=4, restart_check=False,
@@ -80,20 +82,16 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         run_des(executable, folder, 'seed', cfg, 900 if content_model else 120)
         cfg['control']['fixed_dt'] = repr(period/count)
         seed = Dynearthsol(str(folder / 'seed'))
-        if seed.format != 'binary':
-            raise RuntimeError('This checkpoint-initialization fixture currently requires binary output')
         x = seed.read_field(0, 'coordinate')
         conn = seed.read_field(0, 'connectivity')
-        dim = seed.ndims
+        dim = int(seed.ndims)
         assert not np.any(seed.read_field(0, 'pore pressure'))
         assert not np.any(seed.read_field(0, 'strain'))
         assert not np.any(seed.read_field(0, 'stress'))
         velocity = np.zeros_like(x)
         velocity[:, -1] = amplitude*np.sin(np.pi*(x[:, -1]+1))
         velocity[np.isclose(x[:, -1], -1) | np.isclose(x[:, -1], 0), -1] = 0
-        seed.read_header(0)
-        with Path(seed.get_fn(0)).open('r+b') as stream:
-            stream.seek(seed.field_pos['velocity']); stream.write(velocity.astype(np.float64).tobytes())
+        edit_checkpoint(folder/'seed.save.000000', replace={'velocity': velocity})
         np.testing.assert_array_equal(seed.read_field(0, 'velocity'), velocity)
         cfg['sim'].update(modelname='wave', is_restarting='true', restarting_from_modelname=str(folder/'seed'),
                           restarting_from_frame='0', max_steps=str(count*cycles),
@@ -127,7 +125,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         summary['cases'][str(count)] = dict(dimension=dim, spacing_m=spacing, steps=count, dt_s=period/count,
                                            nodes=len(x), elements=len(conn), measured=measured,
                                            seed_save_sha256=digest(Path(seed.get_fn(0))),
-                                           seed_checkpoint_sha256=digest(folder/'seed.chkpt.000000'),
+                                           seed_checkpoint_sha256=digest(checkpoint_file(folder/'seed.chkpt.000000')),
                                            input_sha256=digest(folder/'wave.cfg'))
         if restart_check:
             quarter = next(r for r in rows if r['steps'] == count//4)
@@ -181,14 +179,11 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         assert actual < .8*.5*height/math.sqrt(bulk/2650)
         # A step-zero checkpoint without the ordering marker and with a stale
         # next-step dt: the restart must select the undrained wave limit.
-        (folder/'legacy-seed.save.000000').write_bytes((folder/'seed.save.000000').read_bytes())
-        checkpoint = bytearray((folder/'seed.chkpt.000000').read_bytes())
-        position = native_offsets(checkpoint)['dt']
-        checkpoint[position:position+8] = np.float64(1).tobytes()
-        marker = b'physical hydraulic step\t'
-        assert marker in checkpoint[:4096]
-        checkpoint[:4096] = checkpoint[:4096].replace(marker,b'ignored_ hydraulic step\t',1)
-        (folder/'legacy-seed.chkpt.000000').write_bytes(checkpoint)
+        for suffix in ('save', 'chkpt'):
+            shutil.copy2(checkpoint_file(folder/f'seed.{suffix}.000000'),
+                         folder/f'legacy-seed.{suffix}.000000.vtkhdf')
+        edit_checkpoint(folder/'legacy-seed.chkpt.000000', replace={'dt': 1.0},
+                        rename={'physical hydraulic step': 'ignored_ hydraulic step'})
         cfg['sim'].update(modelname='converted', is_restarting='true',
                           restarting_from_modelname=str(folder/'legacy-seed'), restarting_from_frame='0')
         run_des(executable,folder,'converted',cfg)

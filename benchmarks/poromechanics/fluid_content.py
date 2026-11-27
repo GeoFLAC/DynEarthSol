@@ -105,21 +105,11 @@ def configuration(h, dt, duration, method, scaling, inflow):
     return cfg
 
 
-def checkpoint_field(model, frame, name, count):
-    model.suffix = 'chkpt'
-    model.read_header(frame)
-    path = model.get_fn(frame)
-    if model.format == 'hdf5':
-        import h5py
-        with h5py.File(path) as stream:
-            result = stream[name][:]
-    else:
-        with open(path, 'rb') as stream:
-            stream.seek(model.field_pos[name])
-            result = np.fromfile(stream, dtype='<f8', count=count)
-    model.suffix = 'save'
-    model.read_header(frame)
-    return result
+def checkpoint_field(model, frame, name):
+    """The array name of model's checkpoint of frame."""
+    import h5py
+    with h5py.File(f'{model.modelname}.chkpt.{frame:06d}.vtkhdf') as stream:
+        return stream[name][:]
 
 
 def analyze(folder, method):
@@ -154,7 +144,7 @@ def analyze(folder, method):
         strain_integral = float(volume @ strain)
         mean_integral = float(volume @ stress)
         physical = REF.storage*p_integral + PROPS['biot']*strain_integral
-        dp = checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+        dp = checkpoint_field(model, frame, 'pending pore pressure increment')
         pending = -lag_capacity*float(volume @ dp[conn].mean(axis=1)) if method == 'pt' else 0.
         algorithmic = physical + pending
         b = model.read_field(frame, 'fluid balance')

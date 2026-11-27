@@ -24,7 +24,7 @@ RATE = ct.DIFFUSIVITY*math.pi**2/L**2
 
 
 from des_case import check_manifest, digest, file_hashes, run_des, write_json
-from des_test_utils import simplex_volumes
+from des_test_utils import checkpoint_file, edit_checkpoint, simplex_volumes
 
 
 def run(executable, folder, spacing):
@@ -41,15 +41,12 @@ def run(executable, folder, spacing):
                      hbc_pressure='[0,0,0,0,0,0]')
     run_des(executable, folder, 'seed', cfg, timeout=600)
     seed = ct.Dynearthsol(str(folder/'seed'))
-    assert seed.ndims == 3 and seed.format == 'binary'
+    assert seed.ndims == 3
     x = seed.read_field(0, 'coordinate')
     conn = seed.read_field(0, 'connectivity')
     initial = P*np.sin(math.pi*x[:, 0]/L)
     initial[np.isclose(x[:, 0], 0) | np.isclose(x[:, 0], L)] = 0.
-    seed.read_header(0)
-    with Path(seed.get_fn(0)).open('r+b') as stream:
-        stream.seek(seed.field_pos['pore pressure'])
-        stream.write(initial.astype(np.float64).tobytes())
+    edit_checkpoint(folder/'seed.save.000000', replace={'pore pressure': initial})
     np.testing.assert_array_equal(seed.read_field(0, 'pore pressure'), initial)
     cfg['sim'].update(modelname='pulse', is_restarting='true',
                       restarting_from_modelname='seed', restarting_from_frame='0',
@@ -88,8 +85,8 @@ def run(executable, folder, spacing):
                   max_storage_error_over_initial=max(r['storage_error_over_initial'] for r in history),
                   max_global_budget_error_m3=worst_budget,
                   global_budget_error_over_initial=worst_budget/exact_initial_stored,
-                  seed_save_sha256=digest(folder/'seed.save.000000'),
-                  seed_checkpoint_sha256=digest(folder/'seed.chkpt.000000'),
+                  seed_save_sha256=digest(checkpoint_file(folder/'seed.save.000000')),
+                  seed_checkpoint_sha256=digest(checkpoint_file(folder/'seed.chkpt.000000')),
                   input_sha256=digest(folder/'pulse.cfg'), history=history,
                   outputs_sha256=file_hashes(p for p in folder.glob('pulse.*')
                                              if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'))

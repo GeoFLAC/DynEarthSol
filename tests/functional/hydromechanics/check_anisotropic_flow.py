@@ -26,7 +26,7 @@ INITIAL = np.array([1., .35])
 
 
 from des_case import check_manifest, digest, file_hashes, provenance, read_config, run_model, write_json
-from des_test_utils import fields, lumped_volumes, physical_differences
+from des_test_utils import edit_checkpoint, fields, lumped_volumes, physical_differences
 
 
 def basis(x):
@@ -70,16 +70,13 @@ def case(executable, folder, h, steps, dim):
     folder.mkdir()
     cfg = configuration(h, 1/steps, dim)
     seed = run_model(executable, folder, cfg, 'seed', timeout=180)
-    assert seed.format == 'binary', 'Use a binary executable for the analytical initial-state seed'
     assert seed.ndims == dim
     x = seed.read_field(0, 'coordinate')
     modes = basis(x)
     initial = P0*(modes@INITIAL)
     for d in (0, dim-1):
         initial[np.isclose(x[:, d], x[:, d].min()) | np.isclose(x[:, d], x[:, d].max())] = 0.
-    seed.read_header(0)
-    with Path(seed.get_fn(0)).open('r+b') as stream:
-        stream.seek(seed.field_pos['pore pressure']); stream.write(initial.astype(np.float64).tobytes())
+    edit_checkpoint(folder/'seed.save.000000', replace={'pore pressure': initial})
     cfg['sim'].update(is_restarting='true', restarting_from_modelname='seed', restarting_from_frame='0',
                       output_step_interval=str(steps//4), max_steps=str(steps//2))
     run_model(executable, folder, cfg, 'first', timeout=180)

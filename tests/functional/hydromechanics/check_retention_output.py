@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check retention cell fields across material interfaces and file containers.
+"""Check retention cell fields across material interfaces in VTK-HDF and converted VTU output.
 
 Six-point meshes deliberately have nnode == nelem in both dimensions, so
 array length cannot identify field association. Three retention laws share
@@ -62,7 +62,7 @@ def config(ndims, pressure, active=True):
     return cfg
 
 
-def compare(folder, active, convert):
+def compare(folder, active):
     model = cell.Dynearthsol(str(folder/'cell')); frame = model.frames[-1]
     coordinate = model.read_field(frame, 'coordinate'); conn = model.read_field(frame, 'connectivity')
     assert len(coordinate) == len(conn) == 6, (len(coordinate), len(conn))
@@ -87,29 +87,27 @@ def compare(folder, active, convert):
             try: model.read_field(frame, name)
             except KeyError: pass
             else: raise AssertionError(f'Disabled retention emits {name}')
-    if model.format == 'hdf5':
-        import h5py
-        with h5py.File(model.get_fn(frame), 'r') as stream:
-            cells, points = stream['VTKHDF/grid/CellData'], stream['VTKHDF/grid/PointData']
-            for name in ('stress', 'strain', 'density', 'material', 'viscosity', 'radiogenic source'):
-                assert name in cells and name not in points, name
-            for name in ('pore pressure', 'temperature', 'velocity', 'force', 'coord0'):
-                assert name in points and name not in cells, name
-            assert 'fluid balance' not in cells and 'fluid balance' not in points
-            np.testing.assert_array_equal(stream['fluid balance'][...], model.read_field(frame, 'fluid balance'))
-            for name in FIELDS:
-                assert (name in cells) == active and name not in points
-                if active: np.testing.assert_array_equal(stream['/'+name][...], cells[name][...])
-    elif convert:
-        env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
-        run_solver([sys.executable, str(cell.ROOT / '2vtk.py'), '-a', str(folder / 'cell'), '0', '1'], log=folder / 'vtk.log', cwd=folder, env=env, check=True, timeout=90)
-        vtk = ET.parse(folder/f'cell.{frame:06d}.vtu')
-        arrays = {a.get('Name'):a for a in vtk.findall('.//CellData/DataArray')}
+    import h5py
+    with h5py.File(model.get_fn(frame), 'r') as stream:
+        cells, points = stream['VTKHDF/grid/CellData'], stream['VTKHDF/grid/PointData']
+        for name in ('stress', 'strain', 'density', 'material', 'viscosity', 'radiogenic source'):
+            assert name in cells and name not in points, name
+        for name in ('pore pressure', 'temperature', 'velocity', 'force', 'coord0'):
+            assert name in points and name not in cells, name
+        assert 'fluid balance' not in cells and 'fluid balance' not in points
+        np.testing.assert_array_equal(stream['fluid balance'][...], model.read_field(frame, 'fluid balance'))
         for name in FIELDS:
-            assert (name in arrays) == active
-            if active: np.testing.assert_allclose(np.fromstring(arrays[name].text, sep=' '), expected[name], rtol=1e-6)
+            assert (name in cells) == active and name not in points
+            if active: np.testing.assert_array_equal(stream['/'+name][...], cells[name][...])
+    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
+    run_solver([sys.executable, str(cell.ROOT / '2vtk.py'), '-a', str(folder / 'cell'), '0', '1'], log=folder / 'vtk.log', cwd=folder, env=env, check=True, timeout=90)
+    vtk = ET.parse(folder/f'cell.{frame:06d}.vtu')
+    arrays = {a.get('Name'):a for a in vtk.findall('.//CellData/DataArray')}
+    for name in FIELDS:
+        assert (name in arrays) == active
+        if active: np.testing.assert_allclose(np.fromstring(arrays[name].text, sep=' '), expected[name], rtol=1e-6)
     return dict(nodes=len(coordinate), elements=len(conn), mixed_elements=int(np.sum((count > 0).sum(axis=1) > 1)),
-                container=model.format, fields=list(FIELDS) if active else [])
+                fields=list(FIELDS) if active else [])
 
 
 def study(executable, output, ndims):
@@ -127,11 +125,11 @@ def study(executable, output, ndims):
             cfg['ic']['pore_pressure_option'] = '1'
             cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[-2000,1000,0,0,0,0]')
         run_des(executable, folder, 'input', cfg)
-        case = compare(folder, active, convert=True)
+        case = compare(folder, active)
         case['files_sha256'] = file_hashes(p for p in folder.iterdir()
                                            if p.suffix in ('.cfg', '.poly', '.info', '.vtu') or '.save.' in p.name or '.chkpt.' in p.name)
         report['cases'][label] = case
-        print(label, case['container'], case['mixed_elements'], 'mixed elements: PASS', flush=True)
+        print(label, case['mixed_elements'], 'mixed elements: PASS', flush=True)
     assert digest(executable) == binary_hash
     report.update(passed=True, runner_sha256=digest(Path(__file__)))
     write_json(output/'qualification.json', report)

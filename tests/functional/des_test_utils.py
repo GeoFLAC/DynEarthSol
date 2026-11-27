@@ -22,36 +22,52 @@ def checkpoint_file(path):
 
 
 def fields(path):
-    """Payload bytes by field name (native) or dataset path plus '@<path>.layout' (HDF5 sibling)."""
+    """Payload bytes of a save or checkpoint by dataset path, plus '@<path>.layout' with each
+    dataset's shape and dtype."""
+    import h5py
+    import numpy as np
     found = checkpoint_file(path)
-    if found is not None and found != Path(path):
-        import h5py
-        import numpy as np
-        result = {}
-        with h5py.File(found, 'r') as stream:
-            def read_dataset(name, obj):
-                if isinstance(obj, h5py.Dataset):
-                    value = obj[...]
-                    if np.issubdtype(value.dtype, np.number):
-                        assert np.isfinite(value).all(), (found, name)
-                    result[name] = value.tobytes()
-                    result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
-            stream.visititems(read_dataset)
-        return result
-    data = Path(path).read_bytes()
-    entries = list(native_offsets(data).items())
-    return {name: data[pos:entries[i + 1][1] if i + 1 < len(entries) else len(data)]
-            for i, (name, pos) in enumerate(entries)}
+    assert found is not None, path
+    result = {}
+    with h5py.File(found, 'r') as stream:
+        def read_dataset(name, obj):
+            if isinstance(obj, h5py.Dataset):
+                value = obj[...]
+                if np.issubdtype(value.dtype, np.number):
+                    assert np.isfinite(value).all(), (found, name)
+                result[name] = value.tobytes()
+                result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
+        stream.visititems(read_dataset)
+    return result
 
 
-def checkpoint_array(path, name, dtype='<f8'):
-    """Flat array of the field name in a native or HDF5 save/checkpoint; dtype applies to native files."""
+def checkpoint_array(path, name):
+    """Flat array of the field name in a save or checkpoint."""
     import ast
     import numpy as np
     data = fields(path)
     key = next(k for k in data if not k.startswith('@') and k.split('/')[-1] == name)
-    layout = data.get('@' + key + '.layout')
-    return np.frombuffer(data[key], dtype=np.dtype(ast.literal_eval(layout.decode())[1] if layout else dtype))
+    return np.frombuffer(data[key], dtype=np.dtype(ast.literal_eval(data['@' + key + '.layout'].decode())[1]))
+
+
+def edit_checkpoint(path, drop=(), replace=None, rename=None):
+    """Edit a save or checkpoint in place: delete the datasets named in drop, set those in replace
+    (name -> value, or a function of the current array) and move those in rename (name -> new
+    name). A virtual dataset is written through to the part of its source it maps, such as the
+    first two columns of a 2D vector stored with three components."""
+    import h5py
+    import numpy as np
+    found = checkpoint_file(path)
+    assert found is not None, path
+    with h5py.File(found, 'r+') as stream:
+        for name in drop:
+            if name in stream:
+                del stream[name]
+        for name, value in (replace or {}).items():
+            dataset = stream[name]
+            dataset[...] = value(np.asarray(dataset[...]).copy()) if callable(value) else value
+        for name, new in (rename or {}).items():
+            stream.move(name, new)
 
 
 def record_name(key):

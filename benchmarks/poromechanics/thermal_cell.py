@@ -95,7 +95,7 @@ def analyze(folder, method, boundary, modelname='heated'):
         strain_integral = float(v @ strain)
         pressure_integral = mean_pressure*volume
         physical = STORAGE*pressure_integral+ALPHA*strain_integral-BETA*float(lumped @ (temperature-T0))
-        dp = (water.checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+        dp = (water.checkpoint_field(model, frame, 'pending pore pressure increment')
               if method == 'pt' else np.zeros(len(x)))
         pending = -lag*float(v @ dp[conn].mean(axis=1))
         b = model.read_field(frame, 'fluid balance')

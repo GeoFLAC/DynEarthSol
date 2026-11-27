@@ -62,7 +62,7 @@ def analyze(config, until=None):
             prefix = config.parent/cfg['sim']['restarting_from_modelname']
             frame = cfg.getint('sim', 'restarting_from_frame')
             source = Dynearthsol(str(prefix))
-        previous = previous+water.checkpoint_field(source, frame, 'pending pore pressure increment', len(previous))
+        previous = previous+water.checkpoint_field(source, frame, 'pending pore pressure increment')
     cumulative, initial, error, scale, residual = 0., None, 0., 0., 0.
     history = []
     for i, row in enumerate(rows):

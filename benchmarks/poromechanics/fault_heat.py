@@ -131,7 +131,7 @@ def analyze(model, mode, velocity, heating=True, expansion=True, initial_generat
         # A non-PT restart writes its initial save frame but reuses the parent
         # checkpoint, so frame 0 reads the pending increment from that checkpoint.
         checkpoint = initial_checkpoint_model if i == 0 and initial_checkpoint_model is not None else model
-        dp = heat.water.checkpoint_field(checkpoint, frame, 'pending pore pressure increment', len(x))
+        dp = heat.water.checkpoint_field(checkpoint, frame, 'pending pore pressure increment')
         fluid = (STORAGE*pressure+BIOT*epsilon-(BETA if expansion else 0)*temperature-lag*dp[conn].mean(axis=1)) @ volume
         if i:
             consecutive = row['steps'] == frames[i-1]['steps']+1

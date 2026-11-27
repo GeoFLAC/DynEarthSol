@@ -151,7 +151,7 @@ def material(exe,out,dim):
     gap=0.
     for frame in model.frames:
         x=model.read_field(frame,'coordinate');conn=model.read_field(frame,'connectivity')
-        a={name:checkpoint_array(folder/f'fresh.chkpt.{frame:06d}',name,'<i4' if name.endswith(('elements','wells')) else '<f8')
+        a={name:checkpoint_array(folder/f'fresh.chkpt.{frame:06d}',name)
            for name in names}
         where=lambda element,weights:weights[:nodes]@x[conn[element]]
         found=[where(a['fluid point elements'][0],a['fluid point weights']),

@@ -15,14 +15,13 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks/poromechanics'), str(ROOT/'tests/functional')]
 import plastic_heat as heat
 from des_case import expect_exit, write_json
-from des_test_utils import checkpoint_file, fields, native_offsets, simplex_heights, simplex_volumes
+from des_test_utils import checkpoint_file, edit_checkpoint, simplex_heights, simplex_volumes
 
 HEAT_STATE = ('shear heat version', 'pending shear heat', 'shear heating')
 
 
 def checkpoint_copy(prefix, frame, target, drop=(), replace=None):
     """Modify a copied fixture, preserving every unrelated serialized field."""
-    replace = replace or {}
     for suffix in ('info', 'manifest'):
         source = Path(f'{prefix}.{suffix}')
         if source.exists():
@@ -30,35 +29,11 @@ def checkpoint_copy(prefix, frame, target, drop=(), replace=None):
     for suffix in ('save', 'chkpt'):
         source = checkpoint_file(f'{prefix}.{suffix}.{frame:06d}')
         assert source is not None, (prefix, suffix, frame)
-        hdf5 = source.suffix == '.vtkhdf'
-        dest = Path(f'{target}.{suffix}.{frame:06d}' + ('.vtkhdf' if hdf5 else ''))
-        shutil.copy2(source, dest)
-        if suffix != 'chkpt':
-            continue
-        if not hdf5:
-            data = dest.read_bytes()
-            header_size = next(iter(native_offsets(data).values()))
-            payloads = fields(dest)
-            for name in drop:
-                payloads.pop(name, None)
-            payloads.update(replace)
-            header = data[:data.index(b'\n')+1]
-            body = b''
-            for name, value in payloads.items():
-                header += name.encode()+b'\t'+str(header_size+len(body)).encode()+b'\n'
-                body += value
-            assert len(header) < header_size
-            dest.write_bytes(header.ljust(header_size, b'\0')+body)
-        else:
-            import h5py
-            import numpy as np
-            with h5py.File(dest, 'r+') as stream:
-                for name in drop:
-                    if name in stream:
-                        del stream[name]
-                for name, value in replace.items():
-                    dataset = stream[name]
-                    dataset[...] = np.frombuffer(value, dtype=dataset.dtype).reshape(dataset.shape)
+        shutil.copy2(source, Path(f'{target}.{suffix}.{frame:06d}.vtkhdf'))
+    def payload(value):
+        return lambda data: np.frombuffer(value, dtype=data.dtype).reshape(data.shape)
+    edit_checkpoint(f'{target}.chkpt.{frame:06d}', drop=drop,
+                    replace={name: payload(value) for name, value in (replace or {}).items()})
 
 
 def reject(exe, folder, cfg, name, reason):
@@ -141,7 +116,7 @@ def rsf_case(exe, folder, dim, dt=.005, steps=12, coupled=False, method='pt1'):
             pressure = model.read_field(frame, 'pore pressure')[conn].mean(axis=1)
             temperature = model.read_field(frame, 'temperature')[conn].mean(axis=1)
             epsilon = model.read_field(frame, 'strain')[:, :dim].sum(axis=1)-epsilon0
-            pending = heat.water.checkpoint_field(model, frame, 'pending pore pressure increment', len(x))
+            pending = heat.water.checkpoint_field(model, frame, 'pending pore pressure increment')
             balance = (storage*pressure+.8*epsilon-beta*(temperature-heat.T0)-lag*pending[conn].mean(axis=1)) @ volume
             balances.append(float(balance))
         assert max(abs(value) for value in balances) < 1e-15, balances
