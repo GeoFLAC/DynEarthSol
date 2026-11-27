@@ -3,12 +3,14 @@
 
 #include "parameters.hpp"
 #include "exit_codes.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
 #include <cfloat>
 #include <math.h>
 #include <iomanip>
+#include <iterator>
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -244,6 +246,15 @@ static inline int binary_search_index(const int* arr, int size, int target) {
         else high = mid - 1;
     }
     return -1;
+}
+
+
+// The material with the most markers in an element (one entry of elemmarkers); the lowest
+// index on a tie.
+static inline int dominant_material(const int_vec& markers)
+{
+    return static_cast<int>(std::distance(markers.begin(),
+                                          std::max_element(markers.begin(), markers.end())));
 }
 
 

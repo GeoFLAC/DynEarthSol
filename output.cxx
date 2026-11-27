@@ -1,8 +1,6 @@
-#include <algorithm>  // For std::max_element
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>   // For realpath, std::free
-#include <iterator>  // For std::distance
 #include <iostream>
 
 #include "constants.hpp"
@@ -31,6 +29,21 @@ std::string model_location(const std::string& modelname)
     const std::string location = std::string(dir) + "/" + modelname.substr(bare ? 0 : slash + 1);
     std::free(dir);
     return location;
+}
+
+// Points fixed in the material (monitor points, point sources) under "<prefix> point ...": their
+// count, positions when given, containing elements and barycentric weights; nothing for no points.
+// restart() reads them back.
+template <class Out>
+void write_material_points(Out &bin, const std::string &prefix, const int_vec &elements,
+                           const double_vec &weights, const double_vec *positions = nullptr)
+{
+    if (elements.empty()) return;
+    bin.write_scalar(int(elements.size()), prefix + " point count");
+    if (positions)
+        bin.write_aux_array(*positions, (prefix + " point positions").c_str(), positions->size());
+    bin.write_aux_array(elements, (prefix + " point elements").c_str(), elements.size());
+    bin.write_aux_array(weights, (prefix + " point weights").c_str(), weights.size());
 }
 
 }
@@ -324,11 +337,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     // bin.write_array(*var.edvoldt, "edvoldt", var.edvoldt->size());
 
     #pragma omp parallel for default(none) shared(var, tmp)
-    for (int e=0; e<var.nelem; ++e) {
-        // Find the most abundant marker mattype in this element
-        int_vec &a = (*var.elemmarkers)[e];
-        tmp[e] = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-    }
+    for (int e=0; e<var.nelem; ++e)
+        tmp[e] = dominant_material((*var.elemmarkers)[e]);
     bin.write_cell_array(tmp, "material", tmp.size());
 
     bin.write_nodal_vec_array(*var.force, "force", var.force->size());
@@ -401,6 +411,18 @@ void Output::write(Variables& var)
     var.noutput += 1;
     int64_t now_ns = get_nanoseconds();
     var.func_time.output_time += now_ns - time_tmp;
+}
+
+
+void Output::write_regular(const Param& param, Variables& var, int regular_frame)
+{
+    if (regular_frame % param.sim.checkpoint_frame_interval == 0) {
+        const int64_t checkpoint_start = get_nanoseconds();
+        write_checkpoint(param, var);
+        var.func_time.output_time += get_nanoseconds() - checkpoint_start;
+    }
+
+    write(var);
 }
 
 
@@ -560,21 +582,10 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(1, "dt controls version");
     bin.write_aux_array(controls, "dt controls", controls.size());
     const MonitorCheckpoint monitor = monitor_checkpoint(param, var);
-    if (!monitor.positions.empty()) {
-        bin.write_scalar(param.monitor.num_points, "monitor point count");
-        bin.write_aux_array(monitor.positions, "monitor point positions", monitor.positions.size());
-        bin.write_aux_array(monitor.elements, "monitor point elements", monitor.elements.size());
-        bin.write_aux_array(monitor.weights, "monitor point weights", monitor.weights.size());
-    }
+    write_material_points(bin, "monitor", monitor.elements, monitor.weights, &monitor.positions);
     // Sources fixed in the material: where a restart continues them.
-    for (const auto &set : {std::make_pair(std::string("fluid"), &var.fluid_points),
-                            std::make_pair(std::string("heat"), &var.heat_points)}) {
-        const PointSourceOwners &owners = *set.second;
-        if (owners.element.empty()) continue;
-        bin.write_scalar(int(owners.element.size()), (set.first + " point count").c_str());
-        bin.write_aux_array(owners.element, (set.first + " point elements").c_str(), owners.element.size());
-        bin.write_aux_array(owners.weight, (set.first + " point weights").c_str(), owners.weight.size());
-    }
+    write_material_points(bin, "fluid", var.fluid_points.element, var.fluid_points.weight);
+    write_material_points(bin, "heat", var.heat_points.element, var.heat_points.weight);
     const WellPieces &pieces = var.well_pieces;
     if (!pieces.element.empty()) {
         bin.write_scalar(int(pieces.element.size()), "well piece count");

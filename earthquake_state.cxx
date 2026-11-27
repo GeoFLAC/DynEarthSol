@@ -8,6 +8,7 @@
 
 #include "constants.hpp"
 #include "matprops.hpp"
+#include "utils.hpp"
 
 namespace {
 
@@ -65,17 +66,12 @@ double compute_max_global_velocity_magnitude(const Variables& var)
 // element area, so the moment is per unit length out of the plane.
 std::vector<double> compute_seismic_moment_increment_by_material(const Variables& var)
 {
-    const int nmat = var.mat->nmat;
-    std::vector<double> moment_by_mat(nmat, 0.0);
-    if (nmat == 0) return moment_by_mat;
-
+    std::vector<double> moment_by_mat(var.mat->nmat, 0.0);
     for (int e = 0; e < var.nelem; ++e) {
         const double depls = (*var.delta_plstrain)[e];
         if (depls <= 0) continue;
-        const int_vec& a = (*var.elemmarkers)[e];
-        const int mat = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-        if (mat >= 0 && mat < nmat)
-            moment_by_mat[mat] += 2 * var.mat->shearm(e) * (*var.volume)[e] * depls;
+        const int mat = dominant_material((*var.elemmarkers)[e]);
+        moment_by_mat[mat] += 2 * var.mat->shearm(e) * (*var.volume)[e] * depls;
     }
 
     return moment_by_mat;

@@ -27,7 +27,6 @@ namespace {
 // with the mesh (follows the material) and is relocated by its position after a remesh.
 struct MonitorPointState {
     int id = -1;
-    double query[NDIMS] = {0.0};
     double position[NDIMS] = {0.0};          // material position before a remesh or from a restart
     int elem = -1;                           // containing element, -1 outside the mesh
     double weight[NODES_PER_ELEM] = {0.0};
@@ -122,57 +121,151 @@ void append_component_header(std::string& header, const char* prefix, int ncomp,
     }
 }
 
+void append_axis_header(std::string& header, const char* prefix, bool& first)
+{
+    for (int d = 0; d < NDIMS; ++d) {
+        char name[64];
+        std::snprintf(name, sizeof(name), "%s_%s", prefix, axis_name(d));
+        csv_append_name(header, name, first);
+    }
+}
+
+int get_material_index(const Variables& var, int e)
+{
+    if (e < 0 || e >= var.nelem || var.elemmarkers == nullptr) return -1;
+    const int_vec& a = (*var.elemmarkers)[e];
+    if (a.empty()) return -1;
+    return dominant_material(a);
+}
+
+// A nodal field at the point: interpolated (particle) or at the nearest node (grid).
+template <typename ValueAtNode>
+double sample_nodal(const Param& param, const Variables& var, const MonitorPointState& p,
+                    ValueAtNode value)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    if (param.monitor.point_type == monitor_point_grid)
+        return p.node_id < 0 ? nan : value(p.node_id);
+    if (p.elem < 0) return nan;
+    ConstConnAccessor conn = (*var.connectivity)[p.elem];
+    double v = 0.0;
+    for (int k = 0; k < NODES_PER_ELEM; ++k) v += p.weight[k] * value(conn[k]);
+    return v;
+}
+
+double nodal(const Param& param, const Variables& var, const MonitorPointState& p, int dim, const array_t* field)
+{
+    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
+    return sample_nodal(param, var, p, [field, dim](int n) { return (*field)[n][dim]; });
+}
+
+double nodal_scalar(const Param& param, const Variables& var, const MonitorPointState& p, const double_vec* field)
+{
+    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
+    return sample_nodal(param, var, p, [field](int n) { return (*field)[n]; });
+}
+
+double elem_scalar_or_nan(const Variables& var, int elem, const double_vec* field)
+{
+    if (field == nullptr || elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
+    return (*field)[elem];
+}
+
+double elem_tensor_or_nan(const Variables& var, int elem, int comp, const tensor_t* field)
+{
+    if (field == nullptr || elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
+    return (*field)[elem][comp];
+}
+
+double elem_prop_or_nan(const Variables& var, int elem, double (MatProps::*prop)(int) const)
+{
+    if (var.mat == nullptr || elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
+    return (var.mat->*prop)(elem);
+}
+
+double elem_quality_or_nan(const Variables& var, int elem)
+{
+    if (var.coord == nullptr || var.connectivity == nullptr || var.volume == nullptr ||
+        elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
+    return elem_quality(*var.coord, *var.connectivity, *var.volume, elem);
+}
+
+// A field a row can record, set by its monitor.output_* flag. A vector field has NDIMS columns
+// named by axis, a tensor field NSTR columns named by component. An integer column has `integer`
+// in place of `real`.
+enum MonitorColumnShape { monitor_scalar, monitor_vector, monitor_tensor };
+
+struct MonitorColumn {
+    bool Monitor::*flag;
+    const char* name;
+    MonitorColumnShape shape;
+    double (*real)(const Param&, const Variables&, const MonitorPointState&, int comp);
+    int (*integer)(const Variables&, const MonitorPointState&);
+};
+
+// The optional columns, in the order the header and every row hold them.
+const MonitorColumn kMonitorColumns[] = {
+    {&Monitor::output_coord, "coord", monitor_vector,
+     [](auto& param, auto& var, auto& p, int d) { return nodal(param, var, p, d, var.coord); }},
+    {&Monitor::output_velocity, "velocity", monitor_vector,
+     [](auto& param, auto& var, auto& p, int d) { return nodal(param, var, p, d, var.vel); }},
+    {&Monitor::output_force, "force", monitor_vector,
+     [](auto& param, auto& var, auto& p, int d) { return nodal(param, var, p, d, var.force); }},
+    {&Monitor::output_temperature, "temperature", monitor_scalar,
+     [](auto& param, auto& var, auto& p, int) { return nodal_scalar(param, var, p, var.temperature); }},
+    {&Monitor::output_pore_pressure, "pore_pressure", monitor_scalar,
+     [](auto& param, auto& var, auto& p, int) { return nodal_scalar(param, var, p, var.ppressure); }},
+    {&Monitor::output_bcflag, "bcflag", monitor_scalar, nullptr,
+     [](auto& var, auto& p) {
+         return var.bcflag != nullptr && p.node_id >= 0 && p.node_id < var.nnode
+             ? static_cast<int>((*var.bcflag)[p.node_id]) : -1;
+     }},
+    {&Monitor::output_stress, "stress", monitor_tensor,
+     [](auto&, auto& var, auto& p, int c) { return elem_tensor_or_nan(var, p.elem_id, c, var.stress); }},
+    {&Monitor::output_strain, "strain", monitor_tensor,
+     [](auto&, auto& var, auto& p, int c) { return elem_tensor_or_nan(var, p.elem_id, c, var.strain); }},
+    {&Monitor::output_strain_rate, "strain_rate", monitor_tensor,
+     [](auto&, auto& var, auto& p, int c) { return elem_tensor_or_nan(var, p.elem_id, c, var.strain_rate); }},
+    {&Monitor::output_plastic_strain, "plastic_strain", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_scalar_or_nan(var, p.elem_id, var.plstrain); }},
+    {&Monitor::output_plastic_strain_rate, "plastic_strain_rate", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_scalar_or_nan(var, p.elem_id, var.delta_plstrain); }},
+    {&Monitor::output_radiogenic_source, "radiogenic_source", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_scalar_or_nan(var, p.elem_id, var.radiogenic_source); }},
+    {&Monitor::output_density, "density", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_prop_or_nan(var, p.elem_id, &MatProps::rho); }},
+    {&Monitor::output_mesh_quality, "mesh_quality", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_quality_or_nan(var, p.elem_id); }},
+    {&Monitor::output_viscosity, "viscosity", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_prop_or_nan(var, p.elem_id, &MatProps::visc); }},
+    {&Monitor::output_material, "material", monitor_scalar, nullptr,
+     [](auto& var, auto& p) { return get_material_index(var, p.elem_id); }},
+    {&Monitor::output_dynamic_friction, "dynamic_friction", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_scalar_or_nan(var, p.elem_id, var.dyn_fric_coeff); }},
+    {&Monitor::output_state_variable, "state_variable", monitor_scalar,
+     [](auto&, auto& var, auto& p, int) { return elem_scalar_or_nan(var, p.elem_id, var.state_variable); }},
+};
+
+int column_count(const MonitorColumn& column)
+{
+    return column.shape == monitor_vector ? NDIMS : column.shape == monitor_tensor ? NSTR : 1;
+}
+
 std::string make_csv_header(const Param& param)
 {
     std::string header;
     bool first = true;
     csv_append_name(header, "step", first);
     csv_append_name(header, "time_s", first);
-    for (int d = 0; d < NDIMS; ++d) {
-        char name[32];
-        std::snprintf(name, sizeof(name), "query_%s", axis_name(d));
-        csv_append_name(header, name, first);
-    }
+    append_axis_header(header, "query", first);
     csv_append_name(header, "matched_node", first);
     csv_append_name(header, "matched_elem", first);
-
-    if (param.monitor.output_coord) {
-        for (int d = 0; d < NDIMS; ++d) {
-            char name[32];
-            std::snprintf(name, sizeof(name), "coord_%s", axis_name(d));
-            csv_append_name(header, name, first);
-        }
+    for (const MonitorColumn& column : kMonitorColumns) {
+        if (!(param.monitor.*column.flag)) continue;
+        if (column.shape == monitor_vector) append_axis_header(header, column.name, first);
+        else if (column.shape == monitor_tensor) append_component_header(header, column.name, NSTR, first);
+        else csv_append_name(header, column.name, first);
     }
-    if (param.monitor.output_velocity) {
-        for (int d = 0; d < NDIMS; ++d) {
-            char name[32];
-            std::snprintf(name, sizeof(name), "velocity_%s", axis_name(d));
-            csv_append_name(header, name, first);
-        }
-    }
-    if (param.monitor.output_force) {
-        for (int d = 0; d < NDIMS; ++d) {
-            char name[32];
-            std::snprintf(name, sizeof(name), "force_%s", axis_name(d));
-            csv_append_name(header, name, first);
-        }
-    }
-    if (param.monitor.output_temperature) csv_append_name(header, "temperature", first);
-    if (param.monitor.output_pore_pressure) csv_append_name(header, "pore_pressure", first);
-    if (param.monitor.output_bcflag) csv_append_name(header, "bcflag", first);
-
-    if (param.monitor.output_stress) append_component_header(header, "stress", NSTR, first);
-    if (param.monitor.output_strain) append_component_header(header, "strain", NSTR, first);
-    if (param.monitor.output_strain_rate) append_component_header(header, "strain_rate", NSTR, first);
-    if (param.monitor.output_plastic_strain) csv_append_name(header, "plastic_strain", first);
-    if (param.monitor.output_plastic_strain_rate) csv_append_name(header, "plastic_strain_rate", first);
-    if (param.monitor.output_radiogenic_source) csv_append_name(header, "radiogenic_source", first);
-    if (param.monitor.output_density) csv_append_name(header, "density", first);
-    if (param.monitor.output_mesh_quality) csv_append_name(header, "mesh_quality", first);
-    if (param.monitor.output_viscosity) csv_append_name(header, "viscosity", first);
-    if (param.monitor.output_material) csv_append_name(header, "material", first);
-    if (param.monitor.output_dynamic_friction) csv_append_name(header, "dynamic_friction", first);
-    if (param.monitor.output_state_variable) csv_append_name(header, "state_variable", first);
     csv_append_name(header, "row", first);
 
     return header;
@@ -183,19 +276,6 @@ bool write_csv_header(std::FILE* fp, const Param& param)
     const std::string header = make_csv_header(param);
     return std::fwrite(header.data(), 1, header.size(), fp) == header.size() &&
            std::fputc('\n', fp) != EOF;
-}
-
-bool compute_elem_centroid(const Variables& var, int e, double c[NDIMS])
-{
-    if (e < 0 || e >= var.nelem) return false;
-    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
-    for (int d = 0; d < NDIMS; ++d) c[d] = 0.0;
-    for (int k = 0; k < NODES_PER_ELEM; ++k) {
-        for (int d = 0; d < NDIMS; ++d) c[d] += coord[k][d];
-    }
-    const double inv_n = 1.0 / static_cast<double>(NODES_PER_ELEM);
-    for (int d = 0; d < NDIMS; ++d) c[d] *= inv_n;
-    return true;
 }
 
 template <typename T>
@@ -223,13 +303,20 @@ int find_nearest_node_id(const Variables& var, const double q[NDIMS])
     return best;
 }
 
+// The element whose centroid is nearest q.
 int find_nearest_elem_id(const Variables& var, const double q[NDIMS])
 {
     double min_d2 = std::numeric_limits<double>::infinity();
     int best = -1;
     double c[NDIMS];
     for (int e = 0; e < var.nelem; ++e) {
-        compute_elem_centroid(var, e, c);
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+        for (int d = 0; d < NDIMS; ++d) c[d] = 0.0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            for (int d = 0; d < NDIMS; ++d) c[d] += coord[k][d];
+        }
+        const double inv_n = 1.0 / static_cast<double>(NODES_PER_ELEM);
+        for (int d = 0; d < NDIMS; ++d) c[d] *= inv_n;
         const double d2 = distance2_nd(c, q);
         if (d2 < min_d2) {
             min_d2 = d2;
@@ -266,11 +353,7 @@ void current_position(const Variables& var, const MonitorPointState& p, double x
         for (int d = 0; d < NDIMS; ++d) x[d] = p.position[d];
         return;
     }
-    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[p.elem]);
-    for (int d = 0; d < NDIMS; ++d) {
-        x[d] = 0.0;
-        for (int k = 0; k < NODES_PER_ELEM; ++k) x[d] += p.weight[k] * coord[k][d];
-    }
+    barycentric_point(var, p.elem, p.weight, x);
 }
 
 // Before a row is written: the node, and for grid the element, nearest the point.
@@ -539,67 +622,11 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
     }
 }
 
-void monitor_open_files(const Param& param, const Variables& var,
-                        MonitorManager& manager)
-{
-    if (param.sim.is_restarting)
-        open_monitor_files_restart(param, var, manager);
-    else
-        open_monitor_files_fresh(param, manager);
-}
-
-int get_material_index(const Variables& var, int e)
-{
-    if (e < 0 || e >= var.nelem || var.elemmarkers == nullptr) return -1;
-    const int_vec& a = (*var.elemmarkers)[e];
-    if (a.empty()) return -1;
-    return static_cast<int>(std::distance(a.begin(), std::max_element(a.begin(), a.end())));
-}
-
-// A nodal field at the point: interpolated (particle) or at the nearest node (grid).
-template <typename ValueAtNode>
-double sample_nodal(const Param& param, const Variables& var, const MonitorPointState& p,
-                    ValueAtNode value)
-{
-    const double nan = std::numeric_limits<double>::quiet_NaN();
-    if (param.monitor.point_type == monitor_point_grid)
-        return p.node_id < 0 ? nan : value(p.node_id);
-    if (p.elem < 0) return nan;
-    ConstConnAccessor conn = (*var.connectivity)[p.elem];
-    double v = 0.0;
-    for (int k = 0; k < NODES_PER_ELEM; ++k) v += p.weight[k] * value(conn[k]);
-    return v;
-}
-
-double nodal(const Param& param, const Variables& var, const MonitorPointState& p, int dim, const array_t* field)
-{
-    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
-    return sample_nodal(param, var, p, [field, dim](int n) { return (*field)[n][dim]; });
-}
-
-double nodal_scalar(const Param& param, const Variables& var, const MonitorPointState& p, const double_vec* field)
-{
-    if (field == nullptr) return std::numeric_limits<double>::quiet_NaN();
-    return sample_nodal(param, var, p, [field](int n) { return (*field)[n]; });
-}
-
-double elem_scalar_or_nan(const Variables& var, int elem, const double_vec* field)
-{
-    if (field == nullptr || elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
-    return (*field)[elem];
-}
-
-double elem_tensor_or_nan(const Variables& var, int elem, int comp, const tensor_t* field)
-{
-    if (field == nullptr || elem < 0 || elem >= var.nelem) return std::numeric_limits<double>::quiet_NaN();
-    return (*field)[elem][comp];
-}
-
 void monitor_write_point_row(const Param& param,
                              const Variables& var,
-                             const MonitorPointState& p,
-                             std::FILE* fp, int kind)
+                             const MonitorPointState& p, int kind)
 {
+    std::FILE* fp = p.fp;
     if (fp == nullptr) return;
 
     bool first = true;
@@ -613,89 +640,12 @@ void monitor_write_point_row(const Param& param,
     csv_write_int(fp, p.node_id, first);
     csv_write_int(fp, p.elem_id, first);
 
-    if (param.monitor.output_coord) {
-        for (int d = 0; d < NDIMS; ++d) {
-            csv_write_double(fp, nodal(param, var, p, d, var.coord), first);
+    for (const MonitorColumn& column : kMonitorColumns) {
+        if (!(param.monitor.*column.flag)) continue;
+        for (int c = 0; c < column_count(column); ++c) {
+            if (column.integer) csv_write_int(fp, column.integer(var, p), first);
+            else csv_write_double(fp, column.real(param, var, p, c), first);
         }
-    }
-    if (param.monitor.output_velocity) {
-        for (int d = 0; d < NDIMS; ++d) {
-            csv_write_double(fp, nodal(param, var, p, d, var.vel), first);
-        }
-    }
-    if (param.monitor.output_force) {
-        for (int d = 0; d < NDIMS; ++d) {
-            csv_write_double(fp, nodal(param, var, p, d, var.force), first);
-        }
-    }
-    if (param.monitor.output_temperature) {
-        csv_write_double(fp, nodal_scalar(param, var, p, var.temperature), first);
-    }
-    if (param.monitor.output_pore_pressure) {
-        csv_write_double(fp, nodal_scalar(param, var, p, var.ppressure), first);
-    }
-    if (param.monitor.output_bcflag) {
-        int bc = -1;
-        if (var.bcflag != nullptr && p.node_id >= 0 && p.node_id < var.nnode) {
-            bc = static_cast<int>((*var.bcflag)[p.node_id]);
-        }
-        csv_write_int(fp, bc, first);
-    }
-
-    if (param.monitor.output_stress) {
-        for (int c = 0; c < NSTR; ++c) {
-            csv_write_double(fp, elem_tensor_or_nan(var, p.elem_id, c, var.stress), first);
-        }
-    }
-    if (param.monitor.output_strain) {
-        for (int c = 0; c < NSTR; ++c) {
-            csv_write_double(fp, elem_tensor_or_nan(var, p.elem_id, c, var.strain), first);
-        }
-    }
-    if (param.monitor.output_strain_rate) {
-        for (int c = 0; c < NSTR; ++c) {
-            csv_write_double(fp, elem_tensor_or_nan(var, p.elem_id, c, var.strain_rate), first);
-        }
-    }
-    if (param.monitor.output_plastic_strain) {
-        csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.plstrain), first);
-    }
-    if (param.monitor.output_plastic_strain_rate) {
-        csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.delta_plstrain), first);
-    }
-    if (param.monitor.output_radiogenic_source) {
-        csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.radiogenic_source), first);
-    }
-    if (param.monitor.output_density) {
-        double val = std::numeric_limits<double>::quiet_NaN();
-        if (p.elem_id >= 0 && p.elem_id < var.nelem && var.mat != nullptr) {
-            val = var.mat->rho(p.elem_id);
-        }
-        csv_write_double(fp, val, first);
-    }
-    if (param.monitor.output_mesh_quality) {
-        double val = std::numeric_limits<double>::quiet_NaN();
-        if (p.elem_id >= 0 && p.elem_id < var.nelem &&
-            var.coord != nullptr && var.connectivity != nullptr && var.volume != nullptr) {
-            val = elem_quality(*var.coord, *var.connectivity, *var.volume, p.elem_id);
-        }
-        csv_write_double(fp, val, first);
-    }
-    if (param.monitor.output_viscosity) {
-        double val = std::numeric_limits<double>::quiet_NaN();
-        if (p.elem_id >= 0 && p.elem_id < var.nelem && var.mat != nullptr) {
-            val = var.mat->visc(p.elem_id);
-        }
-        csv_write_double(fp, val, first);
-    }
-    if (param.monitor.output_material) {
-        csv_write_int(fp, get_material_index(var, p.elem_id), first);
-    }
-    if (param.monitor.output_dynamic_friction) {
-        csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.dyn_fric_coeff), first);
-    }
-    if (param.monitor.output_state_variable) {
-        csv_write_double(fp, elem_scalar_or_nan(var, p.elem_id, var.state_variable), first);
     }
     csv_write_int(fp,kind,first);
 
@@ -734,14 +684,14 @@ void monitor_write_all_points(const Param& param, const Variables& var, MonitorM
     }
 #endif
     for (std::size_t i = 0; i < manager.points.size(); ++i)
-        monitor_write_point_row(param, var, manager.points[i], manager.points[i].fp, kind);
+        monitor_write_point_row(param, var, manager.points[i], kind);
 }
 
 } // namespace
 
 void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpoint& saved)
 {
-    monitor_finalize(var);
+    monitor_finalize();
     if (!param.monitor.enabled) return;
 
     const double_vec& positions = saved.positions;
@@ -758,18 +708,20 @@ void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpo
     for (int i = 0; i < param.monitor.num_points; ++i) {
         MonitorPointState& p = g_monitor.points[i];
         p.id = i;
-        p.query[0] = param.monitor.points_x[i];
-#ifdef THREED
-        p.query[1] = param.monitor.points_y[i];
-#endif
-        p.query[NDIMS-1] = param.monitor.points_z[i];
         // A restart continues the material point where the checkpoint left it.
-        for (int d = 0; d < NDIMS; ++d)
-            p.position[d] = resume ? positions[i*NDIMS + d] : p.query[d];
         if (resume) {
+            for (int d = 0; d < NDIMS; ++d)
+                p.position[d] = positions[i*NDIMS + d];
             p.elem = elements[i];
             for (int k = 0; k < NODES_PER_ELEM; ++k)
                 p.weight[k] = weights[i*NODES_PER_ELEM+k];
+        }
+        else {
+            p.position[0] = param.monitor.points_x[i];
+#ifdef THREED
+            p.position[1] = param.monitor.points_y[i];
+#endif
+            p.position[NDIMS-1] = param.monitor.points_z[i];
         }
     }
     if (!resume) {
@@ -778,7 +730,10 @@ void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpo
         for (MonitorPointState& p : g_monitor.points) locate(var,bary,p.position,p);
     }
 
-    monitor_open_files(param, var, g_monitor);
+    if (param.sim.is_restarting)
+        open_monitor_files_restart(param, var, g_monitor);
+    else
+        open_monitor_files_fresh(param, g_monitor);
     g_monitor.initialized = true;
 
     // A fresh history always starts at t=0 regardless of step_interval.  A
@@ -846,7 +801,7 @@ MonitorCheckpoint monitor_checkpoint(const Param& param, const Variables& var)
     return saved;
 }
 
-void monitor_finalize(Variables& /*var*/)
+void monitor_finalize()
 {
     for (std::size_t i = 0; i < g_monitor.points.size(); ++i) {
         if (g_monitor.points[i].fp != nullptr) {

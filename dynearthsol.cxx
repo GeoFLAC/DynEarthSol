@@ -277,6 +277,40 @@ void init(const Param& param, Variables& var)
 }
 
 
+// Points fixed in the material, as Output::write_checkpoint stores them under "<prefix> point
+// ...". Returns the saved count, 0 without one, and reads the points only when it is `expected`.
+template <class Input>
+static int read_material_points(Input &bin, const std::string &prefix, int expected,
+                                int_vec &elements, double_vec &weights,
+                                double_vec *positions = nullptr)
+{
+    int count = 0;
+    if (bin.has_array((prefix + " point count").c_str()))
+        bin.read_scalar(count, prefix + " point count");
+    if (count != expected) return count;
+    if (positions) {
+        positions->resize(std::size_t(count)*NDIMS);
+        bin.read_array(*positions, (prefix + " point positions").c_str());
+    }
+    elements.resize(count);
+    weights.resize(std::size_t(count)*NODES_PER_ELEM);
+    bin.read_array(elements, (prefix + " point elements").c_str());
+    bin.read_array(weights, (prefix + " point weights").c_str());
+    return count;
+}
+
+// A checkpoint array that the restart cannot do without: stops with `missing` if the
+// checkpoint lacks it, and with `invalid` if an entry fails valid(value, index).
+template <class Input, class Valid>
+static void read_required(Input &bin, double_vec &a, const char *name, const char *missing,
+                          const char *invalid, Valid valid)
+{
+    if (!bin.has_array(name)) die(EXIT_IO_RESTART, missing);
+    bin.read_array(a, name);
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (!valid(a[i], int(i))) die(EXIT_IO_RESTART, invalid);
+}
+
 // Sources fixed in the material continue where the checkpoint left them. A set
 // the checkpoint lacks, or that the configuration changed, starts at its
 // configured place, as a changed monitor point set does.
@@ -285,18 +319,13 @@ static void restore_sources(const Param &param, Variables &var, Input &bin)
 {
     const auto points = [&](const std::string &name, const Injection &injection,
                             PointSourceOwners &owners) {
-        int count = 0;
-        if (bin.has_array((name + " point count").c_str()))
-            bin.read_scalar(count, name + " point count");
-        if (!injection.enabled || count != injection.num_points) {
+        if (!injection.enabled ||
+            read_material_points(bin, name, injection.num_points, owners.element,
+                                 owners.weight) != injection.num_points) {
             place_point_sources(injection, var, owners);
             return;
         }
-        owners.element.resize(count);
-        owners.weight.resize(std::size_t(count)*NODES_PER_ELEM);
-        bin.read_array(owners.element, (name + " point elements").c_str());
-        bin.read_array(owners.weight, (name + " point weights").c_str());
-        for (int p = 0; p < count; ++p)
+        for (int p = 0; p < injection.num_points; ++p)
             if (owners.element[p] < 0 || owners.element[p] >= var.nelem)
                 die(EXIT_IO_RESTART, "Invalid point-source element in the checkpoint.");
         for (double w : owners.weight)
@@ -625,13 +654,11 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             if (!bin_chkpt.has_array("pending pore pressure increment"))
                 die(EXIT_IO_RESTART, "Hydraulic checkpoint lacks the pending pressure increment; exact continuation is not recoverable.");
             bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
-            if (var.matrix_pressure) {
-                if (!bin_chkpt.has_array("matrix pressure"))
-                    die(EXIT_IO_RESTART, "Matrix exchange requires matrix pressure in the checkpoint.");
-                bin_chkpt.read_array(*var.matrix_pressure, "matrix pressure");
-                for (double p : *var.matrix_pressure)
-                    if (!std::isfinite(p)) die(EXIT_IO_RESTART, "Non-finite matrix pressure checkpoint.");
-            }
+            const auto finite = [](double value, int) { return std::isfinite(value); };
+            if (var.matrix_pressure)
+                read_required(bin_chkpt, *var.matrix_pressure, "matrix pressure",
+                              "Matrix exchange requires matrix pressure in the checkpoint.",
+                              "Non-finite matrix pressure checkpoint.", finite);
             if (var.fluid_split) {
                 if (!(bin_chkpt.has_array("hydraulic coupling version") &&
                       bin_chkpt.has_array("hydraulic pressure consumed")))
@@ -652,47 +679,36 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
                 bin_chkpt.read_array(saved,"hydraulic reference law");
                 if (saved != reference || !std::isfinite(var.fluid_reference_temperature))
                     die(EXIT_IO_RESTART,"Finite-density restart requires its saved EOS, porosity law and geometry ownership.");
-                if (!(bin_chkpt.has_array("hydraulic split buffer") && bin_chkpt.has_array("solid mass") &&
-                      bin_chkpt.has_array("solid heat capacity") && bin_chkpt.has_array("pending temperature increment")))
-                    die(EXIT_IO_RESTART,"Incomplete finite-density content checkpoint.");
-                bin_chkpt.read_array(*var.fluid_split,"hydraulic split buffer");
-                bin_chkpt.read_array(*var.solid_mass,"solid mass");
-                bin_chkpt.read_array(*var.solid_capacity,"solid heat capacity");
-                bin_chkpt.read_array(*var.pending_temperature,"pending temperature increment");
-                for (int n = 0; n < var.nnode; ++n)
-                    if (!(std::isfinite((*var.fluid_split)[n]) &&
-                          (*var.solid_mass)[n] > 0 && std::isfinite((*var.solid_mass)[n]) &&
-                          (*var.solid_capacity)[n] >= 0 && std::isfinite((*var.solid_capacity)[n]) &&
-                          std::isfinite((*var.pending_temperature)[n])))
-                        die(EXIT_IO_RESTART,"Invalid finite-density content checkpoint.");
+                const char *incomplete = "Incomplete finite-density content checkpoint.";
+                const char *invalid = "Invalid finite-density content checkpoint.";
+                read_required(bin_chkpt, *var.fluid_split, "hydraulic split buffer", incomplete, invalid, finite);
+                read_required(bin_chkpt, *var.solid_mass, "solid mass", incomplete, invalid,
+                              [](double mass, int) { return mass > 0 && std::isfinite(mass); });
+                read_required(bin_chkpt, *var.solid_capacity, "solid heat capacity", incomplete, invalid,
+                              [](double capacity, int) { return capacity >= 0 && std::isfinite(capacity); });
+                read_required(bin_chkpt, *var.pending_temperature, "pending temperature increment",
+                              incomplete, invalid, finite);
                 if (bin_chkpt.has_array("fluid mass balance"))
                     bin_chkpt.read_array(*var.fluid_balance,"fluid mass balance");
                 if (var.energy_balance && bin_chkpt.has_array("sensible energy balance"))
                     bin_chkpt.read_array(*var.energy_balance,"sensible energy balance");
             } else if (bin_chkpt.has_array("fluid balance"))
                 bin_chkpt.read_array(*var.fluid_balance, "fluid balance");
-            if (var.pore_strain) {
-                if (!bin_chkpt.has_array("pore strain"))
-                    die(EXIT_IO_RESTART, "Evolving porosity requires pore strain in the checkpoint.");
-                bin_chkpt.read_array(*var.pore_strain, "pore strain");
-                for (int e = 0; e < var.nelem; ++e) {
-                    const double phi = var.mat->phi(e);
-                    if (!std::isfinite((*var.pore_strain)[e]) ||
-                        !(phi > 0 && phi < 1 && phi <= var.mat->alpha_biot(e)))
-                        die(EXIT_IO_RESTART, "Invalid porosity checkpoint state.");
-                }
-            }
+            if (var.pore_strain)
+                read_required(bin_chkpt, *var.pore_strain, "pore strain",
+                              "Evolving porosity requires pore strain in the checkpoint.",
+                              "Invalid porosity checkpoint state.", [&var](double strain, int e) {
+                                  const double phi = var.mat->phi(e);
+                                  return std::isfinite(strain) &&
+                                      phi > 0 && phi < 1 && phi <= var.mat->alpha_biot(e);
+                              });
             if (var.pore_dilation) {
-                if (!bin_chkpt.has_array("pore dilation") || !bin_chkpt.has_array("plastic volume increment"))
-                    die(EXIT_IO_RESTART,"Pore recovery requires saved recoverable dilation; its plastic history cannot be reconstructed.");
-                bin_chkpt.read_array(*var.pore_dilation,"pore dilation");
-                bin_chkpt.read_array(*var.pore_plastic_increment,"plastic volume increment");
-                for (double value : *var.pore_dilation)
-                    if (!(value >= 0 && std::isfinite(value)))
-                        die(EXIT_IO_RESTART,"Invalid recoverable pore dilation checkpoint.");
-                for (double value : *var.pore_plastic_increment)
-                    if (!std::isfinite(value))
-                        die(EXIT_IO_RESTART,"Invalid plastic pore volume checkpoint.");
+                const char *missing = "Pore recovery requires saved recoverable dilation; its plastic history cannot be reconstructed.";
+                read_required(bin_chkpt, *var.pore_dilation, "pore dilation", missing,
+                              "Invalid recoverable pore dilation checkpoint.",
+                              [](double value, int) { return value >= 0 && std::isfinite(value); });
+                read_required(bin_chkpt, *var.pore_plastic_increment, "plastic volume increment", missing,
+                              "Invalid plastic pore volume checkpoint.", finite);
             }
         }
         if (param.control.has_PT) {
@@ -907,8 +923,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         const double_vec current = dt_controls(param);
         double_vec saved(current.size());
         bin_chkpt.read_array(saved, "dt controls");
-        if (saved.size() != current.size() ||
-            std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
+        if (std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
             die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
         dt_controls_changed = saved != current;
     } else {
@@ -931,20 +946,10 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             bin_chkpt.has_array("monitor point elements") + bin_chkpt.has_array("monitor point weights");
         if (fields != 0 && fields != 4)
             die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
-        int count = 0;
-        if (fields == 4)
-            bin_chkpt.read_scalar(count, "monitor point count");
-        if (count < 0)
-            die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
         // A changed point set relocates the configured points.
-        if (count > 0 && count == param.monitor.num_points) {
-            monitor.positions.resize(std::size_t(count)*NDIMS);
-            monitor.elements.resize(count);
-            monitor.weights.resize(std::size_t(count)*NODES_PER_ELEM);
-            bin_chkpt.read_array(monitor.positions, "monitor point positions");
-            bin_chkpt.read_array(monitor.elements, "monitor point elements");
-            bin_chkpt.read_array(monitor.weights, "monitor point weights");
-        }
+        if (read_material_points(bin_chkpt, "monitor", param.monitor.num_points, monitor.elements,
+                                 monitor.weights, &monitor.positions) < 0)
+            die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
     }
 
     report_mesh_info(var, "restart");
@@ -1567,13 +1572,7 @@ int main(int argc, const char* argv[])
         } else {
             if (regular_output_is_due(param, var, next_regular_frame, false)) {
                 var.output_next_regular_frame = next_regular_frame + 1;
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
-                    const int64_t checkpoint_start = get_nanoseconds();
-                    var.output->write_checkpoint(param, var);
-                    var.func_time.output_time += get_nanoseconds() - checkpoint_start;
-                }
-
-                var.output->write(var);
+                var.output->write_regular(param, var, next_regular_frame);
 
                 next_regular_frame ++;
                 var.reference_frame_time = var.output_start_time +
@@ -1618,7 +1617,7 @@ int main(int argc, const char* argv[])
         var.gospl_driver->print_coupling_summary();
 #endif
 
-    monitor_finalize(var);
+    monitor_finalize();
 
     // Before end() deletes the Output that keeps the run's peak.
     const double peak_rss_gib = var.output->update_peak_rss_gib();

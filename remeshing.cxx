@@ -2791,19 +2791,14 @@ void rule_side_strip(const Param &param, const Variables &var, const conn_t &con
             continue;
         }
 
-        // Find the most abundant marker mattype in this element
-        int_vec &a = (*var.elemmarkers)[e];
-        int mattype = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
+        const int mattype = dominant_material((*var.elemmarkers)[e]);
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             const int npatch = var.support.size(conn[i]);
             const int* patch = var.support.patch(conn[i]);
             bool is_iface = false;
             for (int j = 0; j < npatch; ++j) {
-                int e_sup = patch[j];
-                int_vec &b = (*var.elemmarkers)[e_sup];
-                int mat_sup = std::distance(b.begin(), std::max_element(b.begin(), b.end()));
-                if (mat_sup != mattype) {
+                if (dominant_material((*var.elemmarkers)[patch[j]]) != mattype) {
                     is_iface = true;  // mark as interface node
                     break;
                 }
@@ -2847,17 +2842,13 @@ std::vector<int> build_interface_req_edges(const Variables &var, const conn_t &c
         if ((*var.bcflag)[n] & inflow_side_bits) band_node[n] = 1;
     free_wall_band(nnode, nelem, connectivity, 1, band_node, band_elem);
 
-    auto dominant = [&](int e) -> int {
-        const int_vec &a = (*var.elemmarkers)[e];
-        return (int)std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-    };
     // An interior edge is shared by exactly two triangles; emit it once, on the second share,
     // when the two dominant mattypes differ.
     std::map<std::pair<int,int>, int> first_mat;      // edge -> dominant mattype of its first elem
     std::vector<int> out;
     for (int e = 0; e < nelem; ++e) {
         if (!band_elem[e]) continue;
-        const int mt = dominant(e);
+        const int mt = dominant_material((*var.elemmarkers)[e]);
         ConstConnAccessor el = connectivity[e];
         for (int i = 0; i < NODES_PER_ELEM; ++i)
             for (int j = i + 1; j < NODES_PER_ELEM; ++j) {
