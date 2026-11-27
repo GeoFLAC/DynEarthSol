@@ -183,7 +183,9 @@ def main():
         regular_ok = all(k != 0 or s % 4 == 0 for s, ks in kinds.items() for k in ks)
         before_ok = all((1 in kinds.get(s, [])) == (s % 4 != 0) for s in remeshes)
         after_ok = all(kinds.get(s, [])[-1:] == [2] for s in remeshes)
-        start = next(s for s in remeshes if s >= STEPS//3 and s % 4)
+        between = [s for s in remeshes if s % 4]
+        assert between, f'No remesh between monitor steps: remeshes at {remeshes}'
+        start = between[0]
         folder = out/'remesh-rows-restart'; folder.mkdir()
         run(a.executable, folder, 'first', config('first', start, 'particle', interval=4, remesh_output='both'))
         run(a.executable, folder, 'second', config('second', STEPS, 'particle', restart_from=('first', start),
