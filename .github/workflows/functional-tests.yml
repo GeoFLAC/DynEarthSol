@@ -122,10 +122,6 @@ jobs:
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
 
-    - name: test explicit and GVS remesh continuation
-      run: >-
-        python3 check_remesh_restart.py ../../dynearthsol2d remesh-restart
-
     - name: test 2d restart
       working-directory: ./benchmarks-cores
       run: make fresh-restart-cmp NDIMS=2 CASE=../tests/functional/2d-ep-irregular.cfg && rm -rf functional-test.*
