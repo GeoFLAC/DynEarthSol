@@ -100,10 +100,6 @@ public:
     #pragma acc routine seq
     double d_c(int e) const;
 
-    #pragma acc routine seq
-    void plastic_props(int e, double pls,
-                       double& amc, double& anphi, double& anpsi,
-                       double& hardn, double& ten_max) const;
     // Factors of the strength that depend only on the friction and dilation
     // angles, so that a strength with fixed angles needs no trigonometry.
     struct AngleFactors {
@@ -263,11 +259,6 @@ private:
                          double &dilation_angle, double &hardening, int &n) const;
 
     #pragma acc routine seq
-    void plastic_weakening(int e, double pls,
-                           double &cohesion, double &friction_angle,
-                           double &dilation_angle, double &hardening) const;
-
-    #pragma acc routine seq
     void plastic_weakening_rsf(int e, double pls,
                            double &cohesion, double &dynamic_friction_angle,
                            double &dilation_angle, double &hardening,
@@ -284,6 +275,11 @@ private:
     // tables of Mohr-Coulomb.
     #pragma acc routine seq
     void angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const;
+    // The angle factors of the piece at friction angle phi and dilation angle
+    // psi; a piece with rate-and-state terms (rsf 1) adds them to tan(phi).
+    #pragma acc routine seq
+    void piece_factors(const StrengthPiece& piece, double phi, double psi,
+                       AngleFactors& factors) const;
     // The cohesion and angle factors at plastic strain piece.pls + offset.
     #pragma acc routine seq
     void piece_point(const StrengthPiece& piece, double offset,
@@ -293,12 +289,6 @@ private:
                        double& amc, double& anphi, double& anpsi, double& ten_max) const;
     #pragma acc routine seq
     void finish_piece(StrengthPiece& piece) const;
-    #pragma acc routine seq
-    void ep_derived(double cohesion, double phi, double psi,
-                    double& amc, double& anphi, double& anpsi, double& ten_max) const;
-    #pragma acc routine seq
-    void rsf_derived(double cohesion, double phi, double psi,
-                     double& amc, double& anphi, double& anpsi, double& ten_max) const;
 };
 
 

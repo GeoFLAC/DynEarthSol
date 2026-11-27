@@ -9,6 +9,9 @@
 
 namespace {
 
+    // Gas constant (J mol^-1 K^-1) of the Chen & Morgan creep law and of pore healing.
+    constexpr double gas_constant = 8.3144;
+
     #pragma acc routine seq
     inline double rsf_slip_rate_eff(double slip_rate)
     {
@@ -281,8 +284,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
     // under -ffast-math and on openacc=1 (device -> host libm).
     {
-        // J mol^-1 K^-1, as the Chen & Morgan creep law uses it.
-        const double gas_constant = 8.3144;
         const int nm = nmat;   // == visc_exponent.size(); nmat is the bound visc() loops to
         visc_pow_edot.resize(nm);
         visc_coef_term.resize(nm);
@@ -477,14 +478,6 @@ void MatProps::weakening_means(int e, double pls,
     hardening = h / n;
 }
 
-void MatProps::plastic_weakening(int e, double pls,
-                                 double &cohesion, double &friction_angle,
-                                 double &dilation_angle, double &hardening) const
-{
-    int n;
-    weakening_means(e, pls, cohesion, friction_angle, dilation_angle, hardening, n);
-}
-
 // The piece's angle slopes and end, by the same branches as weakening_means.
 void MatProps::complete_piece(int e, StrengthPiece& piece) const
 {
@@ -535,11 +528,16 @@ void MatProps::strength_piece(int e, double pls, StrengthPiece& piece) const
 // The angle factors and the strength at the start of the piece.
 void MatProps::finish_piece(StrengthPiece& piece) const
 {
-    double phi = piece.friction;
-    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    angle_factors(phi, piece.dilation, piece.rsf != 0, piece.factors);
+    piece_factors(piece, piece.friction, piece.dilation, piece.factors);
     strength_from(piece.cohesion, piece.factors,
                   piece.amc, piece.anphi, piece.anpsi, piece.ten_max);
+}
+
+void MatProps::piece_factors(const StrengthPiece& piece, double phi, double psi,
+                             AngleFactors& factors) const
+{
+    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
+    angle_factors(phi, psi, piece.rsf != 0, factors);
 }
 
 void MatProps::rsf_terms(int e, double slip_rate, double state_variable, int state_model,
@@ -643,9 +641,8 @@ void MatProps::piece_point(const StrengthPiece& piece, double offset,
         factors = piece.factors;
         return;
     }
-    double phi = piece.friction + piece.dfriction*offset;
-    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    angle_factors(phi, piece.dilation + piece.ddilation*offset, piece.rsf != 0, factors);
+    piece_factors(piece, piece.friction + piece.dfriction*offset,
+                  piece.dilation + piece.ddilation*offset, factors);
 }
 
 void MatProps::piece_strength(const StrengthPiece& piece, double offset,
@@ -788,24 +785,6 @@ void MatProps::update_state_variable(int e, double slip_rate, double& state_vari
     }
 }
 
-void MatProps::plastic_props(int e, double pls,
-                             double& amc, double& anphi, double& anpsi,
-                             double& hardn, double& ten_max) const
-{
-    double cohesion, phi, psi;
-
-    plastic_weakening(e, pls, cohesion, phi, psi, hardn);
-    ep_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
-}
-
-void MatProps::ep_derived(double cohesion, double phi, double psi,
-                          double& amc, double& anphi, double& anpsi, double& ten_max) const
-{
-    AngleFactors factors;
-    angle_factors(phi, psi, false, factors);
-    strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
-}
-
 void MatProps::angle_factors(double phi, double psi, bool rsf, AngleFactors& factors) const
 {
     const double sphi = rsf ? std::sin(phi * DEG2RAD) : sin_safe(sin_table,phi * DEG2RAD);
@@ -839,12 +818,6 @@ void MatProps::plastic_props_rsf(int e, double pls,
     if (!frozen_history) update_state_variable(e, slip_rate, state_variable, dt, state_model);
     plastic_weakening_rsf(e, pls, cohesion, phi, psi, hardn, slip_rate,
                           dyn_fric_coeff, state_variable, state_model, dt, frozen_history);
-    rsf_derived(cohesion, phi, psi, amc, anphi, anpsi, ten_max);
-}
-
-void MatProps::rsf_derived(double cohesion, double phi, double psi,
-                           double& amc, double& anphi, double& anpsi, double& ten_max) const
-{
     AngleFactors factors;
     angle_factors(phi, psi, true, factors);
     strength_from(cohesion, factors, amc, anphi, anpsi, ten_max);
@@ -931,7 +904,7 @@ double MatProps::pore_healing_rate(int e) const
         if (markers == 0 || pore_healing_time[m] == 0) continue;
         const double t0 = pore_healing_temperature[m];
         rate += markers*(t0/t)/pore_healing_time[m] *
-                std::exp(-pore_healing_energy[m]/8.3144*(1/t-1/t0));
+                std::exp(-pore_healing_energy[m]/gas_constant*(1/t-1/t0));
     }
     return rate/count;
 }
