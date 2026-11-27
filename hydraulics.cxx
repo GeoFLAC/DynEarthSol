@@ -1865,6 +1865,9 @@ void ContentRemap::restore(const Param &param, Variables &var) const
                 "dp [Pa] = %.17g; buffer correction [m^%d] = %.17g\n",
                 NDIMS,total[0]-mapped[0],imported[0],reaction[0],correction[0],NDIMS,
                 capacity[1]*(-correction[1]));
+    if (var.matrix_pressure)
+        std::printf("    Matrix content remap: removed/added [m^%d] = %.17g %.17g\n",
+                    NDIMS,total[2]-mapped[2],imported[2]);
 }
 
 void ContentRemap::restore_inventory(const Param &param, Variables &var) const

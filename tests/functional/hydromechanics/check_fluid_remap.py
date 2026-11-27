@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Check linear Biot fluid content across real remeshes and exact continuation.
 
-Fixed saturated material properties only. Moving-domain controls use a rigid
-translation, for which added/removed excess content follows the swept volume.
-This does not check total retained mass or energy.
+Fixed saturated material properties only. Across each remesh the mobile and
+matrix contents change only by what the domain change removes and adds, as
+DES reports it; a remesh that is not meant to change the domain changes its
+volume by at most 1e-6, and the moving-domain controls, a rigid translation,
+add or remove the uniform excess content of the swept volume. This does not
+check total retained mass or energy.
 """
 import argparse
 import json
 from pathlib import Path
+import re
 import sys
 
 import numpy as np
@@ -123,25 +127,39 @@ def main():
         model = Dynearthsol(str(folder/'flow'))
         rows = scan_frames(model.modelname)
         pairs = [(a, b) for a, b in zip(rows, rows[1:]) if a['steps'] == b['steps'] and a['time'] == b['time']]
-        assert pairs, 'No remesh frames'
+        remeshes = [(a, b) for a, b in pairs
+                    if not np.array_equal(*(model.read_field(r['frame'], 'coordinate') for r in (a, b)))]
+        log = (folder/'input.log').read_text()
+        mobile_changes = [added-removed+reaction for removed, added, reaction in
+                          (map(float, m) for m in re.findall(
+                              r'Biot content remap: removed/added/Dirichlet \[m\^\d\] = (\S+) (\S+) (\S+);', log))]
+        matrix_changes = [added-removed for removed, added in (map(float, m) for m in re.findall(
+                              r'Matrix content remap: removed/added \[m\^\d\] = (\S+) (\S+)', log))]
+        assert remeshes and len(remeshes) == len(mobile_changes), (case, len(remeshes), len(mobile_changes))
         defects = []
-        for a, b in pairs:
+        for i, (a, b) in enumerate(remeshes):
             before, after = (inventories(model, r['frame'], cfg) for r in (a, b))
-            expected = (before['mobile']*(after['volume']/before['volume']-1)
-                        if case.startswith('domain') else 0.)
-            defect = after['mobile']-before['mobile']-expected
-            defects.append(abs(defect)/max(abs(before['mobile']), 1e-20))
+            scale = max(abs(before['mobile']), 1e-20)
+            if case.startswith('domain'):
+                swept = before['mobile']*(after['volume']/before['volume']-1)
+                assert abs(mobile_changes[i]-swept) < 1e-10*scale, (case, a['frame'], mobile_changes[i], swept)
+            else:
+                assert abs(after['volume']/before['volume']-1) < 1e-6, (case, a['frame'], before['volume'], after['volume'])
+            defect = after['mobile']-before['mobile']-mobile_changes[i]
+            defects.append(abs(defect)/scale)
             assert defects[-1] < 1e-10, (case, a['frame'], b['frame'], defect)
-            np.testing.assert_allclose(after['matrix'], before['matrix'], rtol=1e-10, atol=1e-15)
+            matrix_change = matrix_changes[i] if matrix_changes else 0.
+            np.testing.assert_allclose(after['matrix']-before['matrix'], matrix_change,
+                                       rtol=0, atol=1e-10*abs(before['matrix'])+1e-15)
         if case.startswith('domain'):
-            before, after = (inventories(model, r['frame'], cfg) for r in pairs[-1])
+            before, after = (inventories(model, r['frame'], cfg) for r in remeshes[-1])
             np.testing.assert_allclose(after['volume']-before['volume'],
                                       1e-4 if case == 'domain-add' else -1e-4, rtol=1e-7)
             exact = 0
         else:
             exact = continuation(exe, folder, cfg, rows)
         records.append(dict(case=case, maximum_relative_remap_defect=max(defects),
-                            exact_restart_payloads=exact, pairs=len(pairs)))
+                            exact_restart_payloads=exact, remeshes=len(remeshes)))
         print('PASS fluid remap', case, flush=True)
     write_json(output/'summary.json', dict(passed=True, cases=records,
         scope='Fixed-property saturated linear Biot inventories; not evolving-storage/unsaturated qualification'))
