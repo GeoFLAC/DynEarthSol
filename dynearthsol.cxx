@@ -249,7 +249,7 @@ void init(const Param& param, Variables& var)
     // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
     // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
     // update_mesh() ungated before the loop.
-    place_sources(param, var);  // in the material, from their configured places
+    place_sources(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     // After compute_mass: it fills var.volume_n, which this divides by.
@@ -288,9 +288,8 @@ static int read_material_points(Input &bin, const std::string &prefix, int expec
     return count;
 }
 
-// Sources fixed in the material continue where the checkpoint left them. A set
-// the checkpoint lacks, or that the configuration changed, starts at its
-// configured place, as a changed monitor point set does.
+// A restart keeps source locations by list index. The point count and the
+// well screen lengths must match the checkpoint, or the set is placed again.
 template <class Input>
 static void restore_sources(const Param &param, Variables &var, Input &bin)
 {

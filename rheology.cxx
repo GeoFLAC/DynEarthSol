@@ -2096,7 +2096,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
                      needs_projected_velocity, start_angles) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) \
         reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons) // TODO: ACC: the 3x3 eigensolver in elasto_plastic rounds differently on the device
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(+:rejected_returns) reduction(min:first_rejection) reduction(|:rejection_reasons)
     for (int e=mpi_eb; e<mpi_ee; e++) {
         ConstConnAccessor conn = (*var.connectivity)[e];
         int rejection = 0;
