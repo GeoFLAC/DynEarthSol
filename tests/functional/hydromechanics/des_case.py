@@ -12,8 +12,10 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tests/functional'))
-from des_test_utils import (digest, lumped_volumes, read_config, run_des,  # noqa: E402,F401  (read_config for callers)
-                            simplex_gradients, simplex_volumes, write_config)
+from des_test_utils import (digest, lumped_volumes, read_config as _read_config,  # noqa: E402
+                            run_des, simplex_gradients, simplex_volumes, write_config)
+
+read_config = _read_config
 
 SIDES = ('x0', 'x1', 'y0', 'y1', 'z0', 'z1')
 # [mat] option of each poroelastic property, named as in the reference modules' constructors.
