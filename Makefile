@@ -119,6 +119,13 @@ ifeq ($(OSNAME), Darwin)
 	MACPORTS_PREFIX ?= /opt/local
 endif
 
+## The directories the loader searches without an rpath. One of them gets no rpath: the
+## linker and the loader search an rpath before a compiler wrapper's own directories, so
+## /usr/lib64 there gives an MPI's libraries the system copies of what they depend on.
+## $(call needs_rpath,<dir>) is <dir> as given, or empty for one of these.
+LOADER_LIB_DIRS := /lib /lib64 /usr/lib /usr/lib64 $(wildcard /lib/*-linux-gnu /usr/lib/*-linux-gnu)
+needs_rpath = $(if $(filter-out $(LOADER_LIB_DIRS),$(abspath $(1))),$(1))
+
 ## $(call firstdir,<file>,<candidate dirs>) -- first directory in the list that
 ## really holds <file>, else empty. Globs allowed in both arguments
 ## (`lib/clang/*/include`, `libhdf5.*`); the candidate list is a priority list.
@@ -191,7 +198,9 @@ ifeq ($(useexo), 1)
 	## Recorded absolute here, in libexodus's macOS install name and in HDF5's rpath: a
 	## relative path is read against the directory DES runs in, not the executable's.
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(EXO_LIB_DIR)),)
 		EXO_LDFLAGS += -Wl,-rpath=$(abspath $(EXO_LIB_DIR))
+	endif
 	endif
 endif
 
@@ -209,7 +218,9 @@ ifeq ($(usegospl), 1)
 	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
 	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(GOSPL_LIB_DIR)),)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
+	endif
 	endif
 
 	# Python include/lib dirs — override on the command line for non-conda builds:
@@ -222,7 +233,9 @@ ifeq ($(usegospl), 1)
 	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
 	ifneq ($(OSNAME), Darwin)
 		GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
+	ifneq ($(call needs_rpath,$(PYTHON_LIB_DIR)),)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
+	endif
 	else
 		# Full path, as for libomp: -L on a conda env would also pick its libc++.
 		# The rpath, for @rpath/libpython, is added after the link.
@@ -301,7 +314,9 @@ else
 	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
 endif
 ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+ifneq ($(call needs_rpath,$(MMG_LIB_DIR)),)
 	MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+endif
 endif
 
 MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
@@ -334,7 +349,9 @@ ifeq ($(usegwb), 1)
 	GWB_CXXFLAGS = -I$(GWB_DIR)/include -DUSEGWB
 	GWB_LDFLAGS = -L$(GWB_LIB_DIR) -lWorldBuilder
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(GWB_LIB_DIR)),)
 		GWB_LDFLAGS += -Wl,-rpath=$(GWB_LIB_DIR)
+	endif
 	endif
 	GWB_RPATH = $(GWB_LIB_DIR)   # Darwin: added by install_name_tool after the link
 endif
@@ -592,7 +609,11 @@ HDF5_LIB := $(firstword $(call firstfile,libhdf5.$(HDF5_SHLIB_EXT),$(HDF5_LIB_DI
 CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
 ## Its directory is an rpath: a conda or hand-built libhdf5 lies off the loader's path, and a
 ## conda one names itself @rpath/... on macOS. Apple ld takes this spelling, not -rpath=.
-LDFLAGS += $(HDF5_LIB) -Wl,-rpath,$(abspath $(HDF5_LIB_DIR))
+LDFLAGS += $(HDF5_LIB)
+HDF5_RPATH := $(call needs_rpath,$(abspath $(HDF5_LIB_DIR)))
+ifneq ($(HDF5_RPATH),)
+LDFLAGS += -Wl,-rpath,$(HDF5_RPATH)
+endif
 
 ## Is git in the path?
 HAS_GIT := $(shell git --version 2>/dev/null)
@@ -728,7 +749,7 @@ ifeq ($(usempi), 1)
 	METIS_CXXFLAGS = $(if $(strip $(METIS_INCLUDE_DIR)),-I$(METIS_INCLUDE_DIR))
 	CXXFLAGS += $(METIS_CXXFLAGS)
 	LDFLAGS += $(if $(strip $(METIS_LIB_DIR)),-L$(METIS_LIB_DIR)) -lmetis
-ifneq ($(strip $(METIS_LIB_DIR)),)
+ifneq ($(call needs_rpath,$(METIS_LIB_DIR)),)
 	LDFLAGS += -Wl,-rpath,$(METIS_LIB_DIR)
 endif
 endif
