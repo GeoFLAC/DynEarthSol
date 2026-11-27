@@ -17,19 +17,14 @@ bool compute_point_shape_weights(const Variables &var, int e,
                                  double weights[NODES_PER_ELEM])
 {
     if (!((*var.volume)[e] > 0 && std::isfinite((*var.volume)[e]))) return false;
-    ConstConnAccessor conn = (*var.connectivity)[e];
-    ConstArrayAccessor origin = (*var.coord)[conn[0]];
 #ifdef THREED
-    double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    get_local_shape_fn(var, e, dx, dy, dz);
-    const double *gradient[NDIMS] = {dx, dy, dz};
     const double tolerance = 5e-11;
 #else
-    double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    get_local_shape_fn(var, e, dx, dz);
-    const double *gradient[NDIMS] = {dx, dz};
     const double tolerance = 1e-12;
 #endif
+    ConstArrayAccessor origin = (*var.coord)[(*var.connectivity)[e][0]];
+    double gradient[NDIMS][NODES_PER_ELEM];
+    get_shape_gradients(var, e, gradient);
     for (int i = 0; i < NODES_PER_ELEM; ++i) {
         weights[i] = (i == 0);
         for (int d = 0; d < NDIMS; ++d)

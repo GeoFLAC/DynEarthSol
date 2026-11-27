@@ -5,12 +5,21 @@
 
 #include "parameters.hpp"
 #include "matprops.hpp"
+#include "fields.hpp"
 
 // Constant-compressibility fluid density; rho0 is referenced to p=0 and T0.
 #pragma acc routine seq
 inline double fluid_density(const MatProps &mat, int e, double p, double t, double t0)
 {
     return mat.rho_fluid_reference(e)*std::exp(mat.beta_fluid(e)*p-mat.alpha_fluid(e)*(t-t0));
+}
+
+// phi*fluid + (alpha - phi)*solid: a fluid and a grain property weighted by
+// the pore fraction and the rest of the Biot coefficient.
+#pragma acc routine seq
+inline double pore_weighted(double phi, double alpha, double fluid, double solid)
+{
+    return phi*fluid+(alpha-phi)*solid;
 }
 
 struct FluidState {
@@ -32,8 +41,8 @@ inline FluidState fluid_state(const MatProps &mat, int e, double p, double t, do
                              alpha_s*(t-reference_t)+recovery;
     const double next = phi-(alpha-phi)*std::expm1(increment);
     const double density = fluid_density(mat,e,p,t,t0);
-    return {next,density,density*(next*beta_f+(alpha-next)*beta_s),
-                        -density*(next*alpha_f+(alpha-next)*alpha_s)};
+    return {next,density,density*pore_weighted(next,alpha,beta_f,beta_s),
+                        -density*pore_weighted(next,alpha,alpha_f,alpha_s)};
 }
 
 // Compliance for the recorded mean total stress: in-plane mean in 2D,
@@ -50,8 +59,7 @@ inline double hydraulic_mean_stress_compliance(const MatProps &mat, int e)
 #pragma acc routine seq
 inline double hydraulic_inverse_biot_modulus(const MatProps &mat, int e)
 {
-    const double phi = mat.phi(e);
-    return phi * mat.beta_fluid(e) + (mat.alpha_biot(e) - phi) * mat.beta_mineral(e);
+    return pore_weighted(mat.phi(e), mat.alpha_biot(e), mat.beta_fluid(e), mat.beta_mineral(e));
 }
 
 // Temperature baseline belongs to the physical step, not to constitutive trials.
@@ -80,7 +88,7 @@ inline bool hydraulic_buoyancy(const Param &param)
 // its temperature departure, keeping conduction at rest. T0 is surface_temperature.
 #pragma acc routine seq
 inline void hydraulic_drive(const Param &param, const Variables &var, const double_vec &pressure,
-                            int e, const double *const grad[NDIMS], double drive[NDIMS])
+                            int e, const double grad[NDIMS][NODES_PER_ELEM], double drive[NDIMS])
 {
     const double weight = var.mat->rho_fluid_reference(e) * param.control.gravity;
     const bool buoyant = hydraulic_buoyancy(param) && weight != 0 && var.mat->alpha_fluid(e) != 0;
@@ -97,13 +105,9 @@ inline void hydraulic_drive(const Param &param, const Variables &var, const doub
     }
     const double buoy = var.mat->alpha_fluid(e) * weight;
     double slope = 0, excess = 0;
-    if (param.bc.tbc[iboundz0] == 1 && param.bc.tbc[iboundz1] == 1) {
-        const double bottom = std::isfinite(param.bc.tbc_value[iboundz0]) ?
-            param.bc.tbc_value[iboundz0] : param.bc.mantle_temperature;
-        const double top = std::isfinite(param.bc.tbc_value[iboundz1]) ?
-            param.bc.tbc_value[iboundz1] : param.bc.surface_temperature;
-        slope = (bottom - top) / param.mesh.zlength;
-    }
+    if (param.bc.tbc[iboundz0] == 1 && param.bc.tbc[iboundz1] == 1)
+        slope = (thermal_boundary_value(param, iboundz0) - thermal_boundary_value(param, iboundz1)) /
+                param.mesh.zlength;
     for (int d = 0; d < NDIMS; ++d) drive[d] = 0;
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
         const int n = (*var.connectivity)[e][j];
@@ -147,6 +151,28 @@ inline double hydraulic_storage(const Param &param, const MatProps &mat, int e)
                                        hydraulic_storage(mat, e);
 }
 
+// Element means of the nodal pore pressure and temperature, the state at which
+// an element's fluid properties are evaluated.
+#pragma acc routine seq
+inline void fluid_means(const Variables &var, int e, double &p, double &t)
+{
+    p = t = 0;
+    for (int j = 0; j < NODES_PER_ELEM; ++j) {
+        const int n = (*var.connectivity)[e][j];
+        p += (*var.ppressure)[n]/NODES_PER_ELEM;
+        t += (*var.temperature)[n]/NODES_PER_ELEM;
+    }
+}
+
+// fluid_state of element e at node n's pressure and temperature, about the
+// element means p, t (fluid_means) and the saved porosity.
+#pragma acc routine seq
+inline FluidState nodal_fluid_state(const Variables &var, int e, int n, double p, double t)
+{
+    return fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
+                       var.fluid_reference_temperature,var.mat->phi(e),p,t);
+}
+
 // Minimum nodal tangent bounds the local undrained modulus. Density cancels
 // from the mass equation; the wave storage has units of inverse pressure.
 #pragma acc routine seq
@@ -155,16 +181,11 @@ inline double hydraulic_wave_storage(const Variables &var, int e)
     if (!var.fluid_split || !(var.fluid_reference_temperature > 0))
         return hydraulic_inverse_biot_modulus(*var.mat,e);
     const auto conn = (*var.connectivity)[e];
-    double p = 0, t = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        p += (*var.ppressure)[conn[j]]/NODES_PER_ELEM;
-        t += (*var.temperature)[conn[j]]/NODES_PER_ELEM;
-    }
+    double p, t;
+    fluid_means(var, e, p, t);
     double storage = hydraulic_inverse_biot_modulus(*var.mat,e);
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = conn[j];
-        const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-            var.fluid_reference_temperature,var.mat->phi(e),p,t);
+        const auto state = nodal_fluid_state(var,e,conn[j],p,t);
         storage = std::min(storage,state.pressure_slope/state.density);
     }
     return storage;
@@ -185,19 +206,6 @@ inline double hydraulic_bulk_density(const MatProps &mat, int e, double sat = 1)
     return mat.rho(e) * (1 - phi) + mat.rho_fluid_reference(e) * phi * sat;
 }
 
-// Element means of the nodal pore pressure and temperature, the state at which
-// an element's fluid properties are evaluated.
-#pragma acc routine seq
-inline void fluid_means(const Variables &var, int e, double &p, double &t)
-{
-    p = t = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = (*var.connectivity)[e][j];
-        p += (*var.ppressure)[n]/NODES_PER_ELEM;
-        t += (*var.temperature)[n]/NODES_PER_ELEM;
-    }
-}
-
 // Owned nodal solid mass and actual fluid content determine physical weight.
 // volume_n is the sum of patch volumes (without simplex lumping).
 #pragma acc routine seq
@@ -211,8 +219,7 @@ inline double hydraulic_bulk_density(const Param &param, const Variables &var, i
     fluid_means(var, e, p, t);
     for (int j = 0; j < NODES_PER_ELEM; ++j) {
         const int n = conn[j];
-        const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                                      var.fluid_reference_temperature,var.mat->phi(e),p,t);
+        const auto state = nodal_fluid_state(var,e,n,p,t);
         density += (*var.solid_mass)[n]/(*var.volume_n)[n]+
                    ratio*state.density*state.porosity/NODES_PER_ELEM;
     }
@@ -248,7 +255,7 @@ inline double element_se(const MatProps &mat, const int_vec &markers, double p, 
         const Retention &r = mat.retention(m);
         const double se_m = retention_se(r, p);
         se += markers[m] * se_m;
-        s += markers[m] * (r.sr + (1 - r.sr) * se_m);
+        s += markers[m] * retention_sat_of_se(r, se_m);
         total += markers[m];
     }
     if (sat) *sat = s / total;
@@ -333,7 +340,7 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
 // match pressure assembly. Reuse caller-owned gradients when supplied.
 #pragma acc routine seq
 void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
-                            const double *const gradient[NDIMS] = nullptr);
+                            const double (*gradient)[NODES_PER_ELEM] = nullptr);
 // Fix the well screens in the material of the whole mesh (var.well_pieces): the
 // configured vertical screens, or, after a remesh, the previous pieces from the
 // positions of their ends (2*NDIMS per piece, see well_screen_positions).

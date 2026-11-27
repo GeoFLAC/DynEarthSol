@@ -1,6 +1,8 @@
 #ifndef DYNEARTHSOL3D_FIELDS_HPP
 #define DYNEARTHSOL3D_FIELDS_HPP
 
+#include <cmath>
+
 // Element shape gradients shared by field updates and the current-rate timestep bound.
 #ifdef THREED
 #pragma acc routine seq
@@ -52,6 +54,35 @@ inline void get_local_shape_fn(const Variables &var, int e,
     shpdz[2] = iv * (d[1][0] - d[0][0]);
 }
 #endif
+
+// The same gradients as rows g[d][j] = dN_j/dx_d, for loops over the dimensions.
+#pragma acc routine seq
+inline void get_shape_gradients(const Variables &var, int e, double g[NDIMS][NODES_PER_ELEM])
+{
+#ifdef THREED
+    get_local_shape_fn(var, e, g[0], g[1], g[2]);
+#else
+    get_local_shape_fn(var, e, g[0], g[1]);
+#endif
+}
+
+// Temperature of a boundary side: bc.tbc_value, or where that is not finite
+// the mantle temperature at the bottom and the surface temperature elsewhere.
+#pragma acc routine seq
+inline double thermal_boundary_value(const Param &param, int side)
+{
+    const double value = param.bc.tbc_value[side];
+    return std::isfinite(value) ? value :
+        (side == 4 ? param.bc.mantle_temperature : param.bc.surface_temperature);
+}
+
+// Number of explicit substeps of at most limit that cover dt; dies with
+// message when it does not fit in an int.
+int explicit_substeps(double dt, double limit, const char *message);
+// Smallest mass/row over the owned nodes of all ranks, starting from limit.
+// A node's row sums its element rows in work, plus capacity*(*inflow)[n].
+double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
+                        double limit, const double_vec *inflow = nullptr, double capacity = 0);
 
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_tmp(const Param &param, Variables& var);

@@ -41,7 +41,7 @@ OUTSIDE = {
         "solid_capacity", "solid_mass")},
 }
 
-ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*new\s+"
+ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*(?:[^;]*[?:]\s*)?new\s+"
                         r"(?:double_vec|array_t|tensor_t|int_vec|uint_vec|int_vec2D|conn_t|"
                         r"segment_t|segflag_t|regattr_t|elem_cache)\b")
 

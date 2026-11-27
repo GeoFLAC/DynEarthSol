@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <limits>
@@ -48,6 +49,16 @@ inline int pressure_boundary(const int n, const Variables &var)
     return fixed;
 }
 
+// Pressure of a prescribed-pressure (type 2) side at schedule ratio; false for
+// a free node (side -1) or a type-1 side.
+#pragma acc routine seq
+inline bool prescribed_pressure(const Param &param, const Variables &var, int side, double ratio,
+                                double &value)
+{
+    if (side < 0 || var.hbc_types[side] != 2) return false;
+    value = param.bc.hbc_pressure[side] * ratio;
+    return true;
+}
 
 // Exact mean of the well rate ratio over [t0, t1] (in s). The ratio is linear
 // between schedule times, a repeated time being a step, and held outside them.
@@ -71,6 +82,69 @@ double schedule_mean(const double_vec &t, const double_vec &r, double t0, double
         if (t[i+1] > t[i])
             sum += part(t[i], t[i+1], r[i], (r[i+1] - r[i]) / (t[i+1] - t[i]));
     return sum / (b - a);
+}
+
+// Well and flux-boundary ratios over [start, stop] and the prescribed-pressure
+// ratio at stop.
+void schedule_ratios(const BC &bc, double start, double stop,
+                     double &well, double &boundary, double &pressure)
+{
+    const bool scheduled = !bc.hbc_schedule_ratio.empty();
+    well = bc.num_wells > 0 ?
+        schedule_mean(bc.well_schedule_time_in_yr, bc.well_schedule_ratio, start, stop) : 0.0;
+    boundary = scheduled ?
+        schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, start, stop) : 1.0;
+    pressure = scheduled ?
+        schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, stop, stop) : 1.0;
+}
+
+// Darcy mobility k/mu, before relative permeability.
+#pragma acc routine seq
+inline double hydraulic_mobility(const MatProps &mat, int e)
+{
+    return mat.perm(e) / mat.mu_fluid(e);
+}
+
+// Fixed-stress lag L = alpha^2*compliance, in 1/Pa.
+#pragma acc routine seq
+inline double hydraulic_fixed_stress_lag(const MatProps &mat, int e)
+{
+    const double alpha = mat.alpha_biot(e);
+    return alpha*alpha*hydraulic_mean_stress_compliance(mat,e);
+}
+
+// Fluid density at node n's pressure and temperature with element e's law.
+#pragma acc routine seq
+inline double nodal_fluid_density(const Variables &var, int e, int n)
+{
+    return fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
+}
+
+// The Biot model's porosity range: 0 < phi < 1 and phi <= alpha.
+#pragma acc routine seq
+inline bool biot_porosity_valid(const MatProps &mat, int e, double phi)
+{
+    return phi > 0 && phi < 1 && phi <= mat.alpha_biot(e);
+}
+
+// Pore dilation after its recovery and the accepted plastic increment.
+#pragma acc routine seq
+inline void update_pore_dilation(const Variables &var, int e, double recovery)
+{
+    (*var.pore_dilation)[e] = std::max(0.0,(*var.pore_dilation)[e]-recovery+
+                                       (*var.pore_plastic_increment)[e]);
+}
+
+// Entry (i, j) of g^T K g, the tensor part of an element's Darcy stiffness.
+#pragma acc routine seq
+inline double permeability_coupling(const MatProps &mat, const double g[NDIMS][NODES_PER_ELEM],
+                                    int i, int j)
+{
+    double a = 0;
+    for (int d = 0; d < NDIMS; ++d)
+        for (int k = 0; k < NDIMS; ++k)
+            a += g[d][i] * mat.perm_tensor[d][k] * g[k][j];
+    return a;
 }
 
 
@@ -165,7 +239,7 @@ void reset_hydraulic_assembly(const Param &param, Variables &var)
 namespace {
 #pragma acc routine seq
 inline void hydraulic_flux(const Param &param, const Variables &var, int e,
-                           const double *const g[NDIMS], double mobility, double density, double *q)
+                           const double g[NDIMS][NODES_PER_ELEM], double mobility, double density, double *q)
 {
     for (int d = 0; d < NDIMS; ++d) q[d] = 0;
     const auto conn = (*var.connectivity)[e];
@@ -187,31 +261,24 @@ inline void hydraulic_flux(const Param &param, const Variables &var, int e,
 
 #pragma acc routine seq
 void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
-                            const double *const gradient[NDIMS])
+                            const double (*gradient)[NODES_PER_ELEM])
 {
     if (!param.control.has_hydraulic_diffusion) {
         for (int d = 0; d < NDIMS; ++d) q[d] = 0;
         return;
     }
-#ifdef THREED
-    double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    if (!gradient) get_local_shape_fn(var, e, dx, dy, dz);
-    const double *g[NDIMS] = {dx, dy, dz};
-#else
-    double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-    if (!gradient) get_local_shape_fn(var, e, dx, dz);
-    const double *g[NDIMS] = {dx, dz};
-#endif
-    if (!gradient) gradient = g;
+    double g[NDIMS][NODES_PER_ELEM];
+    if (!gradient) {
+        get_shape_gradients(var, e, g);
+        gradient = g;
+    }
     double density = 0;
     if (param.control.hydraulic_content_model == 1) {
         const auto conn = (*var.connectivity)[e];
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            const int n = conn[j];
-            density += fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature)/NODES_PER_ELEM;
-        }
+        for (int j = 0; j < NODES_PER_ELEM; ++j)
+            density += nodal_fluid_density(var,e,conn[j])/NODES_PER_ELEM;
     }
-    hydraulic_flux(param,var,e,gradient,var.mat->perm(e)/var.mat->mu_fluid(e),density,q);
+    hydraulic_flux(param,var,e,gradient,hydraulic_mobility(*var.mat,e),density,q);
 }
 
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
@@ -227,10 +294,7 @@ void refresh_hydraulic_diffusivity(const Param &param, const Variables &var)
     for (int e = 0; e < owned; ++e) {
         const double diff = hydraulic_diffusivity(param, *var.mat, e);
         if (!std::isfinite(diff) || diff < 0) invalid = 1;
-        if (var.pore_strain) {
-            const double phi = var.mat->phi(e);
-            if (!(phi > 0 && phi < 1 && phi <= var.mat->alpha_biot(e))) invalid = 1;
-        }
+        if (var.pore_strain && !biot_porosity_valid(*var.mat, e, var.mat->phi(e))) invalid = 1;
         diffusivity = std::max(diffusivity, diff);
     }
     if (mpi_any(var, invalid))
@@ -512,19 +576,14 @@ void initial_hydrostatic_state(const Param &param, const Variables &var,
         for (int n = 0; n < var.nnode; ++n) {
             double p = param.ic.pore_pressure_option == 1 ?
                 a + (b-a)*(*var.coord)[n][0]/param.mesh.xlength : param.ic.pore_pressure_value;
-            const int side = pressure_boundary(n, var);
-            if (side >= 0 && var.hbc_types[side] == 2) p = param.bc.hbc_pressure[side] * ratio;
+            prescribed_pressure(param, var, pressure_boundary(n, var), ratio, p);
             ppressure[n] = p; dppressure[n] = 0;
         }
         return;
     }
-    for (int n = 0; n < var.nnode; ++n) {
-        const int side = pressure_boundary(n, var);
-        if (side >= 0 && var.hbc_types[side] == 2) {
-            ppressure[n] = param.bc.hbc_pressure[side] * ratio;
+    for (int n = 0; n < var.nnode; ++n)
+        if (prescribed_pressure(param, var, pressure_boundary(n, var), ratio, ppressure[n]))
             dppressure[n] = 0;
-        }
-    }
     if (param.control.gravity == 0) return;
 
     // Hydrostatic condition for pressure calculation
@@ -598,7 +657,7 @@ void update_porosity(const Variables &var)
                          - (var.pore_recovery ? (*var.pore_recovery)[e] : 0);
         const double phi = biot_porosity(var.mat->phi0(e), var.mat->alpha_biot(e), eps);
         (*var.etmp)[e] = eps;
-        if (!(phi > 0 && phi < 1 && phi <= var.mat->alpha_biot(e)) || !std::isfinite(eps))
+        if (!biot_porosity_valid(*var.mat, e, phi) || !std::isfinite(eps))
             invalid = 1;
         if (var.pore_plastic_increment && !std::isfinite((*var.pore_plastic_increment)[e])) invalid = 1;
     }
@@ -611,9 +670,7 @@ void update_porosity(const Variables &var)
     for (int e = 0; e < var.nelem; ++e)
     {
         (*var.pore_strain)[e] = (*var.etmp)[e];
-        if (var.pore_dilation)
-            (*var.pore_dilation)[e] = std::max(0.0,(*var.pore_dilation)[e] -
-                (*var.pore_recovery)[e] + (*var.pore_plastic_increment)[e]);
+        if (var.pore_dilation) update_pore_dilation(var, e, (*var.pore_recovery)[e]);
     }
 }
 
@@ -668,8 +725,6 @@ static void pressure_step(const Param &param, const Variables &var,
         double current_mean_stress = trace(stress[e])/NDIMS;
         double mean_stress_change = current_mean_stress - old_mean_stress[e];
 
-        double perm_e = var.mat->perm(e);                // Intrinsic permeability
-        double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
         double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
         double bulk_comp = hydraulic_mean_stress_compliance(*var.mat, e);
 
@@ -677,7 +732,7 @@ static void pressure_step(const Param &param, const Variables &var,
         // Darcy mobility k/mu in pressure form, well-defined when gravity is zero;
         // it is algebraically equivalent to the head form
         //   (k * gamma_w / mu) * grad(p / gamma_w + z).
-        double mobility = perm_e / mu_e;
+        double mobility = hydraulic_mobility(*var.mat, e);
         // Bishop chi_e: the mean of the element's nodal Se, the same chi as in the
         // effective stress (rheology.cxx); exactly 1 when saturated.
         double chi = 1;
@@ -709,17 +764,17 @@ static void pressure_step(const Param &param, const Variables &var,
         if (plastic_source) {
             // The strain source already includes the plastic volume change;
             // only the previous raw pressure increment belongs to the buffer.
-            pe -= alpha_b * alpha_b * bulk_comp * tr[pressure_d_slot] * (*var.volume)[e] /
+            pe -= hydraulic_fixed_stress_lag(*var.mat, e) * tr[pressure_d_slot] * (*var.volume)[e] /
                   (NODES_PER_ELEM * var.dt);
         } else if (has_retention && param.control.has_poroelastic_pressure_feedback && !strain_form) {
             const double correction = chi * tr[bishop_e_slot] - tr[pressure_d_slot];
             if (correction != 0)
-                pe += alpha_b * alpha_b * bulk_comp * correction * (*var.volume)[e] /
+                pe += hydraulic_fixed_stress_lag(*var.mat, e) * correction * (*var.volume)[e] /
                       NODES_PER_ELEM / var.dt;
         }
         if (var.old_temperature) {
             const double phi = var.mat->phi(e), solid = var.mat->alpha_solid(e);
-            const double beta = phi * var.mat->alpha_fluid(e) + (alpha_b-phi) * solid;
+            const double beta = pore_weighted(phi, alpha_b, var.mat->alpha_fluid(e), solid);
             const double thermal = strain_source ? beta :
                 beta - alpha_b * bulk_comp * var.mat->bulkm(e) * solid;
             pe -= thermal * hydraulic_temperature_change(var, e) * (*var.volume)[e] /
@@ -742,19 +797,8 @@ static void pressure_step(const Param &param, const Variables &var,
                 pe += q*(*var.volume)[e]/NODES_PER_ELEM;
             }
         }
-#ifdef THREED
-        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
-#else
-        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdz);
-#endif
-
-#ifdef THREED
-        const double *grad[NDIMS] = {shpdx, shpdy, shpdz};
-#else
-        const double *grad[NDIMS] = {shpdx, shpdz};
-#endif
+        double grad[NDIMS][NODES_PER_ELEM];
+        get_shape_gradients(var, e, grad);
         // One potential gradient and tensor product per element, shared by its nodes.
         double drive[NDIMS], flux[NDIMS] = {};
         hydraulic_drive(param, var, ppressure, e, grad, drive);
@@ -782,16 +826,8 @@ static void pressure_step(const Param &param, const Variables &var,
                 (pressure_boundary(n,var) >= 0 || !((*var.hmass)[n]>0 && std::isfinite((*var.hmass)[n]))))
                 die(EXIT_RUNTIME_LOOKUP, "A fluid point source reaches a fixed-pressure node or nonpositive hydraulic storage.");
     }
-    const double well_ratio = has_wells ?
-        schedule_mean(param.bc.well_schedule_time_in_yr, param.bc.well_schedule_ratio,
-                      time - dt, time) : 0.0;
-    const bool has_boundary = !param.bc.hbc_schedule_ratio.empty();
-    const double boundary_ratio = has_boundary ?
-        schedule_mean(param.bc.hbc_schedule_time_in_yr, param.bc.hbc_schedule_ratio,
-                      time - dt, time) : 1.0;
-    const double pressure_ratio = has_boundary ?
-        schedule_mean(param.bc.hbc_schedule_time_in_yr, param.bc.hbc_schedule_ratio,
-                      time, time) : 1.0;
+    double well_ratio, boundary_ratio, pressure_ratio;
+    schedule_ratios(param.bc, time - dt, time, well_ratio, boundary_ratio, pressure_ratio);
     #pragma acc wait
     double prescribed_flux = 0;
     flux_facets(var,[&](int side, int e, int f, const int *, double area) {
@@ -879,52 +915,26 @@ static double pressure_step_limit(const Variables &var, elem_cache &work)
     // Gershgorin bound on the lumped operator, including rotated tensors.
     // Reuse assembly scratch; no pressure or material history is copied.
     double limit = std::numeric_limits<double>::max();
-    const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
+    const int mpi_ee = mpi_element_end(var);
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, work) firstprivate(mpi_ee) reduction(min:limit)
 #endif
     #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ee) reduction(min:limit)
     for (int e = 0; e < mpi_ee; ++e) {
-#ifdef THREED
-        double dx[NODES_PER_ELEM], dy[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, dx, dy, dz);
-        const double *g[NDIMS] = {dx,dy,dz};
-#else
-        double dx[NODES_PER_ELEM], dz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, dx, dz);
-        const double *g[NDIMS] = {dx,dz};
-#endif
-        const double kv = var.mat->perm(e) / var.mat->mu_fluid(e) * (*var.volume)[e];
+        double g[NDIMS][NODES_PER_ELEM];
+        get_shape_gradients(var, e, g);
+        const double kv = hydraulic_mobility(*var.mat, e) * (*var.volume)[e];
         const double exchange = var.matrix_pressure ? var.mat->exchange(e) : 0;
         if (exchange > 0) limit = std::min(limit, var.mat->matrix_capacity(e)/exchange);
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             double row = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                double a = 0;
-                for (int d = 0; d < NDIMS; ++d)
-                    for (int k = 0; k < NDIMS; ++k)
-                        a += g[d][i] * var.mat->perm_tensor[d][k] * g[k][j];
-                row += std::abs(a);
-            }
+            for (int j = 0; j < NODES_PER_ELEM; ++j)
+                row += std::abs(permeability_coupling(*var.mat, g, i, j));
             work[e][i] = kv * row + exchange*(*var.volume)[e]/NODES_PER_ELEM;
         }
     }
     mpi_sync(var, work, MpiEntity::Element, NODES_PER_ELEM);
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(var, work) firstprivate(mpi_ne) reduction(min:limit)
-#endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ne) reduction(min:limit)
-    for (int n = 0; n < mpi_ne; ++n) {
-        double row = 0;
-        const int *patch = var.support.patch(n), *local = var.support.local(n);
-        for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
-        if (row > 0 && (*var.hmass)[n] > 0) limit = std::min(limit, (*var.hmass)[n] / row);
-    }
-    #pragma acc wait
-#ifdef USEMPI
-    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&limit, 1);
-#endif
-    return limit;
+    return nodal_step_limit(var, work, *var.hmass, limit);
 }
 
 void update_pore_pressure(const Param &param, const Variables &var,
@@ -942,10 +952,8 @@ void update_pore_pressure(const Param &param, const Variables &var,
     const double limit = var.mat->hydro_step_limit;
     #pragma acc wait
     std::fill(dp.begin(), dp.end(), 0.0);
-    const double count = std::ceil(var.dt / limit);
-    if (!std::isfinite(count) || count > std::numeric_limits<int>::max())
-        die(EXIT_RUNTIME_RESOURCE, "Hydraulic timestep needs too many explicit substeps; reduce fixed_dt.");
-    const int steps = std::max(1, int(count));
+    const int steps = explicit_substeps(var.dt, limit,
+        "Hydraulic timestep needs too many explicit substeps; reduce fixed_dt.");
     const double dt = var.dt / steps;
     if (var.fluid_balance) std::fill(var.fluid_balance->begin(), var.fluid_balance->end(), 0.0);
     for (int i = 0; i < steps; ++i) {
@@ -970,15 +978,14 @@ double effective_fluid_volume(const Param &param, const Variables &var, int e)
 #pragma acc routine seq
 bool valid_fluid(const MatProps &mat, int e, const FluidState &state)
 {
-    return state.porosity > 0 && state.porosity < 1 && state.porosity <= mat.alpha_biot(e) &&
+    return biot_porosity_valid(mat,e,state.porosity) &&
            state.density > 0 && std::isfinite(state.density) && state.pressure_slope >= 0 &&
            std::isfinite(state.pressure_slope) && std::isfinite(state.temperature_slope);
 }
 
 FluidState remap_fluid_state(const Variables &var, int e, int n, double p, double t)
 {
-    const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                                  var.fluid_reference_temperature,var.mat->phi(e),p,t);
+    const auto state = nodal_fluid_state(var,e,n,p,t);
     if (!valid_fluid(*var.mat,e,state)) die(EXIT_RUNTIME_NAN,"Invalid fluid remap state.");
     return state;
 }
@@ -1015,24 +1022,48 @@ void fluid_point_source(int point, int n, double volume_rate, void *context)
 } // namespace
 
 namespace {
-double current_fluid_content(const Param &param, const Variables &var, int n, double pressure,
-                             double temperature, double &mp, double &mt)
+// Fluid mass of node n's patch at pressure p and temperature t, with its
+// pressure and (optional) temperature slopes, or NaN for an invalid state.
+// reference[e] is element e's FluidReference row; fraction scales its volume
+// and recovery changes.
+template <class Reference>
+double patch_fluid_content(const Variables &var, const Reference &reference, int n, double p,
+                           double t, double fraction, double &slope, double *thermal_slope)
 {
-    double mass = 0;
-    mp = mt = 0;
+    double value = 0;
+    slope = 0;
+    if (thermal_slope) *thermal_slope = 0;
     const int *patch = var.support.patch(n);
     for (int k = 0; k < var.support.size(n); ++k) {
         const int e = patch[k];
-        double p, t; fluid_means(var,e,p,t);
-        const auto state = fluid_state(*var.mat,e,pressure,temperature,
-                                      var.fluid_reference_temperature,var.mat->phi(e),p,t);
+        const auto r = reference[e];
+        const auto state = fluid_state(*var.mat,e,p,t,var.fluid_reference_temperature,r[fluid_phi],
+            r[fluid_pressure],r[fluid_temperature],fraction*r[fluid_log_volume],fraction*r[fluid_recovery]);
         if (!valid_fluid(*var.mat,e,state)) return std::numeric_limits<double>::quiet_NaN();
-        const double weight = effective_fluid_volume(param,var,e)/NODES_PER_ELEM;
-        mass += weight*state.density*state.porosity;
-        mp += weight*state.pressure_slope;
-        mt += weight*state.temperature_slope;
+        const double weight = r[fluid_volume]*std::exp(fraction*r[fluid_log_volume])/NODES_PER_ELEM;
+        value += weight*state.density*state.porosity;
+        slope += weight*state.pressure_slope;
+        if (thermal_slope) *thermal_slope += weight*state.temperature_slope;
     }
-    return mass;
+    return value;
+}
+
+// FluidReference rows of the current state, without volume or recovery change.
+struct CurrentReference
+{
+    const Param &param;
+    const Variables &var;
+    std::array<double,fluid_recovery+1> operator[](int e) const
+    {
+        double p, t; fluid_means(var,e,p,t);
+        return {var.mat->phi(e),p,t,effective_fluid_volume(param,var,e),0,0,0};
+    }
+};
+
+double current_fluid_content(const Param &param, const Variables &var, int n, double pressure,
+                             double temperature, double &mp, double &mt)
+{
+    return patch_fluid_content(var,CurrentReference{param,var},n,pressure,temperature,0,mp,&mt);
 }
 
 double_vec lumped_volume(const Variables &var)
@@ -1063,8 +1094,7 @@ void initialize_fluid_content(const Param &param, Variables &var)
         for (int k = 0; k < var.support.size(n); ++k) {
             const int e = patch[k];
             double p, t; fluid_means(var,e,p,t);
-            const auto state = fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                                          var.fluid_reference_temperature,var.mat->phi(e),p,t);
+            const auto state = nodal_fluid_state(var,e,n,p,t);
             if (!valid_fluid(*var.mat,e,state) || !((*var.temperature)[n] > 0))
                 die(EXIT_RUNTIME_NAN,"Invalid initial finite-density fluid state.");
             const double solid = effective_fluid_volume(param,var,e)/NODES_PER_ELEM*
@@ -1099,22 +1129,7 @@ double_vec hydraulic_reference(const Param &param)
 double HydraulicStep::content(const Param &param, const Variables &var, int n, double p,
                               double t, double fraction, double &slope, double *thermal_slope) const
 {
-    double value = 0;
-    slope = 0;
-    if (thermal_slope) *thermal_slope = 0;
-    const int *patch = var.support.patch(n);
-    for (int k = 0; k < var.support.size(n); ++k) {
-        const int e = patch[k];
-        const auto r = reference[e];
-        const auto state = fluid_state(*var.mat,e,p,t,var.fluid_reference_temperature,r[fluid_phi],
-            r[fluid_pressure],r[fluid_temperature],fraction*r[fluid_log_volume],fraction*r[fluid_recovery]);
-        if (!valid_fluid(*var.mat,e,state)) return std::numeric_limits<double>::quiet_NaN();
-        const double weight = r[fluid_volume]*std::exp(fraction*r[fluid_log_volume])/NODES_PER_ELEM;
-        value += weight*state.density*state.porosity;
-        slope += weight*state.pressure_slope;
-        if (thermal_slope) *thermal_slope += weight*state.temperature_slope;
-    }
-    return value;
+    return patch_fluid_content(var,reference,n,p,t,fraction,slope,thermal_slope);
 }
 
 void HydraulicStep::begin(const Param &param, const Variables &var)
@@ -1297,31 +1312,21 @@ void HydraulicStep::advance(const Param &param, Variables &var)
         std::fill(heat_transport.data(),heat_transport.data()+heat_transport.num_elements(),0.0);
         for (int e = 0; e < var.nelem; ++e) {
             double g[NDIMS][NODES_PER_ELEM], q[NDIMS], rho[NODES_PER_ELEM], max_rho = 0, mean_rho = 0;
-#ifdef THREED
-            get_local_shape_fn(var,e,g[0],g[1],g[2]);
-#else
-            get_local_shape_fn(var,e,g[0],g[1]);
-#endif
+            get_shape_gradients(var,e,g);
             const auto conn = (*var.connectivity)[e];
             auto work = transport[e];
             auto heat = heat_transport[e];
             for (int i = 0; i < NODES_PER_ELEM; ++i) {
-                const int n = conn[i];
-                rho[i] = fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
+                rho[i] = nodal_fluid_density(var,e,conn[i]);
                 max_rho = std::max(max_rho,rho[i]);
                 mean_rho += rho[i]/NODES_PER_ELEM;
             }
-            const double mobility = var.mat->perm(e)/var.mat->mu_fluid(e);
-            const double *gradient[NDIMS];
-            for (int d = 0; d < NDIMS; ++d) gradient[d] = g[d];
-            hydraulic_flux(param,var,e,gradient,mobility,mean_rho,q);
+            const double mobility = hydraulic_mobility(*var.mat,e);
+            hydraulic_flux(param,var,e,g,mobility,mean_rho,q);
             double stiffness[NODES_PER_ELEM][NODES_PER_ELEM], all = 0;
             for (int i = 0; i < NODES_PER_ELEM; ++i)
                 for (int j = 0; j < NODES_PER_ELEM; ++j) {
-                    double a = 0;
-                    for (int d = 0; d < NDIMS; ++d)
-                        for (int k = 0; k < NDIMS; ++k) a += g[d][i]*var.mat->perm_tensor[d][k]*g[k][j];
-                    stiffness[i][j] = std::fabs(a);
+                    stiffness[i][j] = std::fabs(permeability_coupling(*var.mat,g,i,j));
                     all += stiffness[i][j];
                 }
             const double volume = (*var.volume)[e], beta = var.mat->beta_fluid(e);
@@ -1388,7 +1393,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
                 heat_row[n] += heat_transport[patch[k]][NODES_PER_ELEM+local[k]];
             }
             const int e = patch[0];
-            const double density = fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
+            const double density = nodal_fluid_density(var,e,n);
             const double source = density*(wells ? std::fabs((*var.fluid_source)[n])*well_peak : 0)+source_rate[n];
             outgoing[n] += source;
             row[n] += var.mat->beta_fluid(e)*source;
@@ -1412,7 +1417,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
             const double volume_rate = std::fabs(param.bc.hbc_flux[side])*boundary_peak*area/NODES_PER_FACET;
             for (int j = 0; j < NODES_PER_FACET; ++j) {
                 const int n = nodes[j];
-                const double flux = volume_rate*fluid_density(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],var.fluid_reference_temperature);
+                const double flux = volume_rate*nodal_fluid_density(var,e,n);
                 if (flux > 0) {
                     double slope; content(param,var,n,(*var.ppressure)[n],(*var.temperature)[n],fraction,slope);
                     limit = std::min({limit,.5*mass[n]/flux,.5*(slope+lag[n])/(var.mat->beta_fluid(e)*flux)});
@@ -1426,9 +1431,8 @@ void HydraulicStep::advance(const Param &param, Variables &var)
                 die(EXIT_RUNTIME_RESOURCE,"Finite-density substep exhausts physical-time resolution.");
             next_fraction = dt == interval-elapsed ? 1 : (elapsed+dt)/interval;
             const double stop = start_time+elapsed+dt;
-            const double well_ratio = wells ? schedule_mean(param.bc.well_schedule_time_in_yr,param.bc.well_schedule_ratio,time,stop) : 0;
-            const double boundary_ratio = scheduled ? schedule_mean(param.bc.hbc_schedule_time_in_yr,param.bc.hbc_schedule_ratio,time,stop) : 1;
-            const double pressure_ratio = scheduled ? schedule_mean(param.bc.hbc_schedule_time_in_yr,param.bc.hbc_schedule_ratio,stop,stop) : 1;
+            double well_ratio, boundary_ratio, pressure_ratio;
+            schedule_ratios(param.bc,time,stop,well_ratio,boundary_ratio,pressure_ratio);
             std::fill(source_rate.begin(),source_rate.end(),0.0);
             std::fill(source_heat.begin(),source_heat.end(),0.0);
             if (points) {
@@ -1457,7 +1461,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
                 for (int j = 0; j < NODES_PER_FACET; ++j) {
                     const int n = nodes[j];
                     const double t = (*var.temperature)[n];
-                    const double flow = -q*fluid_density(*var.mat,e,(*var.ppressure)[n],t,var.fluid_reference_temperature);
+                    const double flow = -q*nodal_fluid_density(var,e,n);
                     boundary_rate[n] += flow;
                     boundary_heat[n] += cf*t*flow;
                 }
@@ -1473,7 +1477,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
             for (int n = 0; n < var.nnode; ++n) {
                 const int e = var.support.patch(n)[0];
                 const double t = (*var.temperature)[n];
-                const double density = fluid_density(*var.mat,e,(*var.ppressure)[n],t,var.fluid_reference_temperature);
+                const double density = nodal_fluid_density(var,e,n);
                 const double well = density*(wells ? -well_ratio*(*var.fluid_source)[n] : 0);
                 step->source_rate[n] += well;
                 step->source_heat[n] += cf*t*well;
@@ -1486,7 +1490,8 @@ void HydraulicStep::advance(const Param &param, Variables &var)
                 step->candidate[n] = (*var.ppressure)[n];
                 const double augmented_target = next_target+next_fraction*step->initial_split[n];
                 if (side >= 0) {
-                    step->candidate[n] = var.hbc_types[side] == 2 ? param.bc.hbc_pressure[side]*pressure_ratio : step->pressure[n];
+                    double fixed_p;
+                    step->candidate[n] = prescribed_pressure(param,var,side,pressure_ratio,fixed_p) ? fixed_p : step->pressure[n];
                     if (thermal && !fixed) {
                         const double predicted_mass = step->mass[n]+dt*(step->rate[n]+step->source_rate[n]+step->boundary_rate[n]);
                         const double predicted_capacity = (*var.solid_capacity)[n]+cf*predicted_mass;
@@ -1562,9 +1567,7 @@ void HydraulicStep::advance(const Param &param, Variables &var)
         scale += initial_mass[n];
     }
     for (int e = 0; e < var.nelem; ++e)
-        if (var.pore_dilation)
-            (*var.pore_dilation)[e] = std::max(0.0,(*var.pore_dilation)[e]-
-                reference[e][fluid_recovery]+(*var.pore_plastic_increment)[e]);
+        if (var.pore_dilation) update_pore_dilation(var,e,reference[e][fluid_recovery]);
     const double residual = stored+buffer+extraction-boundary-reset;
     const double tolerance = 512*std::numeric_limits<double>::epsilon()*scale+
         1e-10*(std::fabs(stored)+std::fabs(buffer)+std::fabs(extraction)+std::fabs(boundary)+std::fabs(reset));
@@ -1594,22 +1597,29 @@ void HydraulicStep::advance(const Param &param, Variables &var)
 
 namespace {
 
+// Pressure storage and fixed-stress buffer coefficient of element e in the
+// remapped content. With mechanical feedback off, storage is the reduced flow
+// model's capacity.
+void remap_coefficients(const Param &param, const Variables &var, int e, double &storage, double &lag)
+{
+    const bool feedback = param.control.has_poroelastic_pressure_feedback;
+    storage = feedback ? hydraulic_inverse_biot_modulus(*var.mat,e) : hydraulic_storage(param,*var.mat,e);
+    lag = feedback && !hydraulic_strain_form(param) ? hydraulic_fixed_stress_lag(*var.mat,e) : 0;
+}
+
 // Mobile physical content, numerical fixed-stress buffer, immobile content.
-// With mechanical feedback off, storage is the reduced flow model's capacity.
 void remap_content(const Param &param, const Variables &var, int e, int j, double value[3])
 {
     const double alpha = var.mat->alpha_biot(e), phi = var.mat->phi(e);
     const bool feedback = param.control.has_poroelastic_pressure_feedback;
-    const bool pending = feedback && !hydraulic_strain_form(param);
-    const double storage = feedback ? hydraulic_inverse_biot_modulus(*var.mat,e) :
-                                     hydraulic_storage(param,*var.mat,e);
-    const double lag = pending ? alpha*alpha*hydraulic_mean_stress_compliance(*var.mat,e) : 0;
+    double storage, lag;
+    remap_coefficients(param,var,e,storage,lag);
     const int n = (*var.connectivity)[e][j];
     value[0] = storage*(*var.ppressure)[n];
     if (feedback) value[0] += alpha*trace((*var.strain)[e]);
     if (param.control.has_thermal_pressurization) {
         const double solid = var.mat->alpha_solid(e);
-        double beta = phi*var.mat->alpha_fluid(e)+(alpha-phi)*solid;
+        double beta = pore_weighted(phi,alpha,var.mat->alpha_fluid(e),solid);
         if (!feedback && !hydraulic_strain_form(param))
             beta -= alpha*hydraulic_mean_stress_compliance(*var.mat,e)*var.mat->bulkm(e)*solid;
         value[0] -= beta*((*var.temperature)[n]-param.bc.surface_temperature);
@@ -1705,18 +1715,28 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
 {
     if (!active) return;
     #pragma acc wait
+    // Centroid of a simplex and the radius about it that encloses the simplex.
+    auto enclose = [](const auto &coordinate, double center[NDIMS]) {
+        double radius = 0;
+        for (int d = 0; d < NDIMS; ++d) {
+            center[d] = 0;
+            for (int j = 0; j < NODES_PER_ELEM; ++j) center[d] += coordinate[j][d]/NODES_PER_ELEM;
+        }
+        for (int j = 0; j < NODES_PER_ELEM; ++j) {
+            double distance2 = 0;
+            for (int d = 0; d < NDIMS; ++d) distance2 += (coordinate[j][d]-center[d])*(coordinate[j][d]-center[d]);
+            radius = std::max(radius,std::sqrt(distance2));
+        }
+        return radius;
+    };
     const int count = old_connectivity.size();
     array_t centers(count);
     double_vec radii(count, 0.0);
     double radius = 0;
     for (int e = 0; e < count; ++e) {
-        for (int d = 0; d < NDIMS; ++d) {
-            centers[e][d] = 0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j)
-                centers[e][d] += old_coordinate[old_connectivity[e][j]][d]/NODES_PER_ELEM;
-        }
-        for (int j = 0; j < NODES_PER_ELEM; ++j)
-            radii[e] = std::max(radii[e],std::sqrt(dist2<ConstArrayAccessor>(centers[e],old_coordinate[old_connectivity[e][j]])));
+        double center[NDIMS];
+        radii[e] = enclose(old_coordinate.view_const(old_connectivity[e]),center);
+        for (int d = 0; d < NDIMS; ++d) centers[e][d] = center[d];
         radius = std::max(radius,radii[e]);
     }
     PointCloud cloud(centers);
@@ -1729,15 +1749,9 @@ void ContentRemap::transfer(const Variables &var, const array_t &old_coordinate,
     for (int e = 0; e < var.nelem; ++e) {
         const auto coordinate = var.coord->view_const((*var.connectivity)[e]);
         const double volume = compute_volume(coordinate);
-        double center[NDIMS] = {}, local_radius = 0;
-        for (int d = 0; d < NDIMS; ++d)
-            for (int j = 0; j < NODES_PER_ELEM; ++j) center[d] += coordinate[j][d]/NODES_PER_ELEM;
-        for (int j = 0; j < NODES_PER_ELEM; ++j) {
-            double distance2 = 0;
-            for (int d = 0; d < NDIMS; ++d) distance2 += (coordinate[j][d]-center[d])*(coordinate[j][d]-center[d]);
-            local_radius = std::max(local_radius,std::sqrt(distance2));
-            outside[e][j] = volume/NODES_PER_ELEM;
-        }
+        double center[NDIMS];
+        const double local_radius = enclose(coordinate,center);
+        for (int j = 0; j < NODES_PER_ELEM; ++j) outside[e][j] = volume/NODES_PER_ELEM;
         const double search_radius = (radius+local_radius)*(1+1e-12);
         tree.radiusSearch(center,search_radius*search_radius,candidates);
         for (const auto &candidate : candidates) {
@@ -1793,12 +1807,8 @@ void ContentRemap::restore(const Param &param, Variables &var) const
     double current[3] = {}, current_magnitude[3] = {}, imported[3] = {}, capacity[3] = {};
     for (int e = 0; e < var.nelem; ++e) {
         const double volume = (*var.volume)[e];
-        const double alpha = var.mat->alpha_biot(e);
-        const bool feedback = param.control.has_poroelastic_pressure_feedback;
-        const double storage = feedback ? hydraulic_inverse_biot_modulus(*var.mat,e) :
-                                         hydraulic_storage(param,*var.mat,e);
-        const double lag = feedback && !hydraulic_strain_form(param) ?
-            alpha*alpha*hydraulic_mean_stress_compliance(*var.mat,e) : 0;
+        double storage, lag;
+        remap_coefficients(param,var,e,storage,lag);
         for (int j = 0; j < NODES_PER_ELEM; ++j) {
             double value[3]; remap_content(param,var,e,j,value);
             for (int k = 0; k < 3; ++k) {

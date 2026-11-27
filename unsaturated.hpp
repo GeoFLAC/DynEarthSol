@@ -64,10 +64,17 @@ inline double retention_se(const Retention &r, double p, double *dse = nullptr)
     return se;
 }
 
+// Saturation S = Sr + (1-Sr)*Se from the effective saturation se.
+#pragma acc routine seq
+inline double retention_sat_of_se(const Retention &r, double se)
+{
+    return r.sr + (1 - r.sr) * se;
+}
+
 #pragma acc routine seq
 inline double retention_sat(const Retention &r, double p)
 {
-    return r.sr + (1 - r.sr) * retention_se(r, p);
+    return retention_sat_of_se(r, retention_se(r, p));
 }
 
 // Mualem (van Genuchten), Burdine (Brooks-Corey) or exponential (Gardner).
