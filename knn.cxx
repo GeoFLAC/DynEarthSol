@@ -56,7 +56,7 @@ KNN::~KNN()
 #endif
 }
 
-int KNN::max_batch_size(int k_neig) const
+int KNN::max_batch_size([[maybe_unused]] int k_neig) const
 {
 #if defined(ACC) && !defined(USEMPI)
     int batch_size = knn_bvh_max_batch(static_cast<KNNBVHState*>(m_bvh_state), k_neig);
@@ -65,7 +65,6 @@ int KNN::max_batch_size(int k_neig) const
     }
     return batch_size;
 #else
-    (void)k_neig;
     return 16 * 1024 * 1024;
 #endif
 }

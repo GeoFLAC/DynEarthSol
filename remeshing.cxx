@@ -4232,9 +4232,10 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     at.elem = p.facet_elem[best];
 }
 #else
-void side_profile_locate(const SideProfile &p, double s, double rel, SideProfileAt &at)
+// s is unused: a 2D wall is a line.
+void side_profile_locate(const SideProfile &p, [[maybe_unused]] double s, double rel,
+                         SideProfileAt &at)
 {
-    (void)s;   // a 2D wall is a line
     if (p.empty())
         die(EXIT_INTERNAL_ASSERT, "side_profile_locate: profile without a recorded column");
     if (std::isnan(rel)) die(EXIT_RUNTIME_NAN, "side_profile_locate: NaN query depth");

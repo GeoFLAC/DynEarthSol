@@ -675,7 +675,7 @@ double host_load_avg_1m()
 #endif
 }
 
-double device_mem_used_dev_gib(const DeviceInfo& dev)
+double device_mem_used_dev_gib([[maybe_unused]] const DeviceInfo& dev)
 {
 #ifdef ACC
     if (dev.using_gpu && dev.mem_total_gib > 0) {
@@ -685,8 +685,6 @@ double device_mem_used_dev_gib(const DeviceInfo& dev)
         if (free_now)
             return dev.mem_total_gib - static_cast<double>(free_now) / BYTES_PER_GIB;
     }
-#else
-    (void)dev;
 #endif
     return 0;
 }
