@@ -42,10 +42,10 @@ def config():
     reset_boundaries(cfg['bc'], vbc='1', hbc='0')
     cfg['bc'].update(stress_bc_z1='0',stress_val_z1='0')
     cfg['mat'].update(rho0='[2500]',alpha='[0]',hydraulic_perm='[0]')
-    cfg['injection']=dict(enabled='true',num_points='2',points_x='[0.37,0.61]',points_y='[0.43,0.57]',
-        points_z='[-0.53,-0.41]',points_unit='m',rate_model='constant_rate',rate=json.dumps(RATES),
-        start_time_in_yr=json.dumps([.25/YEAR2SEC,.8/YEAR2SEC]),
-        end_time_in_yr=json.dumps([2.75/YEAR2SEC,2.1/YEAR2SEC]))
+    cfg['fluid_source']=dict(num_points='2',point_x='[0.37,0.61]',point_y='[0.43,0.57]',
+        point_z='[-0.53,-0.41]',point_unit='m',point_rate_model='constant_rate',point_rate=json.dumps(RATES),
+        point_start_time_in_yr=json.dumps([.25/YEAR2SEC,.8/YEAR2SEC]),
+        point_end_time_in_yr=json.dumps([2.75/YEAR2SEC,2.1/YEAR2SEC]))
     return cfg
 
 
@@ -66,8 +66,9 @@ def check_balance(folder,cfg):
         p=model.read_field(row['frame'],'pore pressure')
         assert np.isfinite(p).all()
         fluid=float(np.dot(nodal*sb,p-p0))
-        expected_fluid=amount(row['time'],RATES)
-        if cfg.getint('bc','num_wells',fallback=0):expected_fluid-=5e-9*row['time']
+        expected_fluid=amount(row['time'],RATES) if cfg.getint('fluid_source','num_points') else 0.
+        if cfg.getint('fluid_source','num_wells',fallback=0):
+            expected_fluid+=sum(json.loads(cfg['fluid_source']['well_rate']))*row['time']
         np.testing.assert_allclose(fluid,expected_fluid,rtol=3e-12,atol=1e-18)
         report.append(dict(time_s=row['time'],fluid_m3=fluid,expected_fluid_m3=expected_fluid))
     return report
@@ -112,22 +113,24 @@ def material(exe,out,dim):
     the positions their checkpoints give must follow the monitor points that
     start with them, the screen must keep its whole rate, and a restart must
     continue them exactly."""
-    lift,dt,steps,point_rate,well_rate=1.,.1,4,1e-10,3e-10
+    lift,dt,steps,point_rate,extraction_rate=1.,.1,4,1e-10,3e-10
     point,bottom,top=[.4,.4,-5],[.6,.6,-6.5],[.6,.6,-3.5]
     cfg=read_config(ROOT/'tests/functional/pt_remesh_restart.cfg')
     cfg['sim']['has_output_during_remeshing']='no'
     cfg['control'].update(fixed_dt=str(dt),has_thermal_diffusion='true',gravity='0',PT_absolute_tolerance='1e-8')
-    cfg['bc'].update(vbc_val_z0=str(lift),num_wells='1',well_x=f'[{bottom[0]}]',well_y=f'[{bottom[1]}]',
-                     well_z_bottom=f'[{bottom[2]}]',well_z_top=f'[{top[2]}]',well_rate=f'[{well_rate}]')
-    cfg['injection']=dict(enabled='true',num_points='1',points_x=f'[{point[0]}]',points_y=f'[{point[1]}]',
-                          points_z=f'[{point[2]}]',rate=f'[{point_rate}]',rate_model='constant_rate')
+    cfg['bc']['vbc_val_z0']=str(lift)
+    cfg['fluid_source']=dict(num_wells='1',well_x=f'[{bottom[0]}]',well_y=f'[{bottom[1]}]',
+        well_screen_bottom=f'[{bottom[2]}]',well_screen_top=f'[{top[2]}]',well_rate=f'[{-extraction_rate}]',
+        num_points='1',point_x=f'[{point[0]}]',point_y=f'[{point[1]}]',
+        point_z=f'[{point[2]}]',point_rate=f'[{point_rate}]',point_rate_model='constant_rate')
     starts=[point,bottom,top]
     cfg['monitor']=dict(enabled='true',step_interval='1',num_points='3',point_type='particle',
                         points_x=json.dumps([q[0] for q in starts]),points_y=json.dumps([q[1] for q in starts]),
                         points_z=json.dumps([q[2] for q in starts]))
     if dim==2:
-        for section in ('injection','monitor'):del cfg[section]['points_y']
-        del cfg['bc']['well_y']
+        del cfg['fluid_source']['point_y']
+        del cfg['fluid_source']['well_y']
+        del cfg['monitor']['points_y']
     restart_check(exe,cfg,out/'remesh',steps,1,require_remesh=True)
     folder=out/'remesh';model=Dynearthsol(str(folder/'fresh'));nodes=dim+1
     axes=('x','y','z') if dim==3 else ('x','z')
@@ -151,7 +154,7 @@ def material(exe,out,dim):
             gap=max(gap,float(np.max(np.abs(source-tracked[monitor,frame]))))
         if frame:
             b=model.read_field(frame,'fluid balance')
-            np.testing.assert_allclose(b[2],(well_rate-point_rate)*dt,rtol=1e-9,atol=0)
+            np.testing.assert_allclose(b[2],(extraction_rate-point_rate)*dt,rtol=1e-9,atol=0)
     assert gap<=1e-9,('Sources left the material their monitor points follow',gap)
     start=np.array([point[0],point[2]] if dim==2 else point)
     moved=float(np.max(np.abs(found[0]-start)))
@@ -169,30 +172,28 @@ def main():
     shutil.copy2(Path(__file__),out/'runner.py')
     result=dict(executable_sha256=digest(exe),checks={},runner_sha256=digest(Path(__file__)))
     modes=['fluid-only','total-amount','half-step','subcycled',
-           'millimetres','centimetres','kilometres','point-and-well','physical-inertia']
-    if dim==2:modes.append('legacy-coordinate')
+           'millimetres','centimetres','kilometres','point-and-well','physical-inertia','zero-count']
     for mode in modes:
         cfg=config()
-        # The two-coordinate legacy alias is tested in 2D after probing a base run.
+        sources=cfg['fluid_source']
         if mode=='total-amount':
-            cfg['injection'].update(rate_model='total_amount',total_amount=json.dumps((np.array(RATES)*[2.5,1.3]).tolist()),
-                                    duration_in_yr=json.dumps([2.5/YEAR2SEC,1.3/YEAR2SEC]))
-            del cfg['injection']['end_time_in_yr']
+            sources.update(point_rate_model='total_amount',
+                           point_total_amount=json.dumps((np.array(RATES)*[2.5,1.3]).tolist()),
+                           point_duration_in_yr=json.dumps([2.5/YEAR2SEC,1.3/YEAR2SEC]))
+            del sources['point_end_time_in_yr']
+        if mode=='zero-count':sources['num_points']='0'
         if mode=='half-step':cfg['control']['fixed_dt']='.5';cfg['sim']['max_steps']='8'
         if mode=='subcycled':cfg['mat']['hydraulic_perm']='[1e-10]'
         if mode=='physical-inertia':cfg['control']['is_quasi_static']='false'
         if mode=='point-and-well':
-            cfg['bc'].update(num_wells='1',well_x='[0.5]',well_y='[0.5]',
-                well_z_top='[-0.2]',well_z_bottom='[-0.8]',well_rate='[5e-9]')
+            sources.update(num_wells='1',well_x='[0.5]',well_y='[0.5]',
+                well_screen_top='[-0.2]',well_screen_bottom='[-0.8]',well_rate='[-5e-9]')
         if mode in ('millimetres','centimetres','kilometres'):
             unit,scale={'millimetres':('mm',1000),'centimetres':('cm',100),'kilometres':('km',.001)}[mode]
-            cfg['injection']['points_unit']=unit
-            for name in ('points_x','points_y','points_z'):
-                cfg['injection'][name]=json.dumps((np.array(json.loads(cfg['injection'][name]))*scale).tolist())
-        # The solver rejects ambiguous legacy-y and modern-z source coordinates in 2D.
-        if dim==2:
-            del cfg['injection']['points_y']
-            if mode=='legacy-coordinate':cfg['injection']['points_y']=cfg['injection'].pop('points_z')
+            sources['point_unit']=unit
+            for name in ('point_x','point_y','point_z'):
+                sources[name]=json.dumps((np.array(json.loads(sources[name]))*scale).tolist())
+        if dim==2:del sources['point_y']
         folder=out/mode;run(exe,folder,cfg)
         assert Dynearthsol(str(folder/'fresh')).ndims==dim
         records=check_balance(folder,cfg);payloads=restart(exe,folder,cfg)
@@ -200,22 +201,23 @@ def main():
         print(f'PASS {dim}D {mode}: balance and exact physical restart; '+
               f'{len(payloads["legacy_output_clock_rounding"])} legacy output-clock roundings',flush=True)
     invalid={
-        'zero-count':('injection','num_points','0'),
-        'outside':('injection','points_x','[2,.5]'),
-        'bad-unit':('injection','points_unit','feet'),
-        'nan-rate':('injection','rate','[nan]'),
-        'bad-duration':('injection','duration_in_yr','[0]'),
-        'nan-time':('injection','start_time_in_yr','[nan]'),
-        'bad-rate-model':('injection','rate_model','unknown')}
+        'negative-count':('fluid_source','num_points','-1'),
+        'no-hydraulics':('control','has_hydraulic_diffusion','false'),
+        'outside':('fluid_source','point_x','[2,.5]'),
+        'bad-unit':('fluid_source','point_unit','feet'),
+        'nan-rate':('fluid_source','point_rate','[nan]'),
+        'bad-duration':('fluid_source','point_duration_in_yr','[0]'),
+        'nan-time':('fluid_source','point_start_time_in_yr','[nan]'),
+        'bad-rate-model':('fluid_source','point_rate_model','unknown')}
     for name,(section,key,value) in invalid.items():
         cfg=config()
-        if dim==2:del cfg['injection']['points_y']
-        if name=='bad-duration':del cfg['injection']['end_time_in_yr']
+        if dim==2:del cfg['fluid_source']['point_y']
+        if name=='bad-duration':del cfg['fluid_source']['point_end_time_in_yr']
         cfg[section][key]=value
         run(exe,out/name,cfg,11);result['checks'][name]=True
     cfg=config()
-    if dim==2:del cfg['injection']['points_y']
-    cfg['injection']['points_x']='[0,0]'
+    if dim==2:del cfg['fluid_source']['point_y']
+    cfg['fluid_source']['point_x']='[0,0]'
     cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
     folder=out/'injection-fixed-node'
     run(exe,folder,cfg)

@@ -254,17 +254,16 @@ def main():
                 x, z = float(cfg["mesh"]["xlength"]), float(cfg["mesh"]["zlength"])
                 y = float(cfg["mesh"].get("ylength", "0"))
                 cfg["mat"].update(hydraulic_perm="[1e-16]")
-                cfg["bc"].update(num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",
-                                 well_z_top=f"[{-0.3*z}]", well_z_bottom=f"[{-0.7*z}]",
-                                 well_rate="[1e-6]" if ndims==2 else "[1e-3]",
-                                 hbc_x0="3", hbc_flux="[1e-12, 0, 0, 0, 0, 0]")
-                if not cfg.has_section("injection"): cfg.add_section("injection")
-                cfg["injection"].update(enabled="yes", num_points="1", points_x=f"[{0.63*x}]",
-                                        points_y=f"[{0.55*y}]", points_z=f"[{-0.45*z}]",
-                                        rate="[-1e-6]" if ndims==2 else "[-1e-3]")
+                cfg["bc"].update(hbc_x0="3", hbc_flux="[1e-12, 0, 0, 0, 0, 0]")
+                rate = "[-1e-6]" if ndims==2 else "[-1e-3]"
+                cfg["fluid_source"] = dict(
+                    num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",
+                    well_screen_top=f"[{-0.3*z}]", well_screen_bottom=f"[{-0.7*z}]", well_rate=rate,
+                    num_points="1", point_x=f"[{0.63*x}]", point_y=f"[{0.55*y}]",
+                    point_z=f"[{-0.45*z}]", point_rate=rate)
                 if ndims==2:
-                    del cfg["injection"]["points_y"]
-                    del cfg["bc"]["well_y"]
+                    del cfg["fluid_source"]["point_y"]
+                    del cfg["fluid_source"]["well_y"]
             if name=="pt-hydraulic":
                 # The physical-step solver must converge, including its
                 # initial equilibrium, so the case starts from the
@@ -291,9 +290,10 @@ def main():
     cfg["control"].update(has_PT="no", is_quasi_static="no", gravity="0", fixed_dt="0.001",
                           has_thermal_diffusion="no", has_moving_mesh="yes",
                           has_poroelastic_pressure_feedback="no")
-    cfg["bc"].update(vbc_val_x1="1", stress_bc_z1="0", stress_val_z1="0", hbc_z1="0",
-                     num_wells="1", well_x="[1100]", well_z_top="[-25]", well_z_bottom="[-75]",
-                     well_rate="[1e-8]")
+    cfg["bc"].update(vbc_val_x1="1", stress_bc_z1="0", stress_val_z1="0", hbc_z1="0")
+    cfg["fluid_source"] = dict(num_wells="1", well_x="[1100]",
+                               well_screen_top="[-25]", well_screen_bottom="[-75]",
+                               well_rate="[-1e-8]")
     cfg["ic"].update(weakzone_option="0", has_body_force_adjustment="no")
     cfg["mat"]["hydraulic_perm"] = "[1e-18]"
     reference, _ = run("moving-well-parent", cfg, executables["serial"])
@@ -309,10 +309,8 @@ def main():
                                    "1\n0 600 -50 0 0\n")
     cfg["mesh"].update(meshing_option="90", poly_filename=str(work / "box.poly"))
     cfg["control"]["has_moving_mesh"] = "no"
-    for key in ("num_wells", "well_x", "well_z_top", "well_z_bottom", "well_rate"):
-        del cfg["bc"][key]
-    cfg["injection"] = dict(enabled="yes", num_points="2", points_x="[-25, 1225]",
-                            points_z="[-43, -57]", rate="[1e-6, -1e-6]")
+    cfg["fluid_source"] = dict(num_points="2", point_x="[-25, 1225]",
+                               point_z="[-43, -57]", point_rate="[1e-6, -1e-6]")
     for label, command in (("serial", [str(executables["serial"])]),
                            ("mpi2", launcher + ["-n", "2", str(executables["mpi"])])):
         directory = work / f"outside-points-{label}"
@@ -327,8 +325,8 @@ def main():
 
     # The same points inside the mesh: every balance entry cancels to rounding, which
     # the ranks leave in another order.
-    cfg["injection"]["points_x"] = "[375, 825]"
-    rates = [float(r) for r in cfg["injection"]["rate"].strip("[]").split(",")]
+    cfg["fluid_source"]["point_x"] = "[375, 825]"
+    rates = [float(r) for r in cfg["fluid_source"]["point_rate"].strip("[]").split(",")]
     reference, _ = run("cancelling-points-parent", cfg, executables["serial"])
     current, timing = run("cancelling-points-mpi2", cfg, executables["mpi"], 2)
     exact = all([compare(reference, current, frame, env, sum(map(abs, rates)))

@@ -43,12 +43,12 @@ def config(spacing, dt, wells):
                       output_step_interval=str(steps//8), checkpoint_frame_interval='1')
     cfg['mesh'].update(xlength=str(L), ylength=str(L))
     cfg['control']['fixed_dt'] = str(dt)
-    cfg['bc'].update(num_wells=str(len(wells)),
+    cfg['fluid_source'].update(num_wells=str(len(wells)),
                      well_x=str([x for x, _, _ in wells]),
                      well_y=str([y for _, y, _ in wells]),
-                     well_rate=str([q for _, _, q in wells]),
-                     well_z_top=str([0.]*len(wells)),
-                     well_z_bottom=str([-ct.B]*len(wells)),
+                     well_rate=str([-q for _, _, q in wells]),
+                     well_screen_top=str([0.]*len(wells)),
+                     well_screen_bottom=str([-ct.B]*len(wells)),
                      well_schedule_time_in_yr=str([0., PUMP/ct.YEAR2SEC, PUMP/ct.YEAR2SEC]))
     return cfg
 

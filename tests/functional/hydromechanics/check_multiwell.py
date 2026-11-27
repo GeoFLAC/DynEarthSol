@@ -50,12 +50,12 @@ def main():
         cfg['sim'].update(max_steps='600', max_time_in_yr=repr(600 * 37 / YEAR2SEC),
                           output_step_interval='100')
         rates = [rate, -0.35 * rate]
-        cfg['bc'].update(num_wells=str(len(wells)),
+        cfg['fluid_source'].update(num_wells=str(len(wells)),
                          well_x=json.dumps([10 if w == 0 else 30 for w in wells]),
                          well_y=json.dumps([20] * len(wells)),
-                         well_z_top=json.dumps([0] * len(wells)),
-                         well_z_bottom=json.dumps([-10] * len(wells)),
-                         well_rate=json.dumps([rates[w] for w in wells]))
+                         well_screen_top=json.dumps([0] * len(wells)),
+                         well_screen_bottom=json.dumps([-10] * len(wells)),
+                         well_rate=json.dumps([-rates[w] for w in wells]))
         with (folder / 'input.cfg').open('w') as stream:
             cfg.write(stream)
         records[label] = dict(executable_sha256=original_hash,

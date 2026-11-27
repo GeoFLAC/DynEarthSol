@@ -984,8 +984,8 @@ struct Variables {
     // For hydraulic processes
     double_vec *ppressure = nullptr; // pore pressure
     double_vec *dppressure = nullptr; // delta pore pressure
-    double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
-    PointSourceOwners fluid_points; // [injection]
+    double_vec *fluid_source = nullptr; // signed nodal well supply rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
+    PointSourceOwners fluid_points;
     WellPieces well_pieces;
     double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 

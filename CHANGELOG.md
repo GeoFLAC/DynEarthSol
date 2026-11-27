@@ -61,20 +61,20 @@ For a release, the full auto-generated list of merged pull requests is in its
 - A rigid frictionless top platen (`bc.vbc_z1=8`) and normal surface stress
   on arbitrary facets (`bc.stress_bc_*=4`) support Mandel and Cryer
   consolidation benchmarks.
-- Scheduled fluid point sources support signed rates or total amounts,
-  exact partial-step schedules, mesh-aware distribution and independent
-  volume balance checks. Positive point rates inject fluid. Contributions
-  at prescribed-pressure nodes enter the boundary reaction.
+- The `[fluid_source]` section configures wells and point sources. Positive
+  rates inject and negative rates extract. Point sources support signed
+  rates or total amounts and exact partial-step schedules. Contributions at
+  prescribed-pressure nodes enter the boundary reaction.
 - Explicit hydraulic transport supports scheduled pressure/flux boundaries and
   a checkpointed fluid-balance diagnostic.
   Large fixed timesteps use stable hydraulic substeps.
 
-- Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
-  through a screen with a shared rate schedule. Positive well rates extract
-  fluid. Screens and point sources move with the material and restart from
-  their saved locations. After a remesh cuts a screen, the log reports the
-  retained fraction and the in-domain screen carries the prescribed total
-  rate. A screen with no in-domain length stops with exit 51.
+- Vertical rate-controlled wells in `[fluid_source]` share one schedule
+  multiplier applied to every rate. Screens and point sources move with the
+  material and restart from their saved locations. After a remesh cuts a
+  screen, the log reports the retained fraction and the in-domain length
+  carries the prescribed total rate. A screen with no in-domain length
+  stops with exit 51.
 
 - A thickness-averaged Biot pumping reference covers finite well/domain
   radii and compressible fluid and grains, with standalone NumPy/SciPy checks.

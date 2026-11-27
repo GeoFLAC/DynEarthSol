@@ -45,12 +45,14 @@ def config(dim, edge):
     bc = cfg['bc']
     for side in ('x0', 'x1', 'y0', 'y1', 'z0'):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
-    bc.update(hbc_z1='0', stress_bc_z1='0', stress_val_z1='0', num_wells='1',
-              well_x=f'[{0.0 if edge else L / 2}]', well_y=f'[{0.0 if edge else L / 2}]',
-              well_z_top='[0]', well_z_bottom=f'[{-H}]', well_rate=f'[{Q}]',
-              num_well_schedule='5',
-              well_schedule_time_in_yr='[' + ', '.join(repr(x / YEAR2SEC) for x in t) + ']',
-              well_schedule_ratio='[1, 1, 0, 0, -0.5]')
+    bc.update(hbc_z1='0', stress_bc_z1='0', stress_val_z1='0')
+    cfg['fluid_source'] = dict(num_wells='1',
+                               well_x=f'[{0.0 if edge else L / 2}]',
+                               well_y=f'[{0.0 if edge else L / 2}]',
+                               well_screen_top='[0]', well_screen_bottom=f'[{-H}]',
+                               well_rate=f'[{-Q}]', num_well_schedule='5',
+                               well_schedule_time_in_yr='[' + ', '.join(repr(x / YEAR2SEC) for x in t) + ']',
+                               well_schedule_ratio='[1, 1, 0, 0, -0.5]')
     cfg['mat'].update(material_options(MAT))
     return cfg, Q
 
@@ -91,8 +93,9 @@ def trimmed_screen(exe, folder, dim):
     cfg = remesh_configuration('domain-remove')
     rate, dt = 1e-8, cfg.getfloat('control', 'fixed_dt')
     cfg['sim']['has_output_during_remeshing'] = 'no'
-    cfg['bc'].update(num_wells='1', well_x='[0.5]', well_y='[0.5]',
-                     well_z_bottom='[-1]', well_z_top='[-0.2]', well_rate=f'[{rate}]')
+    cfg['fluid_source'] = dict(num_wells='1', well_x='[0.5]', well_y='[0.5]',
+                               well_screen_bottom='[-1]', well_screen_top='[-0.2]',
+                               well_rate=f'[{-rate}]')
     restart_check(exe, cfg, folder, steps=3, restart_frame=2, require_remesh=True)
     model = Dynearthsol(str(folder/'fresh'))
     assert model.ndims == dim
@@ -106,7 +109,7 @@ def trimmed_screen(exe, folder, dim):
         z = checkpoint[keys[1]][:dim+1] @ xyz[conn[checkpoint[keys[0]][0]], -1]
         assert z < -1., ('the screen must reach the receding base', frame, z)
         np.testing.assert_allclose(z, xyz[:, -1].min(), rtol=0, atol=1e-10)
-    return dict(remeshed=True, exact_restart=True, well_rate=rate)
+    return dict(remeshed=True, exact_restart=True, well_rate=-rate)
 
 
 def main():

@@ -59,10 +59,12 @@ def config(h):
     bc = cfg['bc']
     reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0')
     t = [0.0, PUMP, PUMP]
-    bc.update(stress_bc_z1='0', stress_val_z1='0', num_wells='1', well_x='[0.0]', well_y='[0.0]',
-              well_z_top='[0]', well_z_bottom=f'[{-B}]', well_rate=f'[{Q/4!r}]',
-              num_well_schedule='3', well_schedule_time_in_yr='['+', '.join(repr(x/YEAR2SEC) for x in t)+']',
-              well_schedule_ratio='[1, 1, 0]')
+    bc.update(stress_bc_z1='0', stress_val_z1='0')
+    cfg['fluid_source'] = dict(num_wells='1', well_x='[0.0]', well_y='[0.0]',
+                               well_screen_top='[0]', well_screen_bottom=f'[{-B}]',
+                               well_rate=f'[{-Q/4!r}]', num_well_schedule='3',
+                               well_schedule_time_in_yr='['+', '.join(repr(x/YEAR2SEC) for x in t)+']',
+                               well_schedule_ratio='[1, 1, 0]')
     cfg['ic'].update(has_body_force_adjustment='false')
     cfg['mat'].update(material_options(dict(MAT, permeability=PERM)))
     return cfg

@@ -34,11 +34,8 @@ def run(executable, folder, spacing):
                       checkpoint_frame_interval='1', has_initial_checkpoint='true')
     cfg['mesh'].update(xlength=str(L), ylength=str(WIDTH), zlength=str(WIDTH))
     cfg['control']['fixed_dt'] = str(DT)
-    for key in list(cfg['bc']):
-        if key.startswith(('well_', 'num_well')):
-            del cfg['bc'][key]
-    cfg['bc'].update(num_wells='0', hbc_x0='2', hbc_x1='2',
-                     hbc_pressure='[0,0,0,0,0,0]')
+    del cfg['fluid_source']
+    cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[0,0,0,0,0,0]')
     run_des(executable, folder, 'seed', cfg, timeout=600)
     seed = ct.Dynearthsol(str(folder/'seed'))
     assert seed.ndims == 3

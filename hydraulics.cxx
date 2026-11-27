@@ -557,7 +557,7 @@ static void pressure_step(const Param &param, const Variables &var,
     // receives each facet once.
     mpi_sync(var, tmp_result, MpiEntity::Element, NODES_PER_ELEM);
 
-    // Wells extract their exact schedule volume over this step [time - dt, time].
+    // Use the same signed supply rate for both source types over the substep.
     const bool has_wells = param.bc.num_wells > 0;
     const bool has_points = param.injection.enabled;
     if (has_points)
@@ -590,8 +590,8 @@ static void pressure_step(const Param &param, const Variables &var,
             for (int k = 0; k < npatch; ++k)
                 tdot[n] += tmp_result[patch[k]][lpatch[k]];
         }
-        if (has_wells)
-            tdot[n] += well_ratio * (*var.fluid_source)[n];
+        const double well_rate = has_wells ? well_ratio * (*var.fluid_source)[n] : 0;
+        if (has_wells) tdot[n] -= well_rate;
         const double point_rate = has_points ? (*var.fluid_point_source)[n] : 0;
         if (has_points) tdot[n] -= point_rate;
 
@@ -607,7 +607,7 @@ static void pressure_step(const Param &param, const Variables &var,
         ppressure[n] = p0 - increment;
         dppressure[n] += increment;
         stored += change;
-        if (has_wells) wells += well_ratio * (*var.fluid_source)[n] * dt;
+        if (has_wells) wells -= well_rate * dt;
         if (has_points) wells -= point_rate*dt;
         if (side >= 0) boundary += change + tdot[n]*dt;
 

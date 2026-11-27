@@ -20,33 +20,30 @@ static const char *const side_name[6] = {"x0", "x1", "y0", "y1", "z0", "z1"};
 static void declare_point_source(opt::Registry &cfg, const char *section,
                                  Injection &source)
 {
-    const auto key = [section](const char *name) {
-        return std::string(section) + "." + name;
-    };
+    const std::string group = std::string(section) + ".";
+    const std::string point = group + "point_";
     cfg.add_options()
-        (key("enabled").c_str(), opt::value<bool>(&source.enabled)->default_value(false),
-         "Enable scheduled point sources.")
-        (key("num_points").c_str(), opt::value<int>(&source.num_points)->default_value(0),
-         "Number of source points.")
-        (key("points_x").c_str(), opt::list()->default_value("[]"),
-         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
-        (key("points_y").c_str(), opt::list()->default_value("[]"),
-         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
-        (key("points_z").c_str(), opt::list()->default_value("[]"),
-         "Point coordinates; in 2D points_y is the legacy alias for points_z.")
-        (key("points_unit").c_str(), opt::value<std::string>(&source.points_unit)->default_value("m"),
+        ((group+"num_points").c_str(), opt::value<int>(&source.num_points)->default_value(0),
+         "Number of fluid point sources. Zero disables them.")
+        ((point+"x").c_str(), opt::list()->default_value("[]"),
+         "x coordinate of each point.")
+        ((point+"y").c_str(), opt::list()->default_value("[]"),
+         "y coordinate of each point (3D only).")
+        ((point+"z").c_str(), opt::list()->default_value("[]"),
+         "z coordinate of each point.")
+        ((point+"unit").c_str(), opt::value<std::string>(&source.points_unit)->default_value("m"),
          "Coordinate unit: mm, cm, m or km.")
-        (key("rate_model").c_str(), opt::value<std::string>()->default_value("constant_rate"),
+        ((point+"rate_model").c_str(), opt::value<std::string>()->default_value("constant_rate"),
          "Source schedule: constant_rate or total_amount.")
-        (key("rate").c_str(), opt::list()->default_value("[0]"),
-         "Positive rate supplies fluid volume; negative rate extracts.")
-        (key("total_amount").c_str(), opt::list()->default_value("[0]"),
-         "Total fluid volume over the scheduled interval.")
-        (key("start_time_in_yr").c_str(), opt::list()->default_value("[0]"),
+        ((point+"rate").c_str(), opt::list()->default_value("[0]"),
+         "Positive rates supply fluid volume and negative rates extract it.")
+        ((point+"total_amount").c_str(), opt::list()->default_value("[0]"),
+         "Signed fluid volume over the scheduled interval (positive supplies fluid).")
+        ((point+"start_time_in_yr").c_str(), opt::list()->default_value("[0]"),
          "Source start time in years.")
-        (key("end_time_in_yr").c_str(), opt::list()->default_value("[]"),
+        ((point+"end_time_in_yr").c_str(), opt::list()->default_value("[]"),
          "Finite end times in years; alternative to duration.")
-        (key("duration_in_yr").c_str(), opt::list()->default_value("[]"),
+        ((point+"duration_in_yr").c_str(), opt::list()->default_value("[]"),
          "Positive schedule durations in years.")
         ;
 }
@@ -70,7 +67,29 @@ static void declare_parameters(opt::Registry &cfg,
      *
      */
 
-    declare_point_source(cfg, "injection", p.injection);
+    cfg.add_options()
+        ("fluid_source.num_wells", opt::value<int>(&p.bc.num_wells)->default_value(0),
+         "Number of vertical rate-controlled wells. Requires control.has_hydraulic_diffusion.")
+        ("fluid_source.well_x", opt::list()->default_value("[]"),
+         "x coordinate of each well (in m).")
+        ("fluid_source.well_y", opt::list()->default_value("[]"),
+         "y coordinate of each well (in m, 3D only).")
+        ("fluid_source.well_screen_top", opt::list()->default_value("[]"),
+         "Top of each well screen (in m).")
+        ("fluid_source.well_screen_bottom", opt::list()->default_value("[]"),
+         "Bottom of each well screen (in m), below its top.")
+        ("fluid_source.well_rate", opt::list()->default_value("[]"),
+         "Fluid volume supplied by each well at schedule ratio 1, spread uniformly over the "
+         "screen: m^3/s in 3D, m^2/s per unit out-of-plane length in 2D. Negative extracts.")
+        ("fluid_source.num_well_schedule", opt::value<int>(&p.bc.num_well_schedule)->default_value(1),
+         "Number of points in the rate schedule shared by all wells.")
+        ("fluid_source.well_schedule_time_in_yr", opt::list()->default_value("[0]"),
+         "Non-decreasing times of the shared well schedule (in yr). Repeated times are steps.")
+        ("fluid_source.well_schedule_ratio", opt::list()->default_value("[1]"),
+         "Multiplier applied to every well rate, linear between the schedule times and held "
+         "outside them. Each hydraulic substep uses its exact time average.")
+        ;
+    declare_point_source(cfg, "fluid_source", p.injection);
     cfg.add_options()
         ("sim.modelname", opt::value<std::string>(&p.sim.modelname),
          "Prefix for the output files")
@@ -708,28 +727,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Boundary schedule times in years, nondecreasing; repeated times are steps.")
         ("bc.hbc_schedule_ratio", opt::list()->default_value("[1]"),
          "Ratios multiplying prescribed pressure and flux.")
-
-         // rate-controlled wells
-        ("bc.num_wells", opt::value<int>(&p.bc.num_wells)->default_value(0),
-         "Number of vertical rate-controlled wells. Requires control.has_hydraulic_diffusion.")
-        ("bc.well_x", opt::list()->default_value("[]"),
-         "x coordinate of each well (in m).")
-        ("bc.well_y", opt::list()->default_value("[]"),
-         "y coordinate of each well (in m, 3D only).")
-        ("bc.well_z_top", opt::list()->default_value("[]"),
-         "Top of each well screen (in m).")
-        ("bc.well_z_bottom", opt::list()->default_value("[]"),
-         "Bottom of each well screen (in m), below its top.")
-        ("bc.well_rate", opt::list()->default_value("[]"),
-         "Fluid volume extracted by each well at schedule ratio 1, spread uniformly over the "
-         "screen: m^3/s in 3D, m^2/s per unit out-of-plane length in 2D. Negative injects.")
-        ("bc.num_well_schedule", opt::value<int>(&p.bc.num_well_schedule)->default_value(1),
-         "Number of points in the well rate schedule.")
-        ("bc.well_schedule_time_in_yr", opt::list()->default_value("[0]"),
-         "Non-decreasing well schedule times (in yr). A repeated time is a step.")
-        ("bc.well_schedule_ratio", opt::list()->default_value("[1]"),
-         "Rate multiplier at each schedule time: linear in between, held outside. Each step "
-         "applies its exact time average, so the volume pumped is independent of dt.")
         ;
 
     // General stress (Neumann) boundary conditions
@@ -1435,21 +1432,21 @@ static void get_numbers(const opt::Registry &vm, const char *name,
 }
 
 
-// Read n coordinates per point from section.points_x, points_y and points_z. In 2D,
-// z_list() is called once points_x is read and names the list that holds z:
-// points_z or its legacy alias points_y.
+// Read n coordinates per point. In 2D z_list() names the vertical list so
+// callers can handle the monitor's legacy coordinate alias.
 template<class F>
 static void get_points(const opt::Registry &vm, const std::string &section, int n,
-                       double_vec &x, double_vec &y, double_vec &z, const F &z_list)
+                       double_vec &x, double_vec &y, double_vec &z, const F &z_list,
+                       const std::string &prefix = "points_")
 {
     const std::string count = section + ".num_points";
     const auto read = [&](const std::string &name, double_vec &v) {
         get_numbers(vm, (section + "." + name).c_str(), v, n, count.c_str());
     };
-    read("points_x", x);
+    read(prefix+"x", x);
 #ifdef THREED
-    read("points_y", y);
-    read("points_z", z);
+    read(prefix+"y", y);
+    read(prefix+"z", z);
 #else
     read(z_list(), z);
 #endif
@@ -1549,29 +1546,26 @@ static void check_mpi_support(const Param& p)
 static void parse_point_source(const opt::Registry &vm, const Param &p,
                                const char *section, Injection &source)
 {
-    const auto key = [section](const char *name) { return std::string(section)+"."+name; };
+    const auto key = [section](const char *name) { return std::string(section)+".point_"+name; };
     const auto fail = [section](const char *why) {
         const std::string text = std::string(section)+": "+why;
         die(EXIT_CONFIG_VALUE,text.c_str());
     };
-    if (source.num_points < 0 || (source.enabled && source.num_points == 0))
-        fail("enabled sources require a positive num_points.");
+    if (source.num_points < 0) fail("num_points must be nonnegative.");
+    source.enabled = source.num_points > 0;
     if (source.enabled && !p.control.has_hydraulic_diffusion)
         fail("fluid sources require has_hydraulic_diffusion=true.");
     if (source.num_points == 0) return;
     const int n = source.num_points;
-    const std::string group = key("num_points");
+    const std::string group = std::string(section)+".num_points";
     const auto list = [&](const char *name, double_vec &v, bool broadcast=false) {
         const std::string name_key = key(name);
         get_numbers(vm,name_key.c_str(),v,n,group.c_str(),broadcast);
     };
-    get_points(vm,section,n,source.points_x,source.points_y,source.points_z,[&]() {
-        const bool y = !vm.defaulted(key("points_y")), z = !vm.defaulted(key("points_z"));
-        if (y == z) fail("supply points_z in 2D; points_y is a mutually exclusive legacy alias.");
-        return z ? "points_z" : "points_y";
-    });
+    get_points(vm,section,n,source.points_x,source.points_y,source.points_z,
+               []() { return "point_z"; },"point_");
     if (points_to_metres(source.points_unit,n,source.points_x,source.points_y,source.points_z) == 0)
-        fail("points_unit must be mm, cm, m or km.");
+        fail("point_unit must be mm, cm, m or km.");
     const bool box = p.mesh.meshing_option == 1 || p.mesh.meshing_option == 2;
     const auto coordinate = [&](double &v,double lo,double hi) {
         if (!std::isfinite(v)) fail("point coordinates must remain finite after unit conversion.");
@@ -1591,14 +1585,14 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
     const std::string model = vm.str(key("rate_model"));
     if (model == "constant_rate") source.rate_model=injection_rate_constant;
     else if (model == "total_amount") source.rate_model=injection_rate_total_amount;
-    else fail("rate_model must be constant_rate or total_amount.");
+    else fail("point_rate_model must be constant_rate or total_amount.");
     list("rate",source.rate,true);list("total_amount",source.total_amount,true);
     list("start_time_in_yr",source.start_time,true);
     const bool end = !vm.defaulted(key("end_time_in_yr"));
     const bool duration = !vm.defaulted(key("duration_in_yr"));
-    if (end && duration) fail("end_time_in_yr and duration_in_yr are mutually exclusive.");
+    if (end && duration) fail("point_end_time_in_yr and point_duration_in_yr are mutually exclusive.");
     if (source.rate_model == injection_rate_total_amount && !end && !duration)
-        fail("total_amount requires an end time or duration.");
+        fail("point_total_amount requires an end time or duration.");
     if (end) list("end_time_in_yr",source.end_time,true);
     else if (duration) {
         double_vec span;list("duration_in_yr",span,true);
@@ -1623,7 +1617,7 @@ static void parse_point_source(const opt::Registry &vm, const Param &p,
 
 static void validate_parameters(const opt::Registry &vm, Param &p)
 {
-    parse_point_source(vm,p,"injection",p.injection);
+    parse_point_source(vm,p,"fluid_source",p.injection);
     std::cout << "Checking consistency of input parameters...\n";
 
     //
@@ -2299,7 +2293,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         }
 
         if (p.bc.num_wells < 0) {
-            die(EXIT_CONFIG_VALUE, "bc.num_wells must be >= 0.");
+            die(EXIT_CONFIG_VALUE, "fluid_source.num_wells must be >= 0.");
         }
         get_numbers(vm, "bc.hbc_pressure", p.bc.hbc_pressure, 6, "six boundaries");
         {
@@ -2324,28 +2318,28 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                        "Hydraulic boundary data must be finite.");
         if (p.bc.num_wells > 0) {
             if (! p.control.has_hydraulic_diffusion) {
-                die(EXIT_CONFIG_VALUE, "bc.num_wells > 0 requires control.has_hydraulic_diffusion.");
+                die(EXIT_CONFIG_VALUE, "fluid_source.num_wells > 0 requires control.has_hydraulic_diffusion.");
             }
-            const char *nw = "bc.num_wells";
-            get_numbers(vm, "bc.well_x", p.bc.well_x, p.bc.num_wells, nw);
+            const char *nw = "fluid_source.num_wells";
+            get_numbers(vm, "fluid_source.well_x", p.bc.well_x, p.bc.num_wells, nw);
 #ifdef THREED
-            get_numbers(vm, "bc.well_y", p.bc.well_y, p.bc.num_wells, nw);
+            get_numbers(vm, "fluid_source.well_y", p.bc.well_y, p.bc.num_wells, nw);
 #endif
-            get_numbers(vm, "bc.well_z_top", p.bc.well_z_top, p.bc.num_wells, nw);
-            get_numbers(vm, "bc.well_z_bottom", p.bc.well_z_bottom, p.bc.num_wells, nw);
-            get_numbers(vm, "bc.well_rate", p.bc.well_rate, p.bc.num_wells, nw);
+            get_numbers(vm, "fluid_source.well_screen_top", p.bc.well_z_top, p.bc.num_wells, nw);
+            get_numbers(vm, "fluid_source.well_screen_bottom", p.bc.well_z_bottom, p.bc.num_wells, nw);
+            get_numbers(vm, "fluid_source.well_rate", p.bc.well_rate, p.bc.num_wells, nw);
             for (int w = 0; w < p.bc.num_wells; ++w) {
                 if (! (p.bc.well_z_bottom[w] < p.bc.well_z_top[w]) ||
                     ! std::isfinite(p.bc.well_z_top[w] - p.bc.well_z_bottom[w]) ||
                     ! std::isfinite(p.bc.well_rate[w])) {
-                    std::cerr << "Error: well " << w << " needs well_z_bottom < well_z_top and a finite well_rate.\n";
+                    std::cerr << "Error: well " << w << " needs well_screen_bottom < well_screen_top and a finite well_rate.\n";
                     die(EXIT_CONFIG_VALUE);
                 }
             }
-            parse_schedule(vm, p.bc.num_well_schedule, "bc.num_well_schedule",
-                           "bc.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr,
-                           "bc.well_schedule_ratio", p.bc.well_schedule_ratio,
-                           "bc.well_schedule_time_in_yr must be non-decreasing.");
+            parse_schedule(vm, p.bc.num_well_schedule, "fluid_source.num_well_schedule",
+                           "fluid_source.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr,
+                           "fluid_source.well_schedule_ratio", p.bc.well_schedule_ratio,
+                           "fluid_source.well_schedule_time_in_yr must be non-decreasing.");
             require_finite({&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
                             &p.bc.well_z_bottom, &p.bc.well_rate,
                             &p.bc.well_schedule_time_in_yr, &p.bc.well_schedule_ratio},
