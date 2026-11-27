@@ -42,12 +42,22 @@ def fields(path):
 
 
 def checkpoint_array(path, name):
-    """Flat array of the field name in a save or checkpoint."""
-    import ast
+    """Flat array of a named field in a save or checkpoint."""
+    return checkpoint_arrays(path, (name,))[name]
+
+
+def checkpoint_arrays(path, names):
+    """Read selected named fields as flat arrays from a single save or checkpoint."""
+    import h5py
     import numpy as np
-    data = fields(path)
-    key = next(k for k in data if not k.startswith('@') and k.split('/')[-1] == name)
-    return np.frombuffer(data[key], dtype=np.dtype(ast.literal_eval(data['@' + key + '.layout'].decode())[1]))
+    found = checkpoint_file(path)
+    assert found is not None, path
+    with h5py.File(found, 'r') as stream:
+        data = {name: stream[name][...].ravel() for name in names}
+    for name, value in data.items():
+        if np.issubdtype(value.dtype, np.number):
+            assert np.isfinite(value).all(), (found, name)
+    return data
 
 
 def edit_checkpoint(path, drop=(), replace=None, rename=None):

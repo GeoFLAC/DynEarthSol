@@ -24,7 +24,7 @@ from Dynearthsol import Dynearthsol,scan_frames,YEAR2SEC
 
 
 from des_case import digest, expect_exit, read_config, reset_boundaries, restart_check, run_des, write_json
-from des_test_utils import checkpoint_array, fields, lumped_volumes, physical_differences, runtime_key
+from des_test_utils import checkpoint_arrays, fields, lumped_volumes, physical_differences, runtime_key
 
 
 RATES=[8e-8,-3e-8]
@@ -144,8 +144,7 @@ def material(exe,out,dim):
     gap=0.
     for frame in model.frames:
         x=model.read_field(frame,'coordinate');conn=model.read_field(frame,'connectivity')
-        a={name:checkpoint_array(folder/f'fresh.chkpt.{frame:06d}',name)
-           for name in names}
+        a=checkpoint_arrays(folder/f'fresh.chkpt.{frame:06d}',names)
         where=lambda element,weights:weights[:nodes]@x[conn[element]]
         found=[where(a['fluid point elements'][0],a['fluid point weights']),
                where(a['well piece elements'][0],a['well piece starts'][:nodes]),
