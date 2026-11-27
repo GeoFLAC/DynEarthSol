@@ -9,6 +9,7 @@
 #include <string>
 #include <sstream>
 #include <set>
+#include <utility>
 
 #ifdef THREED
 
@@ -3127,7 +3128,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
         for(int j=0; j<NDIMS; j++)
             coord2[i][j] = coord[n][j];
     }
-    coord.steal_ref(coord2);
+    coord = std::move(coord2);
 
     conn_t conn2(nelem);
     for(int i=0; i<nelem; i++) {
@@ -3137,7 +3138,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             conn2[i][j] = nd_inv[k];
         }
     }
-    connectivity.steal_ref(conn2);
+    connectivity = std::move(conn2);
 
     segment_t seg2(nseg);
     for(int i=0; i<nseg; i++) {
@@ -3146,7 +3147,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             seg2[i][j] = nd_inv[k];
         }
     }
-    segment.steal_ref(seg2);
+    segment = std::move(seg2);
 
     if (regattr != NULL) {
         regattr_t regattr2(nelem);
@@ -3154,7 +3155,7 @@ void renumbering_mesh(const Param& param, array_t &coord, conn_t &connectivity,
             int n = el_idx[i];
             regattr2[i][0] = (*regattr)[n][0];
         }
-        regattr->steal_ref(regattr2);
+        *regattr = std::move(regattr2);
     }
 
     if (init_elem_size_n != nullptr) {

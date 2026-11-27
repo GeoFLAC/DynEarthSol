@@ -715,9 +715,9 @@ static void test_material_trials() {
             if (model==MatProps::rh_elastic && alpha==0) {
                 double first_strength=0;
                 for(double slip : {1e-9,1.0,100.0}) {
-                    double amc,anphi,anpsi,hardn,tenmax,mu=0.6,theta=10;
-                    m->var.mat->plastic_props_rsf(0,0,amc,anphi,anpsi,hardn,tenmax,
-                                                 slip,mu,theta,0.1,0,true);
+                    double mu=0.6,theta=10;
+                    const auto p=m->var.mat->plastic_props_rsf(0,0,slip,mu,theta,0.1,0,true);
+                    const double anphi=p.strength.anphi;
                     if(slip==1e-9) first_strength=anphi;
                     check("initial RSF frozen friction",mu,0.6);
                     check("initial RSF frozen state",theta,10);
@@ -973,9 +973,7 @@ static void test_mohr_coulomb_returns() {
         set_mc_material(f, dilation);
         p.cohesion1={1e5+slope*1e-4};
         f.set_material();
-        double amc,anphi,anpsi,hardn,tenmax;
-        m->var.mat->plastic_props(0,0,amc,anphi,anpsi,hardn,tenmax);
-        check("MC nonzero cohesion slope",hardn,slope);
+        check("MC nonzero cohesion slope",m->var.mat->plastic_props(0,0).hardn,slope);
         const double psi=dilation==0 ? 1. : 3.;
         // face=0 is a single face; 1/2 repeat the low/high stress.
         for(int face=0;face<3;++face) for(double ratio : {1.,2.}) {
@@ -1004,8 +1002,8 @@ static void test_mohr_coulomb_returns() {
                 check("MC tangent plastic increment",dpls[e],increment);
                 check("MC tangent stays in linear strength range",pls[e]<1e-4,1);
             }
-            double new_amc,new_phi,new_psi,new_slope,new_cap;
-            m->var.mat->plastic_props(0,pls[0],new_amc,new_phi,new_psi,new_slope,new_cap);
+            const auto stored=m->var.mat->plastic_props(0,pls[0]);
+            const double new_amc=stored.strength.amc,new_phi=stored.strength.anphi;
             const double high=NDIMS==2 ? yy[0] : stress[0][2];
             check("MC stored history reproduces yield",stress[0][0]-new_phi*high+new_amc,0);
             f.update();
@@ -1143,9 +1141,8 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     const double recorded=nd==2 ? recorded_plastic_increment_2d(plastic)
                                 : recorded_plastic_increment(plastic);
     const double history=(*f.pls)[0];
-    double amc,anphi,anpsi,hardn,cap;
-    f.m->var.mat->plastic_props(0,start_angles ? initial_history : history,
-                                amc,anphi,anpsi,hardn,cap);
+    const auto props=f.m->var.mat->plastic_props(0,start_angles ? initial_history : history);
+    const double amc=props.strength.amc,anphi=props.strength.anphi,anpsi=props.strength.anpsi,cap=props.strength.ten_max;
     double scale=std::fabs(amc);
     for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
     const double shear=result[0]-anphi*result[nd-1]+amc, tension=cap-result[nd-1];
@@ -1338,8 +1335,8 @@ static void test_pure_2d_softening_return() {
         f.update();
         auto& stress=f.m->stress;
         const double history=(*f.pls)[0];
-        double amc,anphi,anpsi,hardn,cap;
-        f.m->var.mat->plastic_props(0,history,amc,anphi,anpsi,hardn,cap);
+        const auto props=f.m->var.mat->plastic_props(0,history);
+        const double amc=props.strength.amc,anphi=props.strength.anphi;
         const double low=0.5*(stress[0][0]+stress[0][1])-std::hypot(0.5*(stress[0][0]-stress[0][1]),stress[0][2]);
         const double high=stress[0][0]+stress[0][1]-low;
         check("pure 2D softening stays in the linear range",history>0 && history<1e-4,1);
@@ -1538,8 +1535,8 @@ static void test_rsf_law_returns() {
         f.state->assign(f.m->var.nelem,10.);
         f.update();
         const double history=(*f.pls)[0], mu=(*f.friction)[0];
-        double amc,anphi,anpsi,hardn,cap;
-        f.m->var.mat->plastic_props(0,start_angles ? 0 : history,amc,anphi,anpsi,hardn,cap);
+        const auto props=f.m->var.mat->plastic_props(0,start_angles ? 0 : history);
+        const double amc=props.strength.amc,anphi=props.strength.anphi;
         const double cohesion=amc/(2*std::sqrt(anphi));
         const double static_mu=std::tan(std::asin((anphi-1)/(anphi+1)));
         check("rate-and-state friction softening yields",history>0,1);

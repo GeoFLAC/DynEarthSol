@@ -123,6 +123,15 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Changed
 
+- For code built on DynEarthSol: the strength functions of `MatProps`
+  (`plastic_props`, `plastic_props_rsf`, `piece_strength`, `strength_here`,
+  `strength_piece`, `rsf_strength_piece`, `piece_strength_range`) return a
+  `MatProps::Strength`, a `PlasticProps`, the `StrengthPiece` or the
+  `StrengthRange` instead of filling `double&` arguments, and `PlasticProps` and
+  `StrengthPiece` hold their strength in a `Strength` member. `Array2D` no longer
+  has `steal_ref` (use a move), `at`, `reset`, `nullify`, the `view` overloads
+  (use `view_const`), `ConstAccessor::subset` or the `element` alias. Results are
+  unchanged ([#150]).
 - **Breaking.** Remove `monitor.remesh_rebind_mode`. Monitor points now follow
   the material through deformation, remeshing and restart; delete the retired
   key from existing inputs ([#135]).
@@ -587,3 +596,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
 [#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
+[#150]: https://github.com/GeoFLAC/DynEarthSol/pull/150
