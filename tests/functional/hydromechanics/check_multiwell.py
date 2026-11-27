@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify two-well superposition and independent sealed-volume closure.
 
-Usage: check_multiwell.py EXECUTABLE NEW_OUTPUT_DIRECTORY
+Usage: check_multiwell.py EXECUTABLE NEW_OUTPUT_DIRECTORY [--ndims 3]
 One well pumps and one injects, then both shut in and reverse their rates.
 Three complete DES runs use identical fixed meshes, timesteps and schedules.
 Rates keep strains below 1e-5: DES retains its objective stress rotation
@@ -10,6 +10,7 @@ constitutive model. This checks the small-strain coupled/source limit, not
 infinite-domain Theis accuracy or nonlinear/evolving-property superposition.
 """
 
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -28,8 +29,12 @@ from des_case import digest, run_des, write_json
 
 
 def main():
-    exe, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
-    dim = 3 if exe.name.endswith('3d') else 2
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('executable', type=Path)
+    p.add_argument('output', type=Path)
+    p.add_argument('--ndims', type=int, choices=(2, 3), default=2)
+    a = p.parse_args()
+    exe, output, dim = a.executable.resolve(), a.output.resolve(), a.ndims
     output.mkdir(parents=True, exist_ok=False)
     original_hash = digest(exe)
     cases, records = {}, {}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify explicit unsaturated transport in DES (verification levels U6, U7).
 
-Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY
+Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY [--ndims 3]
 
 - transient: Gardner column against Srivastava and Yeh (1991). A water table at
   the base (their initial state for zero flux) receives a top infiltration
@@ -16,6 +16,7 @@ Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY
 - restart: exact checkpoint continuation of a partly unsaturated column, on a
   fixed and on a remeshed mesh, with the pt_initial_checkpoint.py comparator.
 """
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -181,9 +182,13 @@ def restart(exe, out):
 
 
 def main():
-    exe, out = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('executable', type=Path)
+    p.add_argument('output', type=Path)
+    p.add_argument('--ndims', type=int, choices=(2, 3), default=2)
+    a = p.parse_args()
+    exe, out, ndims = a.executable.resolve(), a.output.resolve(), a.ndims
     out.mkdir(parents=True, exist_ok=False)
-    ndims = 3 if exe.name.endswith('3d') else 2
     summary = dict(ndims=ndims, transient=transient(exe, out, ndims))
     summary['modes'] = modes(exe, out, ndims, summary['transient'][0]['max_error'][-1])
     summary.update(steady=steady(exe, out, ndims), restart=restart(exe, out))

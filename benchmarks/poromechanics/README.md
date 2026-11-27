@@ -18,7 +18,7 @@ python3 tests/functional/hydromechanics/check_terzaghi_reference.py -v
 python3 tests/functional/hydromechanics/check_averaged_aquifer_reference.py -v
 python3 tests/functional/hydromechanics/check_unsaturated_reference.py -v
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol2d benchmarks/poromechanics/results/wells-2d
-python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmarks/poromechanics/results/wells-3d
+python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmarks/poromechanics/results/wells-3d --ndims 3
 python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol2d benchmarks/poromechanics/results/poroperm-2d
 python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol3d benchmarks/poromechanics/results/poroperm-3d
 python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline
@@ -52,7 +52,7 @@ acceptance budgets and measured results. Run the cases sequentially:
   export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
   python3 benchmarks/poromechanics/consolidation_refinement.py --output /new/refinement-results
   python3 tests/functional/hydromechanics/check_multiwell.py ./dynearthsol2d /new/multiwell-2d
-  python3 tests/functional/hydromechanics/check_multiwell.py ./dynearthsol3d /new/multiwell-3d
+  python3 tests/functional/hydromechanics/check_multiwell.py ./dynearthsol3d /new/multiwell-3d --ndims 3
 )
 ```
 
@@ -126,7 +126,7 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
   [unsaturated formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics#partly-saturated-flow) describes
   retention, element-aware Bishop coupling and their separate reference
   checks, including the U0-U9 levels.
-  `check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY` runs transient,
+  `check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY [--ndims 3]` runs transient,
   steady, mechanics-mode and fixed/remeshed restart checks. The fixtures
   explicitly disable heat for these isothermal comparisons.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Check rate-controlled wells with the production executable.
 
-Usage: check_wells.py EXECUTABLE OUTPUT_DIRECTORY
+Usage: check_wells.py EXECUTABLE OUTPUT_DIRECTORY [--ndims 3]
 In a sealed domain the explicit pressure update conserves fluid exactly:
     sum_n hmass_n (p_n - p0_n) + sum_e alpha V_e (s_e - s0_e) / K_b = -pumped volume,
 where s is the recorded mean total stress. A centred well and a well on a
@@ -9,6 +9,7 @@ domain edge, which several elements share, follow a schedule that pumps, shuts
 in and injects, with events between time steps. OUTPUT_DIRECTORY must not exist.
 """
 
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -62,6 +63,7 @@ def pumped(Q, t):
 
 def balance(case, dim, Q):
     model = Dynearthsol(str(case / 'wells'))
+    assert model.ndims == dim, 'the executable and --ndims disagree'
     times = {r['frame']: r['time'] for r in scan_frames(str(case / 'wells'))}
     alpha, K, G = MAT['biot'], MAT['bulk'], MAT['shear']
     Kb = K if dim == 3 else K + G / 3
@@ -87,8 +89,12 @@ def balance(case, dim, Q):
 
 
 def main():
-    exe, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
-    dim = 3 if exe.name.endswith('3d') else 2
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('executable', type=Path)
+    p.add_argument('output', type=Path)
+    p.add_argument('--ndims', type=int, choices=(2, 3), default=2)
+    a = p.parse_args()
+    exe, output, dim = a.executable.resolve(), a.output.resolve(), a.ndims
     output.mkdir(parents=True, exist_ok=False)
     summary, ok = {}, True
     for edge in (False, True):
