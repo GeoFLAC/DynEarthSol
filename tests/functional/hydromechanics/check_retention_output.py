@@ -121,9 +121,13 @@ def study(executable, output, ndims):
         folder = output/label; folder.mkdir()
         (folder/'cell.poly').write_text(polygon(ndims))
         cfg = config(ndims, pressure, active)
-        if label == 'gradient':
+        if label == 'gradient' and ndims == 2:
             cfg['ic']['pore_pressure_option'] = '1'
             cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[-2000,1000,0,0,0,0]')
+        elif label == 'gradient':
+            # Every two faces of the 3D tetrahedron share an edge, so only one of
+            # them can hold its own pressure.
+            cfg['bc'].update(hbc_x0='2', hbc_pressure='[-2000,0,0,0,0,0]')
         run_des(executable, folder, 'input', cfg)
         case = compare(folder, active)
         case['files_sha256'] = file_hashes(p for p in folder.iterdir()
