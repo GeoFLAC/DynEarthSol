@@ -95,8 +95,14 @@ void prefetch_managed(void* pointer, std::size_t bytes) {
         cudaGetLastError();
         return;
     }
-    if (info.type == cudaMemoryTypeManaged)
-        mpi_cuda_check(cudaMemPrefetchAsync(pointer, bytes, selected_device, 0));
+    if (info.type != cudaMemoryTypeManaged) return;
+    // CUDA 13 names the destination by a cudaMemLocation and adds a flags argument.
+#if CUDART_VERSION >= 13000
+    const cudaMemLocation device = {cudaMemLocationTypeDevice, selected_device};
+    mpi_cuda_check(cudaMemPrefetchAsync(pointer, bytes, device, 0, 0));
+#else
+    mpi_cuda_check(cudaMemPrefetchAsync(pointer, bytes, selected_device, 0));
+#endif
 }
 #endif
 
