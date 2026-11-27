@@ -456,6 +456,7 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
     bin.write_scalar(var.compensation_pressure, "compensation_pressure");
     bin.write_scalar(var.bottom_temperature, "bottom_temperature");
     bin.write_scalar(var.dt, "dt");
+    bin.write_scalar(var.max_vbc_val, "max_vbc_val");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
     bin.write_scalar(var.reference_frame_time, "reference_frame_time");
 

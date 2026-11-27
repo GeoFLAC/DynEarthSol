@@ -648,6 +648,9 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
     const int *meets = c.meets, *held_axes = c.held_axes;
     const bool *held = c.held, *horizontal = c.horizontal, *full = c.full;
     const double *n_value = c.n_value;
+    uint held_n_sides = 0;
+    for (int ib=iboundn0; ib<=iboundn3; ++ib)
+        if (held[ib]) held_n_sides |= 1U << ib;
 
 #ifndef THREED
     // find max and min coordinate for BOUNDX0
@@ -724,11 +727,11 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
 #ifdef THREED
     #pragma omp parallel for default(none) \
         shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, \
-               n_value)
+               n_value, held_n_sides)
 #else
     #pragma omp parallel for default(none) \
-        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, n_value, zmin, \
-        thickness, \
+        shared(var, vel, normalized, walls, any_z, meets, held_axes, held, horizontal, full, \
+        n_value, held_n_sides, zmin, thickness, \
         vbc_vertical_divisions_x0, vbc_vertical_divisions_x1, \
         vbc_vertical_ratios_x0, vbc_vertical_ratios_x1)
 #endif
@@ -781,6 +784,9 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
             ConstArrayAccessor n = (*var.bnormals)[ib]; // unit normal vector
 
             if ((flag & (1 << ib)) && held[ib]) {
+                // A later n side with a free velocity adds no constraint at the node.
+                const uint earlier_sides = (1U << ib) - 1;
+                const bool single = (flag & (earlier_sides | held_n_sides)) == (1U << ib);
                 double fac = 0;
                 int axes = 0;  // the global axes held by the sides at this node
                 bool held_other = false;  // one of them holds more than its normal
@@ -790,7 +796,7 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
                     held_other |= meets[ic] == MEETS_HELD;
                 }
                 if (!full[ib] && !horizontal[ib]) {  // the normal held, as code 1
-                    if (flag == (1U << ib)) {  // ordinary boundary
+                    if (single) {
                         double vn = 0;
                         for (int d=0; d<NDIMS; d++)
                             vn += v[d] * n[d];  // normal velocity
@@ -826,7 +832,7 @@ void apply_conditions(const Variables &var, const SideConditions &c, array_t &ve
                 }
                 else if (!full[ib]) {  // the horizontal normal held, as code 11
                     fac = 1 / std::sqrt(1 - n[NDIMS-1]*n[NDIMS-1]);  // factor for horizontal normal unit vector
-                    if (flag == (1U << ib)) {  // ordinary boundary
+                    if (single) {
                         double vn = 0;
                         for (int d=0; d<NDIMS-1; d++)
                             vn += v[d] * n[d];  // normal velocity
@@ -905,14 +911,19 @@ void apply_changed_vbcs(const Param &param, const Variables &var, const double_v
     side_conditions(param, var, false, now);
     SideConditions then = now;
     std::size_t n = 0;
-    each_value(then, [&saved, &n](auto &x) {
-        if (n < saved.size()) x = static_cast<std::remove_reference_t<decltype(x)>>(saved[n]);
+    bool same = true;
+    each_value(then, [&saved, &n, &same](auto &x) {
+        if (n < saved.size()) {
+            same &= (x == saved[n]);
+            x = static_cast<std::remove_reference_t<decltype(x)>>(saved[n]);
+        }
         ++n;
     });
     if (n != saved.size()) {
         apply_conditions(var, now, vel, false);
         return;
     }
+    if (same) return;
     std::vector<bool> differ(var.nnode, false);
     for (int unit=0; unit<=NDIMS; ++unit) {  // vel plus each unit vector, then vel
         array_t before(vel);

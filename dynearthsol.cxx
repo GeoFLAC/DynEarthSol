@@ -600,8 +600,6 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
-    // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
-    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     if (bin_chkpt.has_array("boundary normals")) {
         // The run keeps the normals of its starting mesh, even where a boundary bends; so
@@ -691,13 +689,26 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
     }
 
-    // Unchanged controls retain the saved next interval and velocity scale.
-    // Changed controls must use the same timestep/mass pair as a fresh stage.
+    const bool has_saved_speed = bin_chkpt.has_array("max_vbc_val");
+    if (has_saved_speed) {
+        double saved_speed = 0;
+        bin_chkpt.read_scalar(saved_speed, "max_vbc_val");
+        if (!std::isfinite(saved_speed))
+            die(EXIT_IO_RESTART, "Invalid boundary speed in checkpoint.");
+        dt_controls_changed |= saved_speed != var.max_vbc_val;
+    }
+
+    // Build the mass with the same velocity scale used to select the next interval.
     if (dt_controls_changed ||
         (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
-        compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
     }
+    else if (!has_saved_speed && param.control.fixed_dt == 0) {
+        // The saved interval may have been selected with a different velocity scale.
+        var.dt = std::min(var.dt, compute_dt(param, var));
+    }
+    compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass,
+                 *var.hmass, *var.ymass, *var.tmp_result);
 
     if (param.monitor.enabled) {
         const int fields = bin_chkpt.has_array("monitor point count") +

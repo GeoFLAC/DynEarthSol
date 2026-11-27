@@ -19,6 +19,8 @@ every later frame must match the run's bit for bit: the n boundaries keep the no
 the starting mesh, which the checkpoints now carry, and the restart keeps the velocity.
 Cases with changed_restart restart both executables from checkpoint 1 with those bc
 values changed, and every later frame must match the parent's restart bit for bit.
+Cases with speed_restart compare the first interval with a fresh run after loading a
+legacy code-6 checkpoint or reducing the speed recorded in a current checkpoint.
 Cases with edge_restart restart from checkpoint 1 with x1 holding, at an x1-n0 edge node,
 the y velocity the run's conditions give the checkpointed one there: the restart must match
 one from the checkpoint without its record of the conditions. Restarting with only n0's
@@ -102,14 +104,15 @@ def base(ndims, mesh):
 
 def case(name, ndims, bc=None, control=None, mesh='box', noop=False, exit_code=0, letters=False,
          same_as=None, refused=False, restart=False, corner=None, quoted=(), changed_restart=None,
-         edge_restart=False, facet_loads=False):
+         edge_restart=False, facet_loads=False, speed_restart=False):
     # exit_code is the parent's; input that set nothing ran there and is refused now.
     # corner is (sides, frame, {global axis: value held there}); quoted lists the bc keys
     # written in quotes; changed_restart holds the bc values a restart changes.
     return dict(name=name, ndims=ndims, bc=bc or {}, control=control or {}, mesh=mesh, noop=noop,
                 exit_code=exit_code, current_exit=11 if noop or refused else exit_code, letters=letters,
                 same_as=same_as, restart=restart, corner=corner, quoted=quoted,
-                changed_restart=changed_restart, edge_restart=edge_restart, facet_loads=facet_loads)
+                changed_restart=changed_restart, edge_restart=edge_restart, facet_loads=facet_loads,
+                speed_restart=speed_restart)
 
 
 def effective_cfg(spec, quoted=False):
@@ -213,8 +216,9 @@ def cases():
         walls = [('x', ('vbc_x0', 'vbc_x1'))] + ([('y', ('vbc_y0', 'vbc_y1'))] if nd == 3 else [])
         for axis, keys in walls:
             for code in SIDE_CODES[nd]:
+                restart = axis == 'x' and code == 6
                 found.append(case(f'{d}-{axis}-c{code}', nd, {k: str(code) for k in keys},
-                                  noop=code in NOOP[nd]))
+                                  noop=code in NOOP[nd], restart=restart, speed_restart=restart))
         for code in Z_CODES[nd]:
             found.append(case(f'{d}-z-c{code}', nd, dict(vbc_z0=str(code), vbc_z1=str(code))))
         rejected = 5 if nd == 2 else 4
@@ -274,9 +278,8 @@ def cases():
         # Once z1 is released, n0 sets its normal on their edge, as beside a free z1.
         found.append(case(f'{d}-n-z1-released', nd, dict(vbc_z1='1', vbc_val_z1_loading_period='5e6'),
                           mesh='cut', corner=(('z1',), 3, {})))
-        # A restart that changes a held velocity applies it before its first step, as the
-        # parent does.
-        found.append(case(f'{d}-restart-z1-changed', nd, dict(vbc_z1='1'),
+        # Use the same time interval to compare when the changed velocity takes effect.
+        found.append(case(f'{d}-restart-z1-changed', nd, dict(vbc_z1='1'), dict(fixed_dt='1e6'),
                           changed_restart=dict(vbc_val_z1='-3e-9')))
         # Quoted values, as the codes and scalars took them before they became text and lists.
         found.append(case(f'{d}-quoted', nd, dict(vbc_x0='3', vbc_val_x0='-1e-9'),
@@ -363,6 +366,9 @@ def cases():
                                                              vbc_val_y0_l='0', vbc_n1='vff',
                                                              vbc_val_n1='[7e-10, 0, 0]'),
                       mesh='cuts', letters=True, corner=(('y0', 'n1'), 3, dict(z=0.0))))
+    found.append(case('3d-n-before-free-n-letters', 3, dict(vbc_n0='vff', vbc_val_n0='[1.2e-9, 0, 0]',
+                                                            vbc_n1='fff', vbc_val_n1='[0, 0, 0]'),
+                      mesh='cuts', letters=True, corner=(('n1',), 0, {})))
     # What the codes cannot give: a side wall with a vertical velocity, and a 2D x0 held by
     # its normal only that tapers off over the bottom shear zone.
     found.append(case('3d-x0-vertical-letters', 3, dict(vbc_x0='vvv', vbc_val_x0='[1e-9, 2e-10, -3e-10]',
@@ -561,8 +567,11 @@ def corner_normal_velocity(result, spec):
     chkpt = fields(result.folder/'bc.chkpt.{:06d}'.format(frame))
     normals = saved_field(chkpt, 'boundary normals').reshape(-1, nd)
     checked = []
+    table = expected_table(nd, result.cfg)
     for b in ['n0'] + [s for s in sides if s[0] == 'n']:
-        held = side_values(result.cfg['bc'], b)[0]
+        if table[b]['types'][0] != 'v':
+            continue
+        held = table[b]['values'][0]
         checked.append('{} {:g}'.format(b, held))
         normal = velocity[on] @ normals[FLAG_BITS[b].bit_length() - 1]
         worst = float(np.max(np.abs(normal - held)))
@@ -621,9 +630,9 @@ def largest_difference(old, new):
 
 
 # What the current build adds to its checkpoints: the boundary normals that a restart keeps,
-# and the record of the velocity conditions in force that it compares.
+# the velocity conditions in force, and the speed used for timestep and mass scaling.
 RECORD = ('boundary condition control count', 'boundary condition controls')
-ADDED_FIELDS = ('boundary normals',) + RECORD
+ADDED_FIELDS = ('boundary normals', 'max_vbc_val') + RECORD
 
 
 def field_name(key):
@@ -684,6 +693,35 @@ def same_changed_restart(parent_exe, current_exe, parent, current, spec):
         restart_from_1(exe, result.folder, result, 'changed', spec['changed_restart'])
     count = same_outputs(parent.folder, current.folder, 'changed')
     return 'changed restart matches the parent\'s ({} files)'.format(count)
+
+
+def check_speed_restarts(exe, parent, current):
+    """Use the fresh run's timestep when migrating code 6 or changing a recorded speed."""
+    old = fields(parent.folder/'bc.chkpt.000000')
+    fresh = fields(current.folder/'bc.chkpt.000000')
+    old_dt = saved_field(old, 'dt').item()
+    new_dt = saved_field(fresh, 'dt').item()
+    if not 0 < new_dt < old_dt:
+        raise RuntimeError(f'expected a smaller code-6 timestep, got {new_dt:g} s from {old_dt:g} s')
+
+    shorter_run = dict(max_steps='1', output_step_interval='1')
+    slower = dict(vbc_val_x1=str(float(current.cfg['bc']['vbc_val_x1']) / 2))
+    run_again(exe, current.folder, current, 'slower-fresh', slower, **shorter_run)
+    slower_fresh = fields(current.folder/'slower-fresh.chkpt.000000')
+    slower_dt = saved_field(slower_fresh, 'dt').item()
+    if not new_dt < slower_dt:
+        raise RuntimeError(f'expected a larger timestep at the lower speed, got {slower_dt:g} s')
+
+    for folder, model, bc, initial, dt in (
+            (parent.folder, 'legacy-restart', None, old, new_dt),
+            (current.folder, 'slower-restart', slower, fresh, slower_dt)):
+        run_again(exe, folder, current, model, bc, is_restarting='true',
+                  restarting_from_modelname='bc', restarting_from_frame='0', **shorter_run)
+        resumed = fields(folder/f'{model}.chkpt.000001')
+        elapsed = saved_field(resumed, 'time').item() - saved_field(initial, 'time').item()
+        if elapsed != dt:
+            raise RuntimeError(f'{model} advanced {elapsed:g} s, expected {dt:g} s')
+    return f'first restart interval matches the fresh run (legacy {new_dt:g} s, slower {slower_dt:g} s)'
 
 
 def edge_restart(exe, result):
@@ -865,6 +903,8 @@ def main():
                 verdict += '; ' + same_after_restart(current_exe, current)
             if spec['changed_restart']:
                 verdict += '; ' + same_changed_restart(parent_exe, current_exe, parent, current, spec)
+            if spec['speed_restart']:
+                verdict += '; ' + check_speed_restarts(current_exe, parent, current)
             if spec['edge_restart']:
                 verdict += '; ' + edge_restart(current_exe, current)
             if spec['corner']:

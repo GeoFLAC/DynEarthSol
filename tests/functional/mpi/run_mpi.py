@@ -22,7 +22,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[3]
 # Output fields the current executables write that a reference from an earlier commit may lack.
-ADDED_FIELDS = {"dv surface acc facets"}
+ADDED_FIELDS = {"dv surface acc facets", "max_vbc_val"}
 
 
 def command_text(command):

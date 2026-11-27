@@ -137,7 +137,9 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The velocities of side-wall code 6 now count toward the largest boundary
   speed, which sets mass scaling and the timestep. Results of
   `examples/oblique-rift-3d.cfg` change markedly: its timestep falls from
-  2.64 to 0.398 yr ([#146]).
+  2.64 to 0.398 yr. A restart refreshes the timestep and mass when the
+  boundary speed changes. When a checkpoint lacks the recorded speed, the
+  saved automatic timestep is capped at the current limit ([#146]).
 - A restart with the run's velocity boundary conditions keeps the velocity of
   its checkpoint instead of applying them again, so it continues the run
   exactly, also at the edges of oblique (`n`) boundaries. One that changes
@@ -286,10 +288,10 @@ For a release, the full auto-generated list of merged pull requests is in its
 - An oblique (`n`) boundary that holds its normal velocity now sets it where
   it meets a side that holds components other than its normal, by the
   smallest change that keeps what the sides at the node hold (the other
-  sides' normals and the normals of earlier `n` boundaries included), and on
-  its edge with the top once `vbc_val_z1_loading_period` has passed; those
-  nodes used to lose it. This changes runs where it meets such a side, for
-  example `vbc_z1 = 2` ([#146]).
+  sides' normals and the normals of earlier `n` boundaries included). It also
+  sets the normal on an edge with a later free `n` boundary or with the top
+  after `vbc_val_z1_loading_period` has passed. This changes runs with those
+  intersections, for example `vbc_z1 = 2` ([#146]).
 - In 2D, side-wall code 4 holds the normal velocity at 0 and no longer adds
   the lithostatic support to the saved `force`; velocities and stresses are
   unchanged ([#146]).
