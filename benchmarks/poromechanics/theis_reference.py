@@ -43,16 +43,18 @@ def drawdown(radius_m, time_s, rate_m3_s, transmissivity_m2_s, storativity):
 
 
 def scheduled_drawdown(radius_m, time_s, schedule, transmissivity_m2_s,
-                       storativity):
+                       storativity, response=drawdown):
     """Superpose absolute rates given by ordered (start_seconds, rate) pairs.
 
     The rate before the first entry is zero. Entries remain active until the
     next entry; a zero rate represents shut-in. This linear reference applies
     only while material properties and the governing operator stay constant.
+    response(radius, time, rate, transmissivity, storativity) is the drawdown
+    of a constant rate from t=0, zero for t=0; the default is Theis's.
     """
     # Evaluate a zero-rate response to validate observations and properties,
     # including when the schedule is empty or starts after all observations.
-    result = drawdown(radius_m, time_s, 0.0, transmissivity_m2_s, storativity)
+    result = response(radius_m, time_s, 0.0, transmissivity_m2_s, storativity)
     previous_time, previous_rate = -1.0, 0.0
     time = np.asarray(time_s, dtype=float)
     for start, rate in schedule:
@@ -61,7 +63,7 @@ def scheduled_drawdown(radius_m, time_s, schedule, transmissivity_m2_s,
         if not math.isfinite(rate):
             raise ValueError('Scheduled rates must be finite')
         lag = np.maximum(time - start, 0.0)
-        result += drawdown(radius_m, lag, rate - previous_rate,
+        result += response(radius_m, lag, rate - previous_rate,
                            transmissivity_m2_s, storativity)
         previous_time, previous_rate = start, rate
     return result

@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -19,6 +17,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 DEFAULT_CFG = HERE / "displacement_output.cfg"
+sys.path.insert(0, str(REPO_ROOT / "tests/functional"))
+from des_test_utils import checkpoint_file, run_des
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,16 +82,13 @@ def read_binary_frame(model: Path, frame: int):
 
 
 def check_frame(model: Path, frame: int, ndims: int, expect_motion: bool) -> None:
-    hdf5_path = Path(f"{model}.save.{frame:06d}.vtkhdf")
-    binary_path = Path(f"{model}.save.{frame:06d}")
-    if hdf5_path.is_file():
-        coordinate, reference, displacement = read_frame(hdf5_path)
-        path = hdf5_path
-    elif binary_path.is_file():
-        coordinate, reference, displacement = read_binary_frame(model, frame)
-        path = binary_path
-    else:
+    path = checkpoint_file(f"{model}.save.{frame:06d}")
+    if path is None:
         raise AssertionError(f"missing output frame for {model}, frame {frame}")
+    if path.suffix == ".vtkhdf":
+        coordinate, reference, displacement = read_frame(path)
+    else:
+        coordinate, reference, displacement = read_binary_frame(model, frame)
     if coordinate.shape != reference.shape or coordinate.shape != displacement.shape:
         raise AssertionError(
             f"{path}: coordinate/reference/displacement shapes differ: "
@@ -130,22 +127,7 @@ def run_case(
     cfg = template.replace("__MODELNAME__", model)
     if "__" in cfg:
         raise AssertionError("unexpanded config token remains")
-    cfg_path = case_dir / "input.cfg"
-    cfg_path.write_text(cfg, encoding="ascii")
-
-    env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = str(threads)
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    result = subprocess.run(
-        [str(exe), str(cfg_path)],
-        cwd=case_dir,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
-    (case_dir / "run.log").write_text(result.stdout, encoding="utf-8")
+    result = run_des(exe, case_dir, "input", cfg, None, threads=threads, check=False)
     if result.returncode != 0:
         print(result.stdout, file=sys.stderr)
         raise RuntimeError(

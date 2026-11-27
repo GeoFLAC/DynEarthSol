@@ -21,7 +21,6 @@ interpolated bilinearly. The heat content of the layer is compared too.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -36,7 +35,8 @@ RA, WIDTH, HEIGHT = 400.0, 2.0, 1.0
 KAPPA = cc.LAMBDA/(cc.RHO*cc.CF)
 
 
-from des_case import run_solver
+from des_case import digest, run_des, write_json
+from des_test_utils import lumped_volumes
 
 def poly(h):
     """Half box with the heater and the insulated base on separate boundary flags."""
@@ -78,7 +78,7 @@ def config(h, dt, fluid_bulk, outputs):
 def compare(folder, reference, dt):
     model = cc.Dynearthsol(str(folder/'elder')); rows = cc.scan_frames(str(folder/'elder'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
-    w = cc.lumped_area(coord, conn)
+    w = lumped_volumes(coord, conn)
     n = max(int(k.split('_')[1]) for k in reference.files if k.startswith('theta_'))
     xr, zr, snaps = reference[f'x_{n}'], reference[f'z_{n}'], reference[f'theta_{n}']
     points = np.column_stack((coord[:, 1] + HEIGHT, coord[:, 0]))
@@ -102,24 +102,22 @@ def compare(folder, reference, dt):
 def study(exe, reference_file, out, spacings, dt, fluid_bulk, threads):
     out.mkdir(parents=True, exist_ok=False)
     reference = np.load(reference_file)
-    env = dict(os.environ, OMP_NUM_THREADS=str(threads), OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=cc.digest(exe), runner_sha256=cc.digest(Path(__file__)),
-                  reference_sha256=cc.digest(reference_file), ra=RA, dt_s=dt, fluid_bulk_Pa=fluid_bulk,
+    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
+                  reference_sha256=digest(reference_file), ra=RA, dt_s=dt, fluid_bulk_Pa=fluid_bulk,
                   kappa_m2_s=KAPPA, threads=threads, cases=[])
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         (folder/'elder.poly').write_text(poly(h))
         cfg, interval = config(h, dt, fluid_bulk, reference['times'])
-        with (folder/'elder.cfg').open('w') as f: cfg.write(f)
-        run_solver([str(exe), 'elder.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=200000)
+        run_des(exe, folder, 'elder', cfg, timeout=200000, threads=threads)
         series, nodes, elements = compare(folder, reference, dt)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, series=series)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps(dict(spacing_m=h, nodes=nodes, max_abs=[round(s['max_abs_difference'], 4) for s in series],
                               heat=[(round(s['heat_des'], 5), round(s['heat_reference'], 5)) for s in series])),
               flush=True)
-    assert cc.digest(exe) == result['executable_sha256']
+    assert digest(exe) == result['executable_sha256']
     return result
 
 

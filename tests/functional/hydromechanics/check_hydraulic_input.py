@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Check invalid active hydraulic material properties at the executable boundary."""
 
-import os
 from pathlib import Path
-import subprocess
 import sys
 import tempfile
 
 
-from des_case import read_config
+from des_case import expect_exit, read_config
 
 def main():
     exe = Path(sys.argv[1]).resolve()
@@ -21,15 +19,8 @@ def main():
         for key, value in cases:
             cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
             cfg['mat'][key] = f'[{value}]'
-            path = Path(tmp) / 'invalid.cfg'
-            with path.open('w') as stream:
-                cfg.write(stream)
-            result = subprocess.run([str(exe), str(path)], cwd=tmp,
-                                    env=dict(os.environ, OMP_NUM_THREADS='1'),
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                    text=True, timeout=10)
-            assert result.returncode == 11, (key, value, result.returncode, result.stdout)
-            assert 'Invalid hydraulic properties for material 0' in result.stdout, result.stdout
+            expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10,
+                        message='Invalid hydraulic properties for material 0')
         extra = [
             ('ic', {'water_table_z': 'nan'}),
             ('ic', {'water_table_z': 'inf'}),
@@ -68,12 +59,7 @@ def main():
         for section, updates in extra:
             cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
             cfg[section].update(updates)
-            with path.open('w') as stream:
-                cfg.write(stream)
-            result = subprocess.run([str(exe), str(path)], cwd=tmp,
-                                    env=dict(os.environ, OMP_NUM_THREADS='1'),
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=10)
-            assert result.returncode == 11, (section, updates, result.returncode, result.stdout)
+            expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10)
     print(f'PASS: {len(cases)+len(extra)} invalid hydraulic inputs rejected before initialization')
 
 

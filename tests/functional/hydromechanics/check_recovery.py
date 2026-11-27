@@ -9,9 +9,7 @@ import argparse
 import copy
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -26,7 +24,8 @@ ALPHA, PHI, GRAIN, FLUID = .8, .25, 1e8, 1e8
 T0, TAU = 293., .25
 
 
-from des_case import reset_boundaries
+from des_case import reset_boundaries, restart_check, run_model, write_json
+from des_test_utils import compare_continuation, simplex_volumes
 
 def configuration(method, psi, *, sealed=False, temperature=T0, energy=0.):
     cfg = plastic.configuration(method, psi)
@@ -48,7 +47,7 @@ def configuration(method, psi, *, sealed=False, temperature=T0, energy=0.):
 def check(model, cfg, method):
     dim = int(model.ndims)
     x, conn = (model.read_field(0, k) for k in ('coordinate', 'connectivity'))
-    volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     lag = ALPHA**2/(plastic.BULK+(plastic.SHEAR/3 if dim == 2 else 0)) if method == 'pt' else 0
     tau0 = json.loads(cfg['mat']['pore_healing_time'])[0]
     energy = json.loads(cfg['mat']['pore_healing_energy'])[0]
@@ -133,7 +132,7 @@ def main():
         folder = output/f'{method}-psi{psi:g}-sealed{int(sealed)}-T{t:g}'
         folder.mkdir()
         cfg = configuration(method, psi, sealed=sealed, temperature=t, energy=energy)
-        model = plastic.run(exe, folder, cfg)
+        model = run_model(exe, folder, cfg, 'column')
         result = check(model, cfg, method)
         assert result['max_dilative_increment'] > 1e-9 if psi > 0 else (
             result['max_compactive_increment'] > 1e-9 if psi < 0 else
@@ -142,8 +141,8 @@ def main():
         restart = copy.deepcopy(cfg)
         restart['sim'].update(is_restarting='true', restarting_from_modelname=model.modelname,
                                restarting_from_frame='50', max_steps='100')
-        resumed = plastic.run(exe, folder, restart, 'resumed')
-        count = plastic.compare_continuation(folder, model.modelname, resumed)
+        resumed = run_model(exe, folder, restart, 'resumed')
+        count = compare_continuation(folder, model.modelname, resumed)
         result.update(method=method, dilation_degrees=psi, sealed=sealed,
                       temperature=t, exact_restart_payloads=count)
         # Stop loading, raise the cohesion to exclude further yielding and
@@ -151,7 +150,7 @@ def main():
         restart['bc']['vbc_val_z1'] = '0'
         restart['mat'].update(cohesion0='[1e9]', cohesion1='[1e9]')
         restart['control']['fixed_dt'] = '.025'
-        hold = plastic.run(exe, folder, restart, 'hold')
+        hold = run_model(exe, folder, restart, 'hold')
         initial = hold.read_field(hold.frames[0], 'pore dilation')
         effective = TAU*(t/T0)*math.exp(energy/8.3144*(1/t-1/T0))
         worst = 0.
@@ -169,7 +168,7 @@ def main():
         cfg['bc']['vbc_val_z1'] = '.001'
         if elastic:
             cfg['mat'].update(cohesion0='[1e9]', cohesion1='[1e9]')
-        model = plastic.run(exe, folder, cfg)
+        model = run_model(exe, folder, cfg, 'column')
         result = check(model, cfg, 'pt')
         eta = model.read_field(100, 'pore dilation')
         assert eta.max() < 1e-16 if elastic else eta.min() > 1e-5
@@ -179,7 +178,7 @@ def main():
         restart['bc']['vbc_val_z1'] = '0'
         restart['mat'].update(cohesion0='[1e9]', cohesion1='[1e9]')
         restart['control']['fixed_dt'] = '.025'
-        hold = plastic.run(exe, folder, restart, 'hold')
+        hold = run_model(exe, folder, restart, 'hold')
         phi0, phi1 = (hold.read_field(f, 'porosity') for f in (100, 150))
         k0, k1 = (hold.read_field(f, 'permeability') for f in (100, 150))
         if elastic:
@@ -198,13 +197,7 @@ def main():
     cfg['mesh'].update(meshing_elem_shape='0', quality_check_step_interval='1', min_quality='.999',
                         resolution='.5', largest_size='.5', smallest_size='.25')
     cfg['control']['has_moving_mesh'] = 'true'
-    source_cfg = output/'remesh.cfg'
-    with source_cfg.open('w') as stream:
-        cfg.write(stream)
-    subprocess.run([sys.executable, str(ROOT/'tests/functional/pt_initial_checkpoint.py'),
-        str(exe), str(source_cfg), str(output/'remesh'), '--restart-frame', '1',
-        '--steps', '4', '--require-remesh'], check=True, timeout=240,
-        env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
+    restart_check(exe, cfg, output/'remesh', 4, 1, require_remesh=True)
     # Partial and non-finite history cannot be reconstructed on restart.
     cfg = configuration('pt', 10)
     source = output/'pt-psi10-sealed0-T293'/'column'
@@ -216,9 +209,8 @@ def main():
     count = len(plastic.Dynearthsol(str(source)).read_field(50, 'pore dilation'))
     checkpoint_copy(source, 50, bad, replace={'pore dilation': np.full(count, np.nan).tobytes()})
     reject(exe, output, cfg, 'nan-history', 'Invalid recoverable pore dilation')
-    (output/'summary.json').write_text(json.dumps(dict(passed=True, cases=report,
-        rejected_checkpoints=2, scope='Accepted plastic history, tangent-Biot closure source and recovery; no finite-density mass/energy claim.'),
-        indent=2)+'\n')
+    write_json(output/'summary.json', dict(passed=True, cases=report, rejected_checkpoints=2,
+        scope='Accepted plastic history, tangent-Biot closure source and recovery; no finite-density mass/energy claim.'))
 
 
 if __name__ == '__main__':

@@ -25,7 +25,6 @@ measured after it, and the total error includes it.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -40,7 +39,8 @@ L, Q, DURATION = 8.0, 1e-4, 6e5
 WELLS = ((L/4, -L/2), (3*L/4, -L/2))
 
 
-from des_case import reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, reset_boundaries, run_des, run_model, write_json
+from des_test_utils import lumped_volumes
 
 def config(h, steps):
     cfg = hot.config(h, steps)
@@ -70,7 +70,7 @@ def shape_weights(coord, conn, point):
 def ledger(folder):
     model = Dynearthsol(str(folder/'hot')); rows = scan_frames(str(folder/'hot'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
-    area = hot.lumped_area(coord, conn)
+    area = lumped_volumes(coord, conn)
     nodes, w = shape_weights(coord, conn, WELLS[1])
     times, stored, produced = [], [], []
     for row in rows:
@@ -98,18 +98,13 @@ def ledger(folder):
 
 def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=hot.digest(exe), runner_sha256=hot.digest(__file__),
-                  source_commit=source_revision(ROOT),
-                  steps=steps, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
+    result = dict(provenance(exe, __file__, out), steps=steps, cases=[])
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'hot.cfg').open('w') as f: config(h, steps).write(f)
-        run_solver([str(exe), 'hot.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
-        item = dict(spacing_m=h, input_sha256=hot.digest(folder/'hot.cfg'), **ledger(folder))
+        run_des(exe, folder, 'hot', config(h, steps), timeout=40000)
+        item = dict(spacing_m=h, input_sha256=digest(folder/'hot.cfg'), **ledger(folder))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps(item), flush=True)
     return result
 
@@ -131,21 +126,17 @@ def pulse_study(executable, output, ndims):
     reset_boundaries(cfg['bc'], vbc='3', hbc='0')
     if ndims == 3:
         cfg['injection']['points_y'] = '[0]'
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
 
     def run(name, steps):
-        cfg['sim'].update(modelname=name, max_steps=str(steps), output_step_interval=str(max(1, steps//10)))
+        cfg['sim'].update(max_steps=str(steps), output_step_interval=str(max(1, steps//10)))
         cfg['control']['fixed_dt'] = repr(1/steps)
-        with (output/f'{name}.cfg').open('w') as stream:
-            cfg.write(stream)
-        run_solver([str(executable), f'{name}.cfg'], log=output / f'{name}.log', cwd=output, env=env, check=True, timeout=120)
-        return Dynearthsol(str(output/name))
+        return run_model(executable, output, cfg, name, timeout=120)
 
     cfg['injection']['enabled'] = 'false'
     seed = run('seed', 1)
     assert seed.ndims == ndims
     x, conn = seed.read_field(0, 'coordinate'), seed.read_field(0, 'connectivity')
-    nodal_volume = hot.lumped_area(x, conn)
+    nodal_volume = lumped_volumes(x, conn)
     node = int(np.argmin(np.linalg.norm(x, axis=1)))
     assert np.linalg.norm(x[node]) < 1e-12
     amount = float(2.25*hot.CAPACITY*nodal_volume[node]/hot.FLUID)
@@ -170,10 +161,10 @@ def pulse_study(executable, output, ndims):
         cases[name] = dict(minimum=low, maximum=high, final=final,
                            bounded=low >= hot.T0-1e-10 and high <= hot.TIN+1e-10,
                            final_error_over_jump=abs(final-exact)/(hot.TIN-hot.T0))
-    report = dict(executable_sha256=hot.digest(executable), ndims=ndims, cases=cases,
+    report = dict(executable_sha256=digest(executable), ndims=ndims, cases=cases,
                   ode_final_temperature=float(exact), injected_amount=amount,
                   scope='Boundedness and time convergence of the implemented fixed-capacity mixing ODE; no changing-storage energy claim.')
-    (output/'summary.json').write_text(json.dumps(report, indent=2)+'\n')
+    write_json(output/'summary.json', report)
     assert all(case['bounded'] for case in cases.values()), report
     assert cases['refined10000']['final_error_over_jump'] < .005
     assert cases['refined10000']['final_error_over_jump'] < .2*cases['refined1000']['final_error_over_jump']

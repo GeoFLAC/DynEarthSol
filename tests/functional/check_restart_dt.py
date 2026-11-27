@@ -7,15 +7,10 @@ fixed dt. --legacy-executable adds restarts from the PT checkpoints it writes.
 """
 
 import argparse
-import configparser
 import copy
-import hashlib
-import itertools
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -23,14 +18,13 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames
-from pt_initial_checkpoint import fields
+from des_test_utils import compare_continuation, digest, fields, mesh_measures, read_config, roller_free, run_des
 
 BULK, SHEAR, DENSITY = 2e7, 1e7, 2650.
 
 
 def config():
-    cfg = configparser.ConfigParser(); cfg.optionxform = str
-    cfg.read(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
+    cfg = read_config(ROOT/'tests/functional/pt_hydrostatic_equilibrium.cfg')
     cfg['sim'].update(max_time_in_yr='1e6', output_step_interval='1',
                       output_time_interval_in_yr='1e6', checkpoint_frame_interval='1',
                       has_initial_checkpoint='true', is_outputting_averaged_fields='false')
@@ -52,32 +46,8 @@ def run(executable, folder, cfg, name, steps, source=None):
                       is_restarting=str(source is not None).lower())
     if source is not None:
         cfg['sim'].update(restarting_from_modelname=str(source), restarting_from_frame='1')
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    with (folder/f'{name}.log').open('w') as stream:
-        subprocess.run([str(executable), f'{name}.cfg'], cwd=folder,
-                       env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'),
-                       stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=120)
+    run_des(executable, folder, name, cfg)
     return Dynearthsol(str(folder/name))
-
-
-def mesh_measures(model):
-    x = model.read_field(model.frames[0], 'coordinate')
-    conn = model.read_field(model.frames[0], 'connectivity')
-    cells = x[conn]
-    dim = model.ndims
-    volumes = np.abs(np.linalg.det(cells[:, 1:]-cells[:, :1]))/math.factorial(dim)
-    facets = []
-    for ids in itertools.combinations(range(dim+1), dim):
-        face = cells[:, ids]
-        if dim == 2:
-            facets.append(np.linalg.norm(face[:,1]-face[:,0],axis=1))
-        else:
-            facets.append(np.linalg.norm(np.cross(face[:,1]-face[:,0],face[:,2]-face[:,0]),axis=1)/2)
-    height = float(np.min(dim*volumes/np.max(facets,axis=0)))
-    lumped = np.zeros(len(x))
-    np.add.at(lumped,conn,np.broadcast_to((volumes/(dim+1))[:,None],conn.shape))
-    return x, height, lumped
 
 
 def expected_dt(cfg, height):
@@ -88,21 +58,6 @@ def expected_dt(cfg, height):
     speed = (c.getfloat('characteristic_speed')*c.getfloat('inertial_scaling')
              if c.getboolean('is_quasi_static') else math.sqrt(BULK/DENSITY))
     return .5*height/speed*c.getfloat('dt_fraction')
-
-
-def compare_continuation(folder, original, resumed):
-    payloads = 0
-    def ignored(key):
-        base = key.rsplit('/',1)[-1].lstrip('@').removesuffix('.layout')
-        return base in ('walltime_sec','provenance') or '/provenance/' in key
-    for frame in resumed.frames[1:]:
-        for kind in ('save','chkpt'):
-            a = fields(folder/f'{original}.{kind}.{frame:06d}')
-            b = fields(folder/f'resumed.{kind}.{frame:06d}')
-            keys = {key for key in a.keys() | b.keys() if not ignored(key)}
-            assert all(a.get(key) == b.get(key) for key in keys), [key for key in keys if a.get(key)!=b.get(key)]
-            payloads += len(keys)
-    return payloads
 
 
 def check_interval(folder, cfg, model):
@@ -119,10 +74,7 @@ def check_interval(folder, cfg, model):
         c = cfg['control']
         rho = BULK/(c.getfloat('characteristic_speed')*c.getfloat('inertial_scaling'))**2 \
               if c.getboolean('is_quasi_static') else DENSITY
-        free = np.ones_like(x,dtype=bool)
-        for d in range(model.ndims-1):
-            free[:,d] = ~(np.isclose(x[:,d],0) | np.isclose(x[:,d],1))
-        free[:,-1] = ~np.isclose(x[:,-1],-1)
+        free = roller_free(x)
         before = model.read_field(model.frames[0],'velocity')
         after = model.read_field(model.frames[1],'velocity')
         force = model.read_field(model.frames[1],'force')
@@ -142,7 +94,7 @@ def main():
     args = parser.parse_args()
     executable, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True,exist_ok=False)
-    report = dict(executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),cases=[],passed=False)
+    report = dict(executable_sha256=digest(executable),cases=[],passed=False)
     def save():
         (output/'summary.json').write_text(json.dumps(report,indent=2,allow_nan=False)+'\n')
     sources = {}
@@ -183,7 +135,7 @@ def main():
             report['failure'] = name;save();raise
         report['cases'].append(dict(name=name,**result));save()
     report['passed'] = True;save()
-    assert hashlib.sha256(executable.read_bytes()).hexdigest() == report['executable_sha256']
+    assert digest(executable) == report['executable_sha256']
     print(json.dumps(report,indent=2))
 
 

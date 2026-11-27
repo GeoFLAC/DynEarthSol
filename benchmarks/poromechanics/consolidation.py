@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 """Run and check the DES consolidation columns against the Biot reference."""
 import argparse
-import configparser
-import hashlib
 import json
-import math
-import os
 from pathlib import Path
 import sys
 import numpy as np
@@ -16,7 +12,8 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import read_config, run_solver, source_revision
+from des_case import digest, material_properties, read_config, run_des, source_revision, write_json
+from des_test_utils import simplex_volumes
 
 def make_config(dim):
     cfg = read_config(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
@@ -25,42 +22,28 @@ def make_config(dim):
 
 
 def run_cases(output, timeout):
-    environment = dict(os.environ, OMP_NUM_THREADS='1')
     runs = {}
     for dim in (2, 3):
         executable = ROOT / f'dynearthsol{dim}d'
         case = output / f'terzaghi-{dim}d'
-        case.mkdir()
-        cfg = make_config(dim)
-        with (case / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
-        command = [str(executable), 'input.cfg']
-        executable_sha256 = hashlib.sha256(executable.read_bytes()).hexdigest()
+        executable_sha256 = digest(executable)
         print(f'Running {dim}D Terzaghi in {case}', flush=True)
-        run_solver(command, log=case / 'run.log', cwd=case, env=environment, check=True, timeout=timeout)
-        if hashlib.sha256(executable.read_bytes()).hexdigest() != executable_sha256:
+        run_des(executable, case, 'input', make_config(dim), timeout)
+        if digest(executable) != executable_sha256:
             raise RuntimeError('Executable changed during the run; rebuild before benchmarking')
-        runs[str(dim)] = dict(command=command, omp_threads=1,
-                             executable_sha256=executable_sha256,
-                             input_sha256=hashlib.sha256((case / 'input.cfg').read_bytes()).hexdigest())
+        runs[str(dim)] = dict(command=[str(executable), 'input.cfg'], omp_threads=1,
+                             executable_sha256=executable_sha256, input_sha256=digest(case / 'input.cfg'))
     return runs
 
 
 def reference_from_config(cfg):
-    def material(name):
-        return float(json.loads(cfg['mat'][name])[0])
-    return TerzaghiReference(height=cfg.getfloat('mesh', 'zlength'),
-                            load=-cfg.getfloat('bc', 'stress_val_z1'),
-                            bulk=material('bulk_modulus'), shear=material('shear_modulus'),
-                            porosity=material('porosity'), fluid_bulk=material('fluid_bulk_modulus'),
-                            grain_bulk=material('bulk_modulus_s'), biot=material('biot_coeff'),
-                            permeability=material('hydraulic_perm'), viscosity=material('fluid_visc'))
+    return TerzaghiReference(height=cfg.getfloat('mesh', 'zlength'), load=-cfg.getfloat('bc', 'stress_val_z1'),
+                             **material_properties(cfg))
 
 
 def load_case(output, dim):
     case = output / f'terzaghi-{dim}d'
-    cfg = configparser.ConfigParser()
-    cfg.read(case / 'input.cfg')
+    cfg = read_config(case / 'input.cfg')
     model = Dynearthsol(str(case / cfg['sim']['modelname']))
     if model.ndims != dim or len(model.frames) < 2:
         raise RuntimeError(f'{dim}D case has incomplete or unexpected output')
@@ -73,8 +56,7 @@ def load_case(output, dim):
     reference = reference_from_config(cfg)
     coordinate = model.read_field(model.frames[0], 'coordinate')
     connectivity = model.read_field(model.frames[0], 'connectivity')
-    cells = coordinate[connectivity]
-    volume = np.abs(np.linalg.det(cells[:, 1:] - cells[:, :1])) / math.factorial(dim)
+    volume = simplex_volumes(coordinate, connectivity)
     area = np.sum(volume) / reference.height
     depth = -coordinate[:, -1]
     initial_strain = model.read_field(model.frames[0], 'strain')
@@ -137,7 +119,7 @@ def main():
         runs = run_cases(output, args.timeout)
     summary = dict(source_commit=source_revision(ROOT),
                    runs=runs, terzaghi={str(d): load_case(output, d)['metrics'] for d in (2, 3)})
-    (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+    write_json(output/'summary.json', summary)
     print(json.dumps(summary['terzaghi'], indent=2))
 
 if __name__ == '__main__':

@@ -10,8 +10,6 @@ in and injects, with events between time steps. OUTPUT_DIRECTORY must not exist.
 """
 
 import json
-import math
-import os
 from pathlib import Path
 import sys
 
@@ -28,7 +26,8 @@ MAT = dict(bulk=1e8, shear=1e8, biot=0.8, porosity=0.25, fluid_bulk=2.2e9,
 MAT['grain_bulk'] = MAT['bulk'] / (1 - MAT['biot'])
 
 
-from des_case import read_config, run_solver
+from des_case import read_config, run_des, write_json
+from des_test_utils import lumped_volumes, simplex_volumes
 
 def config(dim, edge):
     cfg = read_config(ROOT / f'benchmarks/poromechanics/1d-consolidation-des{dim}d_traction.cfg')
@@ -72,10 +71,8 @@ def balance(case, dim, Q):
 
     def state(frame):
         xyz = model.read_field(frame, 'coordinate')
-        cells = xyz[conn]
-        vol = np.abs(np.linalg.det(cells[:, 1:] - cells[:, :1])) / math.factorial(dim)
-        hmass = np.zeros(len(xyz))
-        np.add.at(hmass, conn, (S * vol / (dim + 1))[:, None])
+        vol = simplex_volumes(xyz, conn)
+        hmass = lumped_volumes(xyz, conn, S * vol)
         stress = model.read_field(frame, 'stress')
         return hmass, vol, model.read_field(frame, 'pore pressure'), stress[:, :dim].sum(1) / dim
 
@@ -93,21 +90,18 @@ def main():
     exe, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     dim = 3 if exe.name.endswith('3d') else 2
     output.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
     summary, ok = {}, True
     for edge in (False, True):
         name = 'edge' if edge else 'centre'
         case = output / name
         case.mkdir()
         cfg, Q = config(dim, edge)
-        with (case / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
-        run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=env, check=True, timeout=900)
+        run_des(exe, case, 'input', cfg, timeout=900)
         worst, frames = balance(case, dim, Q)
         summary[name] = dict(frames=frames, max_balance_error_over_pumped=worst)
         ok &= worst < 1e-4
     print(json.dumps(summary, indent=2))
-    (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    write_json(output / 'summary.json', summary)
     return 0 if ok else 1
 
 

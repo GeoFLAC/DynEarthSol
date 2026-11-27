@@ -10,10 +10,8 @@ areal/vertical strains are compared with AveragedAquifer.line_well.
 """
 
 import argparse
-import hashlib
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -33,7 +31,7 @@ DURATION = 1.0e4                          # s: sqrt(4 D t) stays below 0.3 L
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import read_config, run_solver
+from des_case import digest, material_options, read_config, run_des, write_config, write_json
 
 def config(resolution=20.0):
     cfg = read_config(ROOT / 'benchmarks/poromechanics/1d-consolidation-des3d_traction.cfg')
@@ -49,12 +47,7 @@ def config(resolution=20.0):
               hbc_z0='0', hbc_z1='0', hbc_x1='1', hbc_y1='1', num_wells='1',
               well_x='[0]', well_y='[0]', well_z_top='[0]', well_z_bottom=f'[{-B}]',
               well_rate=f'[{Q / 4}]')
-    cfg['mat'].update(bulk_modulus=f"[{PROPS['bulk']}]", shear_modulus=f"[{PROPS['shear']}]",
-                      biot_coeff=f"[{PROPS['biot']}]", porosity=f"[{PROPS['porosity']}]",
-                      fluid_bulk_modulus=f"[{PROPS['fluid_bulk']}]",
-                      bulk_modulus_s=f"[{PROPS['grain_bulk']}]",
-                      hydraulic_perm=f"[{PROPS['permeability']}]",
-                      fluid_visc=f"[{PROPS['viscosity']}]")
+    cfg['mat'].update(material_options(PROPS))
     return cfg
 
 
@@ -103,17 +96,14 @@ def main():
     if not args.analyze_only:
         output.mkdir(parents=True, exist_ok=False)
         case.mkdir()
-        with (case / 'input.cfg').open('w') as stream:
-            config(args.resolution).write(stream)
-        provenance = dict(executable=str(ROOT/'dynearthsol3d'),
-                          executable_sha256=hashlib.sha256((ROOT/'dynearthsol3d').read_bytes()).hexdigest(),
-                          config_sha256=hashlib.sha256((case/'input.cfg').read_bytes()).hexdigest(),
-                          resolution_m=args.resolution, omp_threads=1)
-        (output/'provenance.json').write_text(json.dumps(provenance, indent=2)+'\n')
-        run_solver([str(ROOT / 'dynearthsol3d'), 'input.cfg'], log=case / 'run.log', cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'), timeout=3600)
+        write_config(case / 'input.cfg', config(args.resolution))
+        provenance = dict(executable=str(ROOT/'dynearthsol3d'), executable_sha256=digest(ROOT/'dynearthsol3d'),
+                          config_sha256=digest(case/'input.cfg'), resolution_m=args.resolution, omp_threads=1)
+        write_json(output/'provenance.json', provenance)
+        run_des(ROOT / 'dynearthsol3d', case, 'input', None, 3600)
     aq, rows = compare(case)
     summary = [{k: v for k, v in row.items() if k != 'plot'} for row in rows]
-    (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    write_json(output / 'summary.json', summary)
     print(json.dumps(summary, indent=2))
     # This qualifies a coarse thin-slab comparison, not spatial/time convergence.
     limits = dict(pressure_rms=0.03, areal_rms=0.08, vertical_rms=0.08, front_over_L=0.3)

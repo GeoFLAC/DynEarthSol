@@ -12,9 +12,7 @@ the same slope and with a fill-the-pore-space time estimate.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 
 import numpy as np
 
@@ -29,9 +27,9 @@ DURATION = 1.2e5                                            # s
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import source_revision
+from des_case import digest, provenance, run_des, write_json
 
-se = Retention('gardner', ALPHA_G, sr=SR).se
+RETENTION = Retention('gardner', ALPHA_G, sr=SR)
 
 
 def config(h, steps, loaded):
@@ -60,14 +58,11 @@ def surface_pressure(folder):
 
 def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    se0 = float(se(-SUCTION)); s0 = SR + (1 - SR)*se0
+    se0, s0 = float(RETENTION.se(-SUCTION)), float(RETENTION.sat(-SUCTION))
     # Lower bound on the time to failure: rain fills the pore space above the initial saturation up to the
     # perched height at which the base pressure (slope-parallel seepage, u = rho_f g h_w cos^2 beta) reaches
     # the pressure-driven collapse value; no water leaves.
-    result = dict(executable=str(exe), executable_sha256=sa.digest(exe), runner_sha256=sa.digest(__file__),
-                  slope_runner_sha256=sa.digest(sa.__file__),
-                  source_commit=source_revision(sa.ROOT),
+    result = dict(provenance(exe, __file__), slope_runner_sha256=digest(sa.__file__),
                   rain=RAIN, suction=SUCTION, alpha=ALPHA_G, sr=SR, se0=se0, s0=s0, bishop0=-se0*SUCTION,
                   cohesion=COHESION, friction_deg=math.degrees(FRICTION),
                   u_point=U_POINT, u_davis=U_DAVIS, u_star=U_STAR, steps=steps, cases=[])
@@ -75,17 +70,14 @@ def study(exe, out, spacings, steps):
         folder = out/f'h{h:g}'; folder.mkdir()
         sa.polygon(folder/'slope.poly', h)
         for name, loaded in (('seed', False), ('slope', True)):
-            with (folder/f'{name}.cfg').open('w') as f: config(h, steps, loaded).write(f)
-            with (folder/f'{name}.log').open('w') as f:
-                code = subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=f,
-                                      stderr=subprocess.STDOUT, timeout=80000).returncode
+            code = run_des(exe, folder, name, config(h, steps, loaded), 80000, check=False).returncode
             if code not in (0, 54) or (code == 54 and not loaded):
                 raise RuntimeError(f'{folder}/{name}: exit {code}')
         frames, nodes, elements = sa.analyse(folder)
         for f, ps in zip(frames, surface_pressure(folder)): f['surface_pressure_max'] = ps
         item = dict(spacing_m=h, nodes=nodes, elements=elements, lost_equilibrium=code == 54, frames=frames)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         last = frames[-1]
         print(json.dumps(dict(spacing_m=h, lost_equilibrium=code == 54, last_time=last['time'],
                               last_base_pressure=last['base_pressure'],

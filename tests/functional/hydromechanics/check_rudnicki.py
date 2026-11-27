@@ -14,7 +14,6 @@ for 2.5 <= r <= 8 m while the diffusion front stays well inside the box.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -34,7 +33,7 @@ REF = Rudnicki(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['flu
                MAT['grain_bulk'], MAT['permeability'], MAT['viscosity'], Q)
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, run_des, write_json
 
 
 def config(h, steps):
@@ -100,16 +99,12 @@ def compare(folder):
 
 def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   reference=dict(c=REF.c, S=REF.S, A=REF.A, rate=Q, box=L, refined_zone=ZONE, band=BAND),
                   steps=steps, duration_s=DURATION, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'rudnicki.cfg').open('w') as f: config(h, steps).write(f)
-        run_solver([str(exe), 'rudnicki.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+        run_des(exe, folder, 'rudnicki', config(h, steps), timeout=20000)
         frames, nodes, elements = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),
@@ -117,7 +112,7 @@ def study(exe, out, spacings, steps):
                     radial_rms=max(f['radial_rms'] for f in frames), hoop_rms=max(f['hoop_rms'] for f in frames),
                     input_sha256=digest(folder/'rudnicki.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

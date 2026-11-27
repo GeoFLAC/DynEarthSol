@@ -9,9 +9,6 @@ The analytical modes have different horizontal wave numbers, so exchanging
 the directional diffusivities cannot masquerade as the correct decay.
 """
 import argparse
-import json
-import math
-import os
 from pathlib import Path
 import sys
 
@@ -20,7 +17,6 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
-from pt_initial_checkpoint import fields
 
 P0, MU = 1000., 1.002e-3
 STORAGE = .3/2.17e9 + .7/37e9
@@ -29,7 +25,8 @@ TENSORS = ([4, 1, 1, 0, 0, 0], [1, 1, 9, 0, 0, 0])
 INITIAL = np.array([1., .35])
 
 
-from des_case import digest, read_config, run_solver, source_revision
+from des_case import check_manifest, digest, file_hashes, provenance, read_config, run_model, write_json
+from des_test_utils import fields, lumped_volumes, physical_differences
 
 
 def basis(x):
@@ -69,18 +66,10 @@ def configuration(h, dt, dim):
     return cfg
 
 
-def run(executable, folder, cfg, name):
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(executable), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=180, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
-    return Dynearthsol(str(folder/name))
-
-
 def case(executable, folder, h, steps, dim):
     folder.mkdir()
     cfg = configuration(h, 1/steps, dim)
-    seed = run(executable, folder, cfg, 'seed')
+    seed = run_model(executable, folder, cfg, 'seed', timeout=180)
     assert seed.format == 'binary', 'Use a binary executable for the analytical initial-state seed'
     assert seed.ndims == dim
     x = seed.read_field(0, 'coordinate')
@@ -93,12 +82,12 @@ def case(executable, folder, h, steps, dim):
         stream.seek(seed.field_pos['pore pressure']); stream.write(initial.astype(np.float64).tobytes())
     cfg['sim'].update(is_restarting='true', restarting_from_modelname='seed', restarting_from_frame='0',
                       output_step_interval=str(steps//4), max_steps=str(steps//2))
-    run(executable, folder, cfg, 'first')
+    run_model(executable, folder, cfg, 'first', timeout=180)
     cfg['mat'].update(hydraulic_perm=repr([PERMEABILITY[1]]), permeability_tensor=repr(TENSORS[1]))
     cfg['sim'].update(restarting_from_modelname='first', restarting_from_frame='2', max_steps=str(steps))
-    run(executable, folder, cfg, 'second')
+    run_model(executable, folder, cfg, 'second', timeout=180)
     cfg['sim'].update(restarting_from_modelname='second', restarting_from_frame='3')
-    run(executable, folder, cfg, 'resumed')
+    run_model(executable, folder, cfg, 'resumed', timeout=180)
     return analyze(folder, h, steps, dim)
 
 
@@ -110,10 +99,8 @@ def analyze(folder, h, steps, dim):
     for kind, frame in (('save', 3), ('save', 4), ('chkpt', 4)):
         a, b = fields(folder/f'second.{kind}.{frame:06d}'), fields(folder/f'resumed.{kind}.{frame:06d}')
         assert a.keys() == b.keys()
-        assert all(a[k] == b[k] for k in a if k not in ('walltime_sec', 'provenance'))
-    volumes = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
-    weights = np.zeros(len(x))
-    np.add.at(weights, conn, np.broadcast_to((volumes/(dim+1))[:, None], conn.shape))
+        assert not physical_differences(a, b)
+    weights = lumped_volumes(x, conn)
     rows = []
     for name, model in (('first', first), ('second', second)):
         for row in scan_frames(str(folder/name)):
@@ -132,7 +119,7 @@ def analyze(folder, h, steps, dim):
                              modal_error=float(np.max(np.abs(fitted-exact))),
                              content_error_over_initial=float(abs(content-reference_content)/
                                  (STORAGE*P0*4/np.pi**2*(h if dim == 3 else 1.)))))
-    outputs = {p.name: digest(p) for p in folder.iterdir() if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.cfg'}
+    outputs = file_hashes(p for p in folder.iterdir() if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.cfg')
     return dict(spacing_m=h, steps=steps, nodes=len(x), elements=len(conn), switch_time=switch,
                 frames=rows, maximum_pressure_error=max(r['pressure_error_over_initial_scale'] for r in rows),
                 maximum_modal_error=max(r['modal_error'] for r in rows), exact_restart=True, files_sha256=outputs)
@@ -150,16 +137,15 @@ def main():
         parser.error('Use positive spacings <=0.25 and steps divisible by four')
     executable, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    report = dict(executable_sha256=digest(executable), runner_sha256=digest(__file__), dimension=args.dimension,
-                  source_commit=source_revision(ROOT), cases=[])
-    if args.binary_manifest:
-        q = json.loads(args.binary_manifest.read_text()); assert report['executable_sha256'] in q['binaries'].values()
-        report.update(solver_commit=q['implementation_commit'], binary_manifest_sha256=digest(args.binary_manifest))
+    report = dict(provenance(executable, __file__), dimension=args.dimension, cases=[])
+    solver = check_manifest(args.binary_manifest, report['executable_sha256'])
+    if solver:
+        report.update(solver_commit=solver['implementation_commit'], binary_manifest_sha256=digest(args.binary_manifest))
     (output/'runner.py').write_bytes(Path(__file__).read_bytes())
     for h in args.spacings:
         record = case(executable, output/f'h{h:g}', h, args.steps, args.dimension)
         report['cases'].append(record)
-        (output/'summary.json').write_text(json.dumps(report, indent=2)+'\n')
+        write_json(output/'summary.json', report)
         print(h, record['maximum_pressure_error'], record['maximum_modal_error'], flush=True)
     assert digest(executable) == report['executable_sha256']
 

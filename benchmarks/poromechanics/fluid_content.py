@@ -9,10 +9,7 @@ Every accepted step must be saved. --replay verifies and reanalyses hashes.
 """
 
 import argparse
-import configparser
 import json
-import math
-import os
 from pathlib import Path
 import sys
 
@@ -34,11 +31,9 @@ PRESSURE = INFLOW*PROPS['height']/MOBILITY
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, run_solver, source_revision
-
-
-def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False)+'\n')
+from des_case import (check_hashes, digest, file_hashes, material_options, read_config, run_des, source_revision,
+                      write_json)
+from des_test_utils import facet_areas, simplex_gradients, simplex_volumes
 
 
 def reference(depth, time, terms=512, inflow=INFLOW):
@@ -106,12 +101,7 @@ def configuration(h, dt, duration, method, scaling, inflow):
                      hbc_flux=f'[0,0,0,0,{-inflow!r},0]', stress_val_z1='0')
     cfg['ic'].update(weakzone_option='0', has_body_force_adjustment='false',
                      pore_pressure_option='2', pore_pressure_value='0')
-    names = dict(bulk='bulk_modulus', shear='shear_modulus', porosity='porosity',
-                 fluid_bulk='fluid_bulk_modulus', grain_bulk='bulk_modulus_s',
-                 biot='biot_coeff', permeability='hydraulic_perm', viscosity='fluid_visc')
-    for key, name in names.items():
-        cfg['mat'][name] = repr([PROPS[key]])
-    cfg['mat'].update(rho0='[2650]', fluid_rho0='[1000]', fluid_alpha='[0]', alpha='[0]')
+    cfg['mat'].update(material_options(PROPS), rho0='[2650]', fluid_rho0='[1000]', fluid_alpha='[0]', alpha='[0]')
     return cfg
 
 
@@ -133,24 +123,21 @@ def checkpoint_field(model, frame, name, count):
 
 
 def analyze(folder, method):
-    cfg = configparser.ConfigParser(); cfg.read(folder/'input.cfg')
+    cfg = read_config(folder/'input.cfg')
     inflow = -json.loads(cfg['bc']['hbc_flux'])[4]
     pressure_scale = inflow*REF.height/MOBILITY
     model = Dynearthsol(str(folder/'column')); dim = int(model.ndims)
     rows = scan_frames(str(folder/'column'))
     assert [row['steps'] for row in rows] == list(range(len(rows))), 'every physical step must be saved'
     x, conn = (model.read_field(0, name) for name in ('coordinate', 'connectivity'))
-    vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-    volume = np.abs(np.linalg.det(vertices))/math.factorial(dim)
-    grad = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
+    volume = simplex_volumes(x, conn)
+    grad = simplex_gradients(x, conn)
     area = volume.sum()/REF.height
     # Drain flux is measured through the element facets that lie on the drain (z = 0).
     top = np.isclose(x[conn, -1], 0).sum(axis=1) == dim
     facet_area = np.zeros(len(conn))
     for e in np.flatnonzero(top):
-        face = x[conn[e]][np.isclose(x[conn[e], -1], 0)]
-        facet_area[e] = np.linalg.norm(face[1]-face[0]) if dim == 2 else np.linalg.norm(
-            np.cross(face[1]-face[0], face[2]-face[0]))/2
+        facet_area[e] = facet_areas(x[conn[e]][np.isclose(x[conn[e], -1], 0)])
     np.testing.assert_allclose(facet_area.sum(), area, rtol=1e-12)
     lag_capacity = PROPS['biot']**2/(PROPS['bulk']+(PROPS['shear']/3 if dim == 2 else 0))
     history, boundary, darcy_drain = [], 0., 0.
@@ -240,8 +227,7 @@ def main():
     reports = []
     if args.replay:
         manifest = json.loads((out/'manifest.json').read_text())
-        for name, sha in manifest['artifacts_sha256'].items():
-            assert digest(out/name) == sha, name
+        check_hashes(manifest['artifacts_sha256'], out)
     else:
         out.mkdir(parents=True, exist_ok=False)
         manifest = dict(command=sys.argv, executable=str(exe), executable_sha256=digest(exe),
@@ -250,21 +236,19 @@ def main():
                                        (Path(__file__), Path(__file__).with_name('terzaghi_reference.py'), ROOT/'Dynearthsol.py')},
                         method=args.method, settings=vars(args) | dict(executable=str(exe), output=str(out)),
                         properties=PROPS, reference_checks=reference_checks(), cases=[])
-        env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
         for h in args.spacings:
             case = out/f'h{h:g}'; case.mkdir()
-            with (case/'input.cfg').open('w') as stream:
-                configuration(h, args.dt, args.duration, args.method, args.scaling, args.inflow).write(stream)
-            run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=env, check=True, timeout=3600)
+            cfg = configuration(h, args.dt, args.duration, args.method, args.scaling, args.inflow)
+            run_des(exe, case, 'input', cfg, 3600)
             assert digest(exe) == manifest['executable_sha256']
             manifest['cases'].append(case.name)
-            manifest['artifacts_sha256'] = {str(p.relative_to(out)): digest(p) for p in sorted(out.glob('h*/*')) if p.is_file()}
+            manifest['artifacts_sha256'] = file_hashes(out.glob('h*/*'), out)
             write_json(out/'manifest.json', manifest)
             reports.append(analyze(case, args.method))
             assert reports[-1]['dimension'] == args.ndims, 'executable and requested dimension differ'
             print(json.dumps(reports[-1]), flush=True)
-        manifest['artifacts_sha256'] = {str(p.relative_to(out)): digest(p) for p in sorted(out.glob('h*/*'))
-                                         if p.is_file() and p.name not in ('analysis.json', 'history.csv')}
+        manifest['artifacts_sha256'] = file_hashes((p for p in out.glob('h*/*')
+                                                    if p.name not in ('analysis.json', 'history.csv')), out)
         write_json(out/'manifest.json', manifest)
     summary = dict(reference_checks=reference_checks(), cases=reports or
                    [analyze(out/name, manifest['method']) for name in manifest['cases']])

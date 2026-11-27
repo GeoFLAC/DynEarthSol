@@ -13,7 +13,6 @@ reference. Mechanics is stiff and does not feed back on the pressure.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -30,7 +29,8 @@ T_TOP = 273.
 CAPACITY = RHO_S*CS  # equals RHO*CF, so independent of porosity
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
+from des_test_utils import lumped_volumes
 
 
 def config(h, ratio, seed, steps, dt, outputs):
@@ -58,20 +58,12 @@ def config(h, ratio, seed, steps, dt, outputs):
     return cfg
 
 
-def lumped_area(coord, conn):
-    w = np.zeros(len(coord))
-    for tri in conn:
-        (x0, z0), (x1, z1), (x2, z2) = coord[tri]
-        np.add.at(w, tri, abs((x1-x0)*(z2-z0) - (x2-x0)*(z1-z0))/6)
-    return w
-
-
 def amplitudes(folder):
     model = Dynearthsol(str(folder/'box')); rows = scan_frames(str(folder/'box'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
     assert coord.shape[1] == 2, 'the projection is two-dimensional'
     x, z = coord[:, 0], coord[:, 1]
-    w = lumped_area(coord, conn)*4*np.cos(math.pi*x)*np.sin(math.pi*(z+1))
+    w = lumped_volumes(coord, conn)*4*np.cos(math.pi*x)*np.sin(math.pi*(z+1))
     out = []
     for row in rows:
         theta = model.read_field(row['frame'], 'temperature') - (T_TOP - DT*z)
@@ -82,16 +74,10 @@ def amplitudes(folder):
 
 def study(exe, out, h, ratios, steps, dt, seed):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=source_revision(ROOT),
-                  spacing=h, steps=steps, dt=dt, seed_K=seed, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
+    result = dict(provenance(exe, __file__, out), spacing=h, steps=steps, dt=dt, seed_K=seed, cases=[])
     for ratio, amp in [(r, seed) for r in ratios] + [(ratios[-1], 0.0)]:
         folder = out/f'ra{ratio:g}-seed{amp:g}'; folder.mkdir()
-        cfg = config(h, ratio, amp, steps, dt, 40)
-        with (folder/'box.cfg').open('w') as f: cfg.write(f)
-        run_solver([str(exe), 'box.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=3600)
+        run_des(exe, folder, 'box', config(h, ratio, amp, steps, dt, 40), timeout=3600)
         series = amplitudes(folder)
         item = dict(ra_over_critical=ratio, seed_K=amp, series=series)
         if amp:
@@ -104,7 +90,7 @@ def study(exe, out, h, ratios, steps, dt, seed):
         else:
             item.update(rest_max_theta_over_dT=series[-1][2]/DT)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'series'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

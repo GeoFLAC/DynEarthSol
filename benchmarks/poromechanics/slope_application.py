@@ -12,9 +12,7 @@ with the infinite-slope factor of safety and Davis's non-associated estimate.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -30,7 +28,6 @@ COHESION, FRICTION = 2e3, math.radians(35.0)
 MAT = dict(bulk=5e7, shear=5.17e6, biot=1.0, fluid_bulk=2.2e9, permeability=1e-11, viscosity=1e-3)
 SETTLE, RAMP = 20.0, 2000.0              # s: gravity settles, then the base pressure ramps
 SIGMA_N, TAU = GAMMA*D*math.cos(BETA)**2, GAMMA*D*math.sin(BETA)*math.cos(BETA)
-U_STAR = SIGMA_N - (TAU - COHESION)/math.tan(FRICTION)     # base pore pressure at FS = 1
 # Pointwise Mohr-Coulomb yield on the poroelastic path of the infinite slope. Gravity turn-on gives
 # slope-parallel effective stress K0 sigma_n (zero strain along the slope); a pore-pressure rise u
 # lowers the slope-normal effective stress by u and the slope-parallel one by K0 u, so
@@ -40,29 +37,22 @@ K0 = NU/(1 - NU)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, reset_boundaries, source_revision
-
-def _pointwise_yield():
-    from scipy.optimize import brentq
-    f = lambda s: (math.hypot((1 - K0)/2*s, TAU) - (1 + K0)/2*s*math.sin(FRICTION) - COHESION*math.cos(FRICTION))
-    return SIGMA_N - brentq(f, 1.0, SIGMA_N)
-
-
-U_POINT = _pointwise_yield()
+from des_case import material_options, provenance, read_config, reset_boundaries, run_des, write_json, write_poly
 
 
 def estimates(cohesion, friction):
-    """Pointwise onset, Davis non-associated and classical base pore pressures for another strength."""
+    """Pointwise onset, Davis non-associated and classical (FS = 1) base pore pressures of a strength."""
     from scipy.optimize import brentq
     f = lambda s: (math.hypot((1 - K0)/2*s, TAU) - (1 + K0)/2*s*math.sin(friction) - cohesion*math.cos(friction))
     point = SIGMA_N - brentq(f, 1.0, SIGMA_N)
+    # Davis (1968): a non-associated shear band fails as if c* = c cos(psi) cos(phi)/(1 - sin(psi) sin(phi)),
+    # tan(phi*) = cos(psi) sin(phi)/(1 - sin(psi) sin(phi)); here psi = 0.
     davis = SIGMA_N - (TAU - cohesion*math.cos(friction))/math.sin(friction)
     classical = SIGMA_N - (TAU - cohesion)/math.tan(friction)
     return point, davis, classical
-# Davis (1968): a non-associated shear band fails as if c* = c cos(psi) cos(phi)/(1 - sin(psi) sin(phi)),
-# tan(phi*) = cos(psi) sin(phi)/(1 - sin(psi) sin(phi)); here psi = 0.
-PHI_DAVIS, C_DAVIS = math.atan(math.sin(FRICTION)), COHESION*math.cos(FRICTION)
-U_DAVIS = SIGMA_N - (TAU - C_DAVIS)/math.tan(PHI_DAVIS)
+
+
+U_POINT, U_DAVIS, U_STAR = estimates(COHESION, FRICTION)
 P_MAX = 1.5*U_STAR
 
 
@@ -95,15 +85,8 @@ def polygon(path, h):
             ids.append(len(points)); points.append((xe, -xe*t - D + D*k/m))
         ids.append(it)
         edges += [(a, b, 0) for a, b in zip(ids[:-1], ids[1:])]
-    with path.open('w') as f:
-        f.write(f'{len(points)} 2 0 0\n')
-        for i, (x, z) in enumerate(points): f.write(f'{i} {x:.17g} {z:.17g}\n')
-        f.write(f'{len(edges)} 1\n')
-        for i, (a, b, mk) in enumerate(edges): f.write(f'{i} {a} {b} {mk}\n')
-        regions = [(END/2, 1), (L/2, 0), (L - END/2, 1)]
-        f.write(f'0\n{len(regions)}\n')
-        for i, (x, attr) in enumerate(regions):
-            f.write(f'{i} {x} {-x*t - D/2} {attr} {h*h/2}\n')
+    regions = [(END/2, 1), (L/2, 0), (L - END/2, 1)]
+    write_poly(path, points, edges, [(x, -x*t - D/2, attr, h*h/2) for x, attr in regions])
 
 
 def config(h, steps, loaded, dilation=0.0, cohesion=COHESION, friction=FRICTION):
@@ -128,12 +111,9 @@ def config(h, steps, loaded, dilation=0.0, cohesion=COHESION, friction=FRICTION)
               hbc_schedule_ratio='[0, 0, 1]')
     cfg['ic'].update(initial_stress_option='0' if loaded else '1', initial_stress='[0,0,0]', pore_pressure_option='0',
                      has_body_force_adjustment='false', weakzone_option='0')
-    m = MAT
     cfg['mat'].update(rheology_type='elasto-plastic', is_plane_strain='true', alpha='[0]', rho0=f'[{RHO_S!r}]',
-                      fluid_rho0=f'[{RHO_F!r}]', porosity=f'[{PHI_N!r}]', bulk_modulus=f"[{m['bulk']!r}]",
-                      shear_modulus=f"[{m['shear']!r}]", biot_coeff=f"[{m['biot']!r}]", fluid_bulk_modulus=f"[{m['fluid_bulk']!r}]",
-                      bulk_modulus_s='[1e20]', hydraulic_perm=f"[{m['permeability']!r}]", fluid_visc=f"[{m['viscosity']!r}]",
-                      fluid_alpha='[0]', retention_model='[0]',
+                      fluid_rho0=f'[{RHO_F!r}]', porosity=f'[{PHI_N!r}]', **material_options(MAT),
+                      bulk_modulus_s='[1e20]', fluid_alpha='[0]', retention_model='[0]',
                       cohesion0=f'[{cohesion!r}]', cohesion1=f'[{cohesion!r}]',
                       friction_angle0=f'[{math.degrees(friction)!r}]', friction_angle1=f'[{math.degrees(friction)!r}]',
                       dilation_angle0=f'[{dilation!r}]', dilation_angle1=f'[{dilation!r}]', max_tension='1e9')
@@ -174,11 +154,10 @@ def analyse(folder):
 
 def study(exe, out, spacings, steps, dilation=0.0, cohesion=COHESION, friction=FRICTION, elastic_gravity=False):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    u_point, u_davis, _ = estimates(cohesion, friction)
+    result = dict(provenance(exe, __file__),
                   beta_deg=math.degrees(BETA), thickness=D, length=L, cohesion=COHESION, friction_deg=math.degrees(FRICTION),
-                  gamma=GAMMA, sigma_n=SIGMA_N, tau=TAU, u_star=U_STAR, u_point=estimates(cohesion, friction)[0], u_davis=estimates(cohesion, friction)[1], k0=K0, p_max=P_MAX, steps=steps,
+                  gamma=GAMMA, sigma_n=SIGMA_N, tau=TAU, u_star=U_STAR, u_point=u_point, u_davis=u_davis, k0=K0, p_max=P_MAX, steps=steps,
                   dilation_deg=dilation, cohesion_Pa=cohesion, friction_deg_used=math.degrees(friction),
                   elastic_gravity=elastic_gravity, cases=[])
     for h in spacings:
@@ -196,16 +175,13 @@ def study(exe, out, spacings, steps, dilation=0.0, cohesion=COHESION, friction=F
             load['sim'].update(restarting_from_modelname='gravity', restarting_from_frame='1')
         stages.append(('slope', load))
         for name, cfg in stages:
-            with (folder/f'{name}.cfg').open('w') as f: cfg.write(f)
-            with (folder/f'{name}.log').open('w') as f:
-                code = subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=f,
-                                      stderr=subprocess.STDOUT, timeout=40000).returncode
+            code = run_des(exe, folder, name, cfg, 40000, check=False).returncode
             if code not in (0, 54) or (code == 54 and name != 'slope'):
                 raise RuntimeError(f'{folder}/{name}: exit {code}')
         frames, nodes, elements = analyse(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, lost_equilibrium=code == 54, frames=frames)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         last = frames[-1]
         print(json.dumps(dict(spacing_m=h, lost_equilibrium=code == 54, last_base_pressure=last['base_pressure'],
                               u_star=U_STAR, last_basal_plastic_fraction=last['basal_plastic_fraction'])), flush=True)

@@ -8,8 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
-from pt_initial_checkpoint import fields
-from des_test_utils import checkpoint_file, read_config, run_des
+from des_test_utils import checkpoint_file, fields, physical_differences, read_config, run_des, runtime_key
 
 
 def configuration():
@@ -51,9 +50,9 @@ def check_continuation(exe, out, cfg):
             a=fields(original)
             b=fields(current)
             assert a.keys() == b.keys(), (kind, frame, a.keys() ^ b.keys())
-            for key in a:
-                if key.split('/')[-1] not in ('walltime_sec','provenance'):
-                    assert a[key]==b[key],(kind,frame,key);matched+=1
+            different = physical_differences(a, b)
+            assert not different, (kind, frame, different)
+            matched += sum(not runtime_key(key) for key in a)
     return matched
 
 

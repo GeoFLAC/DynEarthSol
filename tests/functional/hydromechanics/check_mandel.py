@@ -15,7 +15,6 @@ same material values.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -35,7 +34,7 @@ REF = Mandel(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['fluid
 TC = A**2/REF.c                      # consolidation time a^2/c
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, run_des, write_json
 
 
 def config(h, steps, duration):
@@ -87,16 +86,12 @@ def compare(folder):
 
 def study(exe, out, spacings, steps, duration):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   reference=dict(c=REF.c, p0=REF.p0, B=REF.B, nu=REF.nu, nu_u=REF.nu_u, tc=TC, F=P*A,
                                  half_width=A, half_height=HEIGHT), steps=steps, duration_s=duration, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'mandel.cfg').open('w') as f: config(h, steps, duration).write(f)
-        run_solver([str(exe), 'mandel.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=7200)
+        run_des(exe, folder, 'mandel', config(h, steps, duration), timeout=7200)
         _, rows, frames = compare(folder)
         settle = max(abs(f['settlement_m']-f['settlement_ref_m'])/f['settlement_ref_m'] for f in frames)
         item = dict(spacing_m=h, frames=frames, max_error_over_p0=max(f['max_error_over_p0'] for f in frames),
@@ -105,7 +100,7 @@ def study(exe, out, spacings, steps, duration):
                     centre_peak_ref_over_p0=max(f['centre_ref_over_p0'] for f in frames),
                     input_sha256=digest(folder/'mandel.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

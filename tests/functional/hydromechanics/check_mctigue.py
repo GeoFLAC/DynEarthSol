@@ -22,7 +22,6 @@ element layers and the surface heave from the integrated layer strain.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -41,7 +40,7 @@ REF = McTigue(MAT['bulk'], MAT['shear'], MAT['biot'], MAT['porosity'], MAT['flui
               MAT['permeability'], MAT['viscosity'], MAT['alpha_solid'], MAT['alpha_fluid'], KAPPA, DT)
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, layer_strain, provenance, read_config, run_des, write_json
 
 
 def config(ndims, h, steps, start=None):
@@ -75,29 +74,21 @@ def config(ndims, h, steps, start=None):
     return cfg
 
 
-def layer_strain(coord, conn, ezz, h):
-    """Mean vertical strain of each element layer, from the top down, and layer mid-depths."""
-    depth = -coord[conn][:, :, -1].mean(axis=1)
-    layer = np.floor(depth/h).astype(int)
-    n = int(round(L/h))
-    count = np.bincount(layer, minlength=n).astype(float)
-    assert len(count) == n and count.min() > 0, 'the column mesh must be structured in layers of height h'
-    return np.bincount(layer, weights=ezz, minlength=n)/count, (np.arange(n) + .5)*h
-
-
 def compare(folder, h):
     base = Dynearthsol(str(folder/'start'))
     model = Dynearthsol(str(folder/'mctigue')); rows = scan_frames(str(folder/'mctigue'))
     coord = base.read_field(0, 'coordinate'); conn = base.read_field(0, 'connectivity')
     assert np.all(base.read_field(0, 'temperature') == T0), 'the column must start uniformly at T0'
     depth = -coord[:, -1]; zz = coord.shape[1] - 1
-    e0, _ = layer_strain(coord, conn, base.read_field(0, 'strain')[:, zz], h)
+    # Element layers count down from the surface z = 0.
+    e0 = layer_strain(coord, conn, base.read_field(0, 'strain')[:, zz], h, 0., L)
+    mid = (np.arange(len(e0)) + .5)*h
     frames = []
     for row in [r for r in rows if r['time'] > 0]:
         t = row['time']
         T = model.read_field(row['frame'], 'temperature') - T0
         p = model.read_field(row['frame'], 'pore pressure')
-        e, mid = layer_strain(coord, conn, model.read_field(row['frame'], 'strain')[:, zz], h)
+        e = layer_strain(coord, conn, model.read_field(row['frame'], 'strain')[:, zz], h, 0., L)
         e = e - e0
         pref, Tref, eref = REF.pressure(depth, t), REF.temperature(depth, t), REF.strain(mid, t)
         heave = float(np.sum(e)*h)
@@ -111,25 +102,20 @@ def compare(folder, h):
 
 def study(exe, out, ndims, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   ndims=ndims, steps=steps, duration_s=DURATION, material=MAT,
                   reference=dict(kappa=KAPPA, c=REF.c, gamma=REF.gamma, S=REF.S, dT=DT), cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'start.cfg').open('w') as f: config(ndims, h, steps).write(f)
-        with (folder/'mctigue.cfg').open('w') as f: config(ndims, h, steps, folder/'start').write(f)
-        for name in ('start', 'mctigue'):
-            run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=20000)
+        run_des(exe, folder, 'start', config(ndims, h, steps), timeout=20000)
+        run_des(exe, folder, 'mctigue', config(ndims, h, steps, folder/'start'), timeout=20000)
         assert Dynearthsol(str(folder/'mctigue')).ndims == ndims, 'the executable and --ndims disagree'
         frames, nodes = compare(folder, h)
         item = dict(spacing_m=h, nodes=nodes, frames=frames, input_sha256=digest(folder/'mctigue.cfg'),
                     **{k: max(f[k] for f in frames) for k in
                        ('temperature_error', 'pressure_error', 'strain_error', 'heave_error')})
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

@@ -17,16 +17,13 @@ Usage: check_unsaturated_column.py EXECUTABLE OUTPUT_DIRECTORY
   fixed and on a remeshed mesh, with the pt_initial_checkpoint.py comparator.
 """
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT / 'benchmarks' / 'poromechanics')]
-from Dynearthsol import Dynearthsol
 from unsaturated_reference import Retention, srivastava_yeh, steady_pressure
 
 G, RHO, MU = 9.81, 1000.0, 1.002e-3
@@ -36,7 +33,7 @@ KS, ALPHA_HEAD = 1 / 3.6e5, 10.0  # Srivastava and Yeh example: 1 cm/h, 0.1/cm
 PERM = KS * MU / GAMMA
 
 
-from des_case import read_config, run_solver
+from des_case import read_config, restart_check, retention_options, run_model, write_json
 
 def column(ndims, res, tend, dt, *, retention, table=-1.0, flux=0.9 * KS, fluid_bulk=2.17e9, frames=4):
     """A laterally confined column, z in [-1, 0], water table at `table`,
@@ -63,10 +60,7 @@ def column(ndims, res, tend, dt, *, retention, table=-1.0, flux=0.9 * KS, fluid_
 
 def run(exe, cfg, case):
     case.mkdir(parents=True)
-    with (case / 'column.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(exe), 'column.cfg'], log=case / 'run.log', cwd=case, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=1800)
-    return Dynearthsol(str(case / 'column'))
+    return run_model(exe, case, cfg, 'column', timeout=1800)
 
 
 # A node's content is rounded at ~eps times its pore volume on each update, with
@@ -87,8 +81,7 @@ def balance_error(model, inflow):
 
 def transient(exe, out, ndims):
     """U6: Gardner column against Srivastava-Yeh at T = alpha*Ks*t/dtheta = 0.5."""
-    ret = dict(retention_model='[3]', retention_alpha=f'[{ALPHA_HEAD / GAMMA!r}]',
-               residual_saturation='[0]')
+    ret = retention_options(Retention('gardner', ALPHA_HEAD / GAMMA))
     sy = dict(length=1.0, alpha=ALPHA_HEAD, ks=KS, dtheta=0.4, qa=0.0, qb=0.9 * KS)
     # The step stays fixed while the spatial mesh is refined.
     # This is an isothermal flow check, so unused heat diffusion is disabled.
@@ -117,8 +110,7 @@ def transient(exe, out, ndims):
 
 def modes(exe, out, ndims, reference):
     """The 5 cm transient without PT, as tectonic and cycle runs are set up."""
-    ret = dict(retention_model='[3]', retention_alpha=f'[{ALPHA_HEAD / GAMMA!r}]',
-               residual_saturation='[0]')
+    ret = retention_options(Retention('gardner', ALPHA_HEAD / GAMMA))
     sy = dict(length=1.0, alpha=ALPHA_HEAD, ks=KS, dtheta=0.4, qa=0.0, qb=0.9 * KS)
     rows = {}
     for gvs in ('false', 'true'):
@@ -143,20 +135,16 @@ def steady(exe, out, ndims):
     limits it. In 3D the short steps at 2.5 cm would make 2e6 s of explicit
     run too long, so one 5 cm run must stay within 6% of the profile range.
     """
-    laws = {'van_genuchten': (Retention('van_genuchten', 1 / 2e3, 2.0, 0.1), 3.0,
-                              dict(retention_model='[1]', retention_alpha='[5e-4]',
-                                   retention_n='[2]', residual_saturation='[0.1]')),
-            'brooks_corey': (Retention('brooks_corey', 1 / 1e3, 1.5, 0.05), 1.5,
-                             dict(retention_model='[2]', retention_alpha='[1e-3]',
-                                  retention_n='[1.5]', residual_saturation='[0.05]'))}
+    laws = {'van_genuchten': (Retention('van_genuchten', 1 / 2e3, 2.0, 0.1), 3.0),
+            'brooks_corey': (Retention('brooks_corey', 1 / 1e3, 1.5, 0.05), 1.5)}
     rows = {}
-    for name, (ret, rate, options) in laws.items():
+    for name, (ret, rate) in laws.items():
         rows[name] = []
         # A compressible fluid shortens the explicit run; it changes no steady
         # profile.
         dt = 300.0 if ndims == 2 else 120.0
         for res in ((0.05, 0.025) if ndims == 2 else (0.05,)):
-            cfg = column(ndims, res, 2e6, dt, retention=options, flux=0.5 * KS,
+            cfg = column(ndims, res, 2e6, dt, retention=retention_options(ret), flux=0.5 * KS,
                          fluid_bulk=4e4, frames=2)
             model = run(exe, cfg, out / f'steady-{name}-{res}')
             assert model.ndims == ndims, 'the executable and --ndims disagree'
@@ -186,16 +174,8 @@ def restart(exe, out):
         if mode == 'fixed':
             cfg['control']['has_moving_mesh'] = 'false'
         cfg['ic']['water_table_z'] = '-0.5'
-        cfg['mat'].update(retention_model='[1]', retention_alpha='[2e-4]', retention_n='[1.6]',
-                          residual_saturation='[0.1]')
-        source = out / f'restart-{mode}.cfg'
-        with source.open('w') as stream:
-            cfg.write(stream)
-        command = [sys.executable, str(ROOT / 'tests/functional/pt_initial_checkpoint.py'),
-                   str(exe), str(source), str(out / f'restart-{mode}'), '--restart-frame', '1', '--steps', '4']
-        if mode == 'remesh':
-            command.append('--require-remesh')
-        subprocess.run(command, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=600)
+        cfg['mat'].update(retention_options(Retention('van_genuchten', 2e-4, 1.6, 0.1)))
+        restart_check(exe, cfg, out / f'restart-{mode}', 4, 1, require_remesh=mode == 'remesh', timeout=600)
         result[mode] = 'exact'
     return result
 
@@ -207,7 +187,7 @@ def main():
     summary = dict(ndims=ndims, transient=transient(exe, out, ndims))
     summary['modes'] = modes(exe, out, ndims, summary['transient'][0]['max_error'][-1])
     summary.update(steady=steady(exe, out, ndims), restart=restart(exe, out))
-    (out / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    write_json(out / 'summary.json', summary)
     print(json.dumps(summary, indent=2))
     print('PASS: unsaturated transient (PT and dynamic relaxation), steady profiles, exact restart and remeshing')
 

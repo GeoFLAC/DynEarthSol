@@ -11,7 +11,6 @@ infinite-domain Theis accuracy or nonlinear/evolving-property superposition.
 """
 
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -25,14 +24,13 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 RATE_SCALE = 1e-3
 
 
-from des_case import digest, run_solver
+from des_case import digest, run_des, write_json
 
 
 def main():
     exe, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
     dim = 3 if exe.name.endswith('3d') else 2
     output.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
     original_hash = digest(exe)
     cases, records = {}, {}
     for label, wells in [('pump', [0]), ('inject', [1]), ('combined', [0, 1])]:
@@ -59,9 +57,9 @@ def main():
                               input_sha256=digest(folder / 'input.cfg'),
                               test_sha256=digest(Path(__file__)), rate_scale=RATE_SCALE,
                               net_rate=sum(rates[w] for w in wells), status='running')
-        (output / 'provenance.json').write_text(json.dumps(records, indent=2) + '\n')
+        write_json(output / 'provenance.json', records)
         print(f'Running {dim}D {label}', flush=True)
-        run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=180)
+        run_des(exe, folder, 'input', cfg, timeout=180)
         if digest(exe) != original_hash:
             raise RuntimeError('Executable changed during multi-well verification')
         model = Dynearthsol(str(folder / 'wells'))
@@ -78,7 +76,7 @@ def main():
         cases[label] = model
         records[label].update(status='complete', max_content_balance_error_over_volume=residual,
                               frames=count, max_abs_strain=strain)
-        (output / 'provenance.json').write_text(json.dumps(records, indent=2) + '\n')
+        write_json(output / 'provenance.json', records)
 
     combined, pump, inject = (cases[name] for name in ('combined', 'pump', 'inject'))
     for frame in combined.frames:
@@ -98,7 +96,7 @@ def main():
                           'Schedule events fall between physical timesteps.',
                           'Injection-only closure uses a positive normalization volume.',
                           'This is not an analytical radial-flow accuracy test.'])
-    (output / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False) + '\n')
+    write_json(output / 'summary.json', summary)
     print(json.dumps(summary, indent=2))
 
 

@@ -16,6 +16,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 import plastic_heat as heat
+from Dynearthsol import Dynearthsol, YEAR2SEC
 
 HEIGHT, NORMAL = .01, 5e7
 BULK, SHEAR, COHESION = 2e10, 1e10, 1e6
@@ -27,7 +28,8 @@ TAU0 = NORMAL*math.sin(ANGLE)+COHESION*math.cos(ANGLE)
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import source_revision
+from des_case import provenance, write_json
+from des_test_utils import simplex_volumes
 
 def reference(gamma, heating=True, expansion=True, rtol=1e-10):
     """Integrate in shear strain, starting at yield under normal stress -N.
@@ -82,9 +84,9 @@ def configuration(mode, dt, strain, velocity, scaling=1e5, heating=True, expansi
     cfg = heat.configuration(2, 'pt1' if mode == 'pt' else mode, dt, 1)
     duration = strain*HEIGHT/velocity
     steps = round(duration/dt) if mode == 'pt' else 100000000
-    cfg['sim'].update(max_steps=str(steps), max_time_in_yr=repr(duration/heat.water.YEAR2SEC),
+    cfg['sim'].update(max_steps=str(steps), max_time_in_yr=repr(duration/YEAR2SEC),
                       output_step_interval='1' if mode == 'pt' else '100000000',
-                      output_time_interval_in_yr=repr(1e9 if mode == 'pt' else duration/samples/heat.water.YEAR2SEC),
+                      output_time_interval_in_yr=repr(1e9 if mode == 'pt' else duration/samples/YEAR2SEC),
                       info_display_step_interval='100000')
     cfg['mesh'].update(xlength=repr(HEIGHT), zlength=repr(HEIGHT), resolution=repr(HEIGHT),
                        largest_size=repr(HEIGHT), smallest_size=repr(HEIGHT))
@@ -114,7 +116,7 @@ def analyze(model, mode, velocity, heating=True, expansion=True, initial_generat
     frames = heat.scan_frames(model.modelname)
     times = np.array([r['time'] for r in frames])
     x, conn = (model.read_field(frames[0]['frame'], key) for key in ('coordinate', 'connectivity'))
-    volume = abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/2
+    volume = simplex_volumes(x, conn)
     vtotal = volume.sum()
     values, generated, every_step = [], initial_generated*vtotal, True
     lag = BIOT**2/(BULK+SHEAR/3) if mode == 'pt' else 0.
@@ -212,13 +214,13 @@ def physical_transition(exe, folder, cfg, seed, velocity, scaling, target_strain
     rapid = copy.deepcopy(cfg)
     rapid['sim'].update(is_restarting='true', restarting_from_modelname=str(folder/'cell'),
         restarting_from_frame=str(warm['frame']), max_steps='100000000',
-        max_time_in_yr=repr((warm['time']+(target_strain-gamma)*HEIGHT)/heat.water.YEAR2SEC),
+        max_time_in_yr=repr((warm['time']+(target_strain-gamma)*HEIGHT)/YEAR2SEC),
         output_step_interval='100000000',
-        output_time_interval_in_yr=repr((target_strain-gamma)*HEIGHT/500/heat.water.YEAR2SEC))
+        output_time_interval_in_yr=repr((target_strain-gamma)*HEIGHT/500/YEAR2SEC))
     rapid['control'].update(is_quasi_static='false', use_global_velocity_scaling='false',
                             fixed_dt='0', damping_option='0', damping_factor='0')
     rapid['bc'].update(vbc_val_x0='1', vbc_val_x1='1')
-    quake = heat.Dynearthsol(str(folder/'quake')) if reuse_phase else heat.run(exe, folder, rapid, 'quake')
+    quake = Dynearthsol(str(folder/'quake')) if reuse_phase else heat.run(exe, folder, rapid, 'quake')
     first = heat.scan_frames(quake.modelname)[0]
     for field in ('stress', 'strain', 'pore pressure', 'temperature', 'pending shear heat'):
         np.testing.assert_array_equal(seed.read_field(warm['frame'], field), quake.read_field(first['frame'], field))
@@ -239,7 +241,7 @@ def physical_transition(exe, folder, cfg, seed, velocity, scaling, target_strain
     onset_cfg = copy.deepcopy(rapid)
     onset_cfg['sim'].update(max_steps=str(warm['steps']+20), max_time_in_yr='1e9',
                              output_step_interval='1', output_time_interval_in_yr='1e9')
-    onset = heat.Dynearthsol(str(folder/'onset')) if reuse_phase and (folder/'onset.info').exists() else heat.run(exe, folder, onset_cfg, 'onset')
+    onset = Dynearthsol(str(folder/'onset')) if reuse_phase and (folder/'onset.info').exists() else heat.run(exe, folder, onset_cfg, 'onset')
     result['first_intervals'] = analyze(onset, 'physical', 1., initial_generated=generated,
         initial_checkpoint_model=seed, reference_start_time=warm['time'], reference_start_gamma=gamma)
     return result
@@ -279,10 +281,9 @@ def main():
         report['physical_transition'] = physical_transition(args.exe.resolve(), args.output.resolve(), cfg,
             model, args.velocity, args.scaling, args.transition_strain)
     report.update(passed=True, mode=args.mode, heating=not args.no_heating, expansion=not args.no_expansion,
-        executable_sha256=heat.water.digest(args.exe), runner_sha256=heat.water.digest(Path(__file__)),
-        working_source_commit=source_revision(heat.water.ROOT),
+        **provenance(args.exe.resolve(), __file__),
         scope='2D homogeneous direct shear with one normal platen degree of freedom; fixed capacity and zero flux; no rupture front.')
-    heat.water.write_json(args.output/'summary.json', report)
+    write_json(args.output/'summary.json', report)
     print(json.dumps(report, indent=2))
 
 

@@ -8,9 +8,7 @@ comparator pt_initial_checkpoint.py.
 
 import argparse
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -20,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol
 
 
-from des_case import read_config
+from des_case import read_config, restart_check, write_json
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -44,15 +42,8 @@ def main():
             cfg['control']['has_thermal_pressurization'] = 'true'
             cfg['bc']['surface_temperature'] = '283'
             cfg['mat'].update(alpha='[3e-5]', matrix_storage='[1e-9]', matrix_exchange='[1e-12]')
-        source = output / f'{mode}.cfg'
-        with source.open('w') as stream:
-            cfg.write(stream)
         case = output / mode
-        command = [sys.executable, str(ROOT / 'tests/functional/pt_initial_checkpoint.py'),
-                   str(exe), str(source), str(case), '--restart-frame', '1', '--steps', '4']
-        if mode == 'remesh':
-            command.append('--require-remesh')
-        subprocess.run(command, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=240)
+        restart_check(exe, cfg, case, 4, 1, require_remesh=mode == 'remesh')
         model = Dynearthsol(str(case / 'fresh'))
         phi0 = json.loads(cfg['mat']['porosity'])[0]
         k0 = json.loads(cfg['mat']['hydraulic_perm'])[0]
@@ -84,7 +75,7 @@ def main():
                              phi_min=float(phi.min()), phi_max=float(phi.max()),
                              max_phi_error=max_phi_error if mode == 'fixed' else None,
                              exact_restart=True, changed_mesh=mode == 'remesh')
-    (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    write_json(output / 'summary.json', summary)
     print('PASS: Biot porosity, permeability law', args.permeability_model,
           'exact restart and remeshing')
 

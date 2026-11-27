@@ -25,7 +25,7 @@ LAWS = (Retention('van_genuchten', .001, 1.6, .1),
         Retention('brooks_corey', .001, .8, .05), Retention('gardner', .002, sr=.2))
 
 
-from des_case import reset_boundaries, run_solver
+from des_case import digest, file_hashes, reset_boundaries, retention_options, run_des, run_solver, write_json
 
 def polygon(ndims):
     if ndims == 2:
@@ -56,9 +56,9 @@ def config(ndims, pressure, active=True):
             if len(values) == 1: cfg['mat'][key] = json.dumps(values*3)
     cfg['mat'].update(num_materials='3', rho0='[2650,2650,2650]', porosity='[.3,.3,.3]',
                       fluid_rho0='[1000,1000,1000]', hydraulic_perm='[0,0,0]', alpha='[0,0,0]',
-                      retention_model='[1,2,3]' if active else '[0,0,0]', retention_alpha='[.001,.001,.002]',
-                      retention_n='[1.6,.8,2]', residual_saturation='[.1,.05,.2]',
-                      is_plane_strain=str(ndims == 2).lower())
+                      is_plane_strain=str(ndims == 2).lower(), **retention_options(*LAWS))
+    if not active:
+        cfg['mat']['retention_model'] = '[0,0,0]'
     return cfg
 
 
@@ -114,11 +114,10 @@ def compare(folder, active, convert):
 
 def study(executable, output, ndims):
     output.mkdir(parents=True, exist_ok=False)
-    binary_hash = cell.digest(executable)
+    binary_hash = digest(executable)
     report = dict(executable=str(executable), executable_sha256=binary_hash, ndims=ndims, cases={})
     for source in (Path(__file__), Path(cell.__file__), cell.ROOT/'benchmarks/poromechanics/unsaturated_reference.py'):
         shutil.copy2(source, output/source.name)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     for label, pressure, active in (('wet', 1000., True), ('partial', -2000., True),
                                     ('dry', -1e6, True), ('gradient', 0., True), ('disabled', -2000., False)):
         folder = output/label; folder.mkdir()
@@ -127,16 +126,15 @@ def study(executable, output, ndims):
         if label == 'gradient':
             cfg['ic']['pore_pressure_option'] = '1'
             cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[-2000,1000,0,0,0,0]')
-        with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
+        run_des(executable, folder, 'input', cfg)
         case = compare(folder, active, convert=True)
-        case['files_sha256'] = {p.name:cell.digest(p) for p in sorted(folder.iterdir())
-                                if p.suffix in ('.cfg', '.poly', '.info', '.vtu') or '.save.' in p.name or '.chkpt.' in p.name}
+        case['files_sha256'] = file_hashes(p for p in folder.iterdir()
+                                           if p.suffix in ('.cfg', '.poly', '.info', '.vtu') or '.save.' in p.name or '.chkpt.' in p.name)
         report['cases'][label] = case
         print(label, case['container'], case['mixed_elements'], 'mixed elements: PASS', flush=True)
-    assert cell.digest(executable) == binary_hash
-    report.update(passed=True, runner_sha256=cell.digest(Path(__file__)))
-    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+    assert digest(executable) == binary_hash
+    report.update(passed=True, runner_sha256=digest(Path(__file__)))
+    write_json(output/'qualification.json', report)
 
 
 if __name__ == '__main__':

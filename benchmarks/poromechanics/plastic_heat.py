@@ -9,17 +9,13 @@ Stored heat plus the undeposited energy must equal that plastic work.
 
 import argparse
 import copy
-import hashlib
-import json
-import math
-import os
 from pathlib import Path
 import shutil
 
 import numpy as np
 
 import fluid_content as water
-from Dynearthsol import Dynearthsol, scan_frames
+from Dynearthsol import scan_frames
 
 RATE, BULK, SHEAR = .5, 2e10, 1e9
 YIELD, CONFINING, CAPACITY, T0 = 1e7, 3e7, 2700*1000., 300.
@@ -27,7 +23,8 @@ YIELD, CONFINING, CAPACITY, T0 = 1e7, 3e7, 2700*1000., 300.
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import reset_boundaries, run_solver
+from des_case import digest, reset_boundaries, run_model, write_json
+from des_test_utils import simplex_volumes
 
 def work(time, elastic=False):
     gamma = 2*RATE*np.asarray(time)
@@ -88,19 +85,14 @@ def configuration(dim, method, dt, steps, elastic=False):
 
 
 def run(exe, folder, cfg, name='cell', timeout=180):
-    cfg = copy.deepcopy(cfg)
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, timeout=timeout, check=True, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
-    return Dynearthsol(str(folder/name))
+    return run_model(exe, folder, cfg, name, timeout=timeout)
 
 
 def analyze(model, elastic=False, initial_generated=0., reference=None, capacity=CAPACITY):
     records = scan_frames(model.modelname)
     dim = int(model.ndims)
     x, conn = (model.read_field(records[0]['frame'], key) for key in ('coordinate', 'connectivity'))
-    volume = abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     total_volume = volume.sum()
     generated = initial_generated
     times = np.array([row['time'] for row in records])
@@ -177,9 +169,9 @@ def main():
                 result['changed_step'] = analyze(changed, initial_generated=result['rows'][middle]['generated'])
             results.append(result)
             print(name, result['balance_error_over_yield_volume'], result['work_error_over_yield_volume'], flush=True)
-            (args.output/'summary.json').write_text(json.dumps(results, indent=2)+'\n')
+            write_json(args.output/'summary.json', results)
     shutil.copy2(__file__, args.output/'runner.py')
-    (args.output/'runner.sha256').write_text(hashlib.sha256(Path(__file__).read_bytes()).hexdigest()+'\n')
+    (args.output/'runner.sha256').write_text(digest(__file__)+'\n')
 
 
 if __name__ == '__main__':

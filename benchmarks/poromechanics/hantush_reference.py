@@ -22,6 +22,8 @@ import numpy as np
 from scipy.integrate import quad
 from scipy.special import exp1, k0
 
+import theis_reference
+
 
 def well_function(u, beta):
     """Leaky well function W(u, beta), elementwise; u > 0, beta >= 0."""
@@ -52,14 +54,10 @@ def drawdown(radius, time, rate, transmissivity, storativity, leakage_factor):
 
 
 def scheduled_drawdown(radius, time, schedule, transmissivity, storativity, leakage_factor):
-    """Superpose absolute rates given by ordered (start_seconds, rate) pairs."""
-    out = np.zeros(np.broadcast(np.asarray(radius), np.asarray(time)).shape)
-    previous = 0.0
-    for start, rate in schedule:
-        lag = np.asarray(time, float) - start
-        out += drawdown(radius, lag, rate - previous, transmissivity, storativity, leakage_factor)
-        previous = rate
-    return out
+    """Superpose absolute rates given by ordered (start_seconds, rate) pairs, as theis_reference does."""
+    return theis_reference.scheduled_drawdown(
+        radius, time, schedule, transmissivity, storativity,
+        response=lambda r, t, rate, T, S: drawdown(r, t, rate, T, S, leakage_factor))
 
 
 if __name__ == '__main__':

@@ -15,7 +15,6 @@ is wide enough that the drawdown at its far sides stays negligible.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -40,7 +39,7 @@ SCALE = Q/(4*math.pi*T)                 # pressure scale of the Theis solution, 
 SCHEDULE = [(0.0, Q), (PUMP, 0.0)]
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
 
 
 def config(h):
@@ -72,17 +71,13 @@ def config(h):
 
 def study(exe, out, spacings):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   reference=dict(L=L, B=B, Q=Q, pump_until_s=PUMP, end_s=END, dt_s=DT, storage_per_Pa=STORAGE,
                                  diffusivity=DIFFUSIVITY, permeability=PERM, transmissivity=T, storativity=S,
                                  pressure_scale_Pa=SCALE), cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'theis.cfg').open('w') as f: config(h).write(f)
-        run_solver([str(exe), 'theis.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=3600)
+        run_des(exe, folder, 'theis', config(h), timeout=3600)
         model = Dynearthsol(str(folder/'theis')); rows = scan_frames(str(folder/'theis'))
         coord = model.read_field(0, 'coordinate')
         r = np.hypot(coord[:, 0], coord[:, 1])
@@ -105,7 +100,7 @@ def study(exe, out, spacings):
                     max_abs_strain=strain, input_sha256=digest(folder/'theis.cfg'))
         assert strain < 1e-6, ('stiff skeleton must stay rigid', strain)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

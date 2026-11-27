@@ -8,7 +8,6 @@ pressure and settlement. Mesh and timestep sequences are separate.
 import argparse
 import copy
 import json
-import math
 from pathlib import Path
 
 import numpy as np
@@ -29,10 +28,8 @@ REGIMES = {
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import run_model
-
-def run(exe, folder, cfg, name):
-    return run_model(exe, folder, cfg, name, timeout=600)
+from des_case import check_hashes, digest, file_hashes, material_options, provenance, run_model, write_json
+from des_test_utils import simplex_volumes
 
 
 def configuration(regime, spacing, count):
@@ -43,10 +40,7 @@ def configuration(regime, spacing, count):
     cfg['sim'].update(max_steps=str(count//2), max_time_in_yr='1e6', output_step_interval=str(count//20))
     cfg['control'].update(PT_relative_tolerance='1e-11', PT_absolute_tolerance='1e-9')
     cfg['bc'].update(hbc_z0='0', hbc_flux='[0,0,0,0,0,0]', stress_val_z1=repr(-props['load']))
-    names = dict(bulk='bulk_modulus', shear='shear_modulus', porosity='porosity', fluid_bulk='fluid_bulk_modulus',
-                 grain_bulk='bulk_modulus_s', biot='biot_coeff', permeability='hydraulic_perm')
-    for name, parameter in names.items():
-        cfg['mat'][parameter] = json.dumps([props[name]])
+    cfg['mat'].update(material_options(REGIMES[regime]))
     return cfg, ref, clock
 
 
@@ -55,7 +49,7 @@ def analyze(folder, regime, spacing, count):
     first, second = (Dynearthsol(str(folder/name)) for name in ('loaded', 'released'))
     x, conn = (first.read_field(first.frames[0], key) for key in ('coordinate', 'connectivity'))
     dim = int(first.ndims)
-    volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     area = volume.sum()/ref.height
     records = [(first, row, False) for row in scan_frames(str(folder/'loaded'))]
     records += [(second, row, True) for row in scan_frames(str(folder/'released'))[1:]]
@@ -83,19 +77,19 @@ def analyze(folder, regime, spacing, count):
                   max_pressure_error=float(a[1:, 6].max()), max_settlement_error=float(a[1:, 7].max()),
                   final_pressure_error=float(a[-1, 6]), final_settlement_error=float(a[-1, 7]),
                   series_truncation_over_load=truncation)
-    water.write_json(folder/'analysis.json', result)
+    write_json(folder/'analysis.json', result)
     return result
 
 
 def case(exe, folder, regime, spacing, count):
     folder.mkdir(parents=True, exist_ok=False)
     cfg, _, _ = configuration(regime, spacing, count)
-    first = run(exe, folder, cfg, 'loaded')
+    first = run_model(exe, folder, cfg, 'loaded', timeout=600)
     shifted = copy.deepcopy(cfg)
     shifted['sim'].update(is_restarting='true', restarting_from_modelname=str(folder/'loaded'),
                           restarting_from_frame=str(first.frames[-1]), max_steps=str(5*count//2))
     shifted['bc']['stress_val_z1'] = repr(-REGIMES[regime]['load']/2)
-    run(exe, folder, shifted, 'released')
+    run_model(exe, folder, shifted, 'released', timeout=600)
     return analyze(folder, regime, spacing, count)
 
 
@@ -114,16 +108,15 @@ def main():
     exe, output = args.executable.resolve(), args.output.resolve()
     if args.replay:
         report = json.loads((output/'summary.json').read_text())
-        for name, expected in report['artifacts_sha256'].items():
-            assert water.digest(output/name) == expected, name
+        check_hashes(report['artifacts_sha256'], output)
         for previous in report['cases']:
             name = f"{previous['regime']}/h{previous['spacing_m']:g}-n{previous['steps_per_Tv']}"
             assert analyze(output/name, previous['regime'], previous['spacing_m'], previous['steps_per_Tv']) == previous
         print('PASS: material/load references and artifact hashes replayed')
         return
     output.mkdir(parents=True, exist_ok=False)
-    report = dict(executable_sha256=water.digest(exe), runner_sha256=water.digest(__file__),
-                  reference_sha256=water.digest(Path(__file__).with_name('terzaghi_reference.py')), cases=[], passed=False)
+    report = dict(provenance(exe, __file__),
+                  reference_sha256=digest(Path(__file__).with_name('terzaghi_reference.py')), cases=[], passed=False)
     plan = sorted({(h, max(args.counts)) for h in args.spacings} |
                   {(args.time_spacing, n) for n in args.counts})
     for regime in args.regimes:
@@ -131,12 +124,12 @@ def main():
             result = case(exe, output/regime/f'h{spacing:g}-n{count}', regime, spacing, count)
             report['cases'].append(result)
             print(json.dumps(result), flush=True)
-            water.write_json(output/'summary.json', report)
-    assert water.digest(exe) == report['executable_sha256']
-    report['artifacts_sha256'] = {str(p.relative_to(output)): water.digest(p) for p in sorted(output.rglob('*'))
-        if p.is_file() and p.name not in ('analysis.json', 'history.csv', 'summary.json')}
+            write_json(output/'summary.json', report)
+    assert digest(exe) == report['executable_sha256']
+    kept = (p for p in output.rglob('*') if p.name not in ('analysis.json', 'history.csv', 'summary.json'))
+    report['artifacts_sha256'] = file_hashes(kept, output)
     report['passed'] = True
-    water.write_json(output/'summary.json', report)
+    write_json(output/'summary.json', report)
 
 
 if __name__ == '__main__':

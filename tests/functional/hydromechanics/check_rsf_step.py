@@ -26,7 +26,6 @@ import argparse
 import configparser
 import json
 import math
-import os
 from pathlib import Path
 import shutil
 import sys
@@ -47,7 +46,7 @@ V1 = 2*WIDTH*RATE1                                  # eps_II = e for normal rate
 T1, T2 = 64.0, 64.0                                 # seconds before and after the step
 
 
-from des_case import run_solver, source_revision
+from des_case import provenance, run_des, write_json
 
 def configs(refine):
     dt = 1.0/refine
@@ -106,16 +105,13 @@ def read(folder, model_name, after=0.0):
 
 def study(exe, out, refinements):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=cell.digest(exe), runner_sha256=cell.digest(Path(__file__)),
-                  source_commit=source_revision(cell.ROOT),
+    result = dict(provenance(exe, __file__),
                   a=A, b=B, dc=DC, v1=V1, ratio=RATIO, confinement=C, pressure=P, cases=[])
     for refine in refinements:
         folder = out/f'r{refine:g}'; folder.mkdir()
         base, step, dt, n1, n2 = configs(refine)
         for name, cfg in (('cell', base), ('step', step)):
-            with (folder/f'{name}.cfg').open('w') as f: cfg.write(f)
-            run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=3600)
+            run_des(exe, folder, name, cfg, timeout=3600)
         des = np.concatenate([read(folder, 'cell'), read(folder, 'step', T1)])
         ref = discrete(dt, n1, n2)
         assert len(des) == len(ref) and np.allclose(des[:, 0], ref[:, 0], rtol=0, atol=1e-9), (len(des), len(ref))
@@ -130,7 +126,7 @@ def study(exe, out, refinements):
                     mu_jump=float(A*math.log(RATIO)), mu_drop=float((A - B)*math.log(RATIO)),
                     series=dict(time=des[:, 0].tolist(), mu=des[:, 2].tolist(), stress=des[:, 3].tolist()))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'series'}), flush=True)
     shutil.copy2(__file__, out/'runner.py')
     return result

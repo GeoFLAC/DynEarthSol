@@ -10,26 +10,22 @@ High residual saturation resolves the transition at small imposed strain.
 """
 
 import argparse
-import json
 import math
-import os
 from pathlib import Path
 import shutil
-import sys
 
 import numpy as np
 from scipy.integrate import solve_ivp
 
 import check_bishop_cell as cell
-sys.path.insert(0, str(cell.ROOT/'tests/functional'))
-from pt_initial_checkpoint import fields
 
 DT, RATE, STEPS = .1, 1e-4, 24
 PHI, RESIDUAL, ALPHA = .3, .999, 1.
 S0 = PHI/2.2e9+(1-PHI)/37e9
 
 
-from des_case import run_solver
+from des_case import digest, file_hashes, hydraulic_substeps, run_des, write_json
+from des_test_utils import fields, physical_differences, runtime_key
 
 def macro_reference(pressure, previous_increment, stabilizer):
     """Integrate (SB+phi*S') p_dot = -chi*eps_dot + L*D/dt."""
@@ -52,22 +48,9 @@ def macro_reference(pressure, previous_increment, stabilizer):
     return float(solution.y[0, -1])
 
 
-def substeps(coordinate, connectivity, permeability, stabilizer):
-    """Independent simplex mass and absolute-row operator bound."""
-    dim = coordinate.shape[1]
-    vertices = np.concatenate((np.ones((*connectivity.shape, 1)), coordinate[connectivity]), axis=2)
-    volume = np.abs(np.linalg.det(vertices))/math.factorial(dim)
-    gradient = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
-    mass, operator = np.zeros(len(coordinate)), np.zeros(len(coordinate))
-    for e, nodes in enumerate(connectivity):
-        mass[nodes] += (S0+stabilizer)*volume[e]/(dim+1)
-        operator[nodes] += permeability/.001*volume[e]*np.abs(gradient[e]@gradient[e].T).sum(axis=1)
-    return math.ceil(DT/float(np.min(mass/operator)))
-
-
 def study(executable, output, ndims):
     output.mkdir(parents=True, exist_ok=False)
-    binary_hash = cell.digest(executable)
+    binary_hash = digest(executable)
     stabilizer = 1/(1e4+(1e4/3 if ndims == 2 else 0))
     report = dict(executable=str(executable), executable_sha256=binary_hash, ndims=ndims,
                   reference=dict(dt_s=DT, expansion_rate_per_s=RATE, steps=STEPS, initial_pressure_Pa=1.,
@@ -75,7 +58,6 @@ def study(executable, output, ndims):
                                  inverse_biot_modulus_per_Pa=S0, stabilizer_per_Pa=stabilizer), cases=[])
     for source in (Path(__file__), Path(cell.__file__)):
         shutil.copy2(source, output/source.name)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     for permeability in (1e-5, 1e-4):
         folder = output/f'k{permeability:g}'; folder.mkdir()
         cfg = cell.config(ndims, STEPS, 'moderate', 1)
@@ -88,8 +70,7 @@ def study(executable, output, ndims):
                           fluid_bulk_modulus='[2.2e9]', porosity=f'[{PHI}]', alpha='[0]', retention_alpha=f'[{ALPHA}]',
                           residual_saturation=f'[{RESIDUAL}]', hydraulic_perm=f'[{permeability}]',
                           is_plane_strain=str(ndims == 2).lower())
-        with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
+        run_des(executable, folder, 'input', cfg)
         model = cell.Dynearthsol(str(folder/'cell'))
         assert model.ndims == ndims and model.nnode_list[0] == 2**ndims
         pressures, history = [], []
@@ -110,8 +91,7 @@ def study(executable, output, ndims):
         before = next(r for r in cell.scan_frames(str(folder/'cell')) if r['steps'] == entry['step']-1)
         cfg['sim'].update(modelname='resumed', is_restarting='true', restarting_from_modelname=str(folder/'cell'),
                           restarting_from_frame=str(before['frame']))
-        with (folder/'restart.cfg').open('w') as stream: cfg.write(stream)
-        run_solver([str(executable), 'restart.cfg'], log=folder / 'restart.log', cwd=folder, env=env, check=True, timeout=120)
+        run_des(executable, folder, 'restart', cfg)
         fresh = {r['steps']:r for r in cell.scan_frames(str(folder/'cell'))}
         checked = 0
         for row in cell.scan_frames(str(folder/'resumed')):
@@ -120,28 +100,26 @@ def study(executable, output, ndims):
                 a = fields(folder/f"cell.{suffix}.{fresh[row['steps']]['frame']:06d}")
                 b = fields(folder/f"resumed.{suffix}.{row['frame']:06d}")
                 assert a.keys() == b.keys()
-                for key in a:
-                    # HDF5 keys are dataset paths; the native format uses bare names.
-                    base = key.rsplit('/', 1)[-1].lstrip('@').removesuffix('.layout')
-                    if base in ('provenance', 'walltime_sec') or '/provenance/' in key: continue
-                    assert a[key] == b[key], (row['steps'], suffix, key)
-                    checked += 1
-        count = substeps(model.read_field(0, 'coordinate'), model.read_field(0, 'connectivity'), permeability, stabilizer)
+                different = physical_differences(a, b)
+                assert not different, (row['steps'], suffix, different)
+                checked += sum(not runtime_key(key) for key in a)
+        count = hydraulic_substeps(model.read_field(0, 'coordinate'), model.read_field(0, 'connectivity'),
+                                   S0+stabilizer, permeability/.001, DT)
         case = dict(permeability_m2=permeability, independent_substeps=count, entry=entry,
                     max_error_Pa=max(abs(r['error_Pa']) for r in history), history=history,
                     restart_before_entry_frame=before['frame'], exact_restart_payloads=checked,
-                    input_sha256=cell.digest(folder/'input.cfg'),
-                    restart_input_sha256=cell.digest(folder/'restart.cfg'),
-                    outputs_sha256={p.name:cell.digest(p) for p in sorted(folder.iterdir())
-                                    if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'})
+                    input_sha256=digest(folder/'input.cfg'),
+                    restart_input_sha256=digest(folder/'restart.cfg'),
+                    outputs_sha256=file_hashes(p for p in folder.iterdir()
+                                               if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'))
         report['cases'].append(case)
         print(permeability, count, entry, flush=True)
-    assert cell.digest(executable) == binary_hash
+    assert digest(executable) == binary_hash
     coarse, fine = report['cases']
     report['passed'] = bool(fine['independent_substeps'] >= 9*coarse['independent_substeps'] and
                             fine['max_error_Pa'] < 1e-5 and fine['max_error_Pa'] < .25*coarse['max_error_Pa'])
-    report['runner_sha256'] = cell.digest(Path(__file__))
-    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+    report['runner_sha256'] = digest(Path(__file__))
+    write_json(output/'qualification.json', report)
     assert report['passed'], 'Wet-transition history does not converge under hydraulic subcycling'
 
 

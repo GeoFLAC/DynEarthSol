@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Check production simplex moments against Qhull, symmetry and exact limits."""
 import argparse
-import hashlib
-import json
 import math
 import os
 from pathlib import Path
@@ -17,7 +15,7 @@ from scipy.spatial import ConvexHull, HalfspaceIntersection
 ROOT = Path(__file__).resolve().parents[3]
 
 
-from des_case import run_solver
+from des_case import digest, run_solver, write_json
 
 def calculate(exe, pairs):
     data = ''.join(' '.join(format(v, '.17g') for a in pair for v in a.ravel())+'\n'
@@ -113,9 +111,9 @@ def main():
                                           rtol=2e-6 if shift.any() else 1e-12)
         records.append(dict(dimension=dimension, pairs=len(pairs),
                             max_volume_error=float(np.max(np.abs(volume-expected))),
-                            executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest()))
+                            executable_sha256=digest(exe)))
         print('PASS production overlap', dimension, flush=True)
-    (output/'summary.json').write_text(json.dumps(dict(passed=True, cases=records), indent=2)+'\n')
+    write_json(output/'summary.json', dict(passed=True, cases=records))
 
 
 if __name__ == '__main__':

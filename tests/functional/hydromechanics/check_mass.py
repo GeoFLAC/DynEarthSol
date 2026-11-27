@@ -12,7 +12,6 @@ import argparse
 import copy
 import json
 import math
-import os
 from pathlib import Path
 import re
 import sys
@@ -28,10 +27,11 @@ from mass_reference import Cell, Transport
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
-from des_case import reset_boundaries, run_solver
+from des_case import expect_exit, reset_boundaries, run_des, run_model, write_json
+from des_test_utils import compare_continuation, lumped_volumes, simplex_volumes
 
 def write_summary(output, result):
-    (output/'summary.json').write_text(json.dumps(result,indent=2,allow_nan=False)+'\n')
+    write_json(output/'summary.json', result)
     return result
 
 
@@ -62,7 +62,7 @@ def lag_checks(exe, out, timeout=600):
         cfg['sim'].update(max_steps=str(steps),output_step_interval=str(steps//10),checkpoint_frame_interval='100000')
         cfg['control']['fixed_dt'] = repr(.1/steps)
         cfg['bc']['vbc_val_z1'] = '-.01'
-        model = cell_tests.run(exe,folder,cfg,timeout=timeout)
+        model = run_model(exe,folder,cfg,'column',timeout=timeout)
         history = []
         for frame,time in zip(model.frames,model.time):
             mass = float(model.read_field(frame,'fluid mass').sum())
@@ -89,7 +89,7 @@ def shear_checks(exe, out, timeout=600):
     out.mkdir(parents=True,exist_ok=False)
     seed = out/'seed';seed.mkdir()
     initial = configuration();initial['sim']['max_steps']='0'
-    dimensions = cell_tests.run(exe,seed,initial,timeout=timeout).ndims
+    dimensions = run_model(exe,seed,initial,'column',timeout=timeout).ndims
     cfg = plastic.configuration(dimensions,'pt1',.0025,40)
     cfg['control'].update(has_hydraulic_diffusion='true',hydraulic_content_model='1',
                           has_thermal_diffusion='true',has_fluid_thermal_advection='true',
@@ -115,7 +115,7 @@ def shear_checks(exe, out, timeout=600):
     restart['sim'].update(is_restarting='true',restarting_from_modelname=model.modelname,
                           restarting_from_frame='20',max_steps='40')
     resumed = plastic.run(exe,out,restart,'resumed',timeout=timeout)
-    exact = cell_tests.compare_continuation(out,model.modelname,resumed)
+    exact = compare_continuation(out,model.modelname,resumed)
     restart['control']['fixed_dt'] = '.005'
     restart['sim']['max_steps'] = '30'
     changed = plastic.run(exe,out,restart,'changed',timeout=timeout)
@@ -128,7 +128,7 @@ def transport_checks(exe, out, timeout=600):
     out.mkdir(parents=True,exist_ok=False)
     seed = out/'seed';seed.mkdir()
     cfg = configuration();cfg['sim']['max_steps']='0'
-    dim = int(cell_tests.run(exe,seed,cfg,timeout=timeout).ndims)
+    dim = int(run_model(exe,seed,cfg,'column',timeout=timeout).ndims)
     def setup(dt, hot, balanced=0.):
         cfg = configuration()
         cfg['sim'].update(max_steps='1',output_step_interval='1')
@@ -155,7 +155,7 @@ def transport_checks(exe, out, timeout=600):
         cfg['injection']=source
         return cfg
     folder = out/'flux';folder.mkdir()
-    model = cell_tests.run(exe,folder,setup(1e-5,True),timeout=timeout)
+    model = run_model(exe,folder,setup(1e-5,True),'column',timeout=timeout)
     reference = Transport(model)
     frame = model.frames[-1]
     p,t = (model.read_field(frame,k) for k in ('pore pressure','temperature'))
@@ -176,7 +176,7 @@ def transport_checks(exe, out, timeout=600):
     # physical right-hand sides unchanged, while tightening the CFL bound.
     for label,balanced in (('subcycle',0.),('refined',200.)):
         folder = out/label;folder.mkdir()
-        model = cell_tests.run(exe,folder,setup(1.,False,balanced),timeout=timeout)
+        model = run_model(exe,folder,setup(1.,False,balanced),'column',timeout=timeout)
         reference = Transport(model)
         expected_p,expected_t = reference.solve()
         actual_p,actual_t = (model.read_field(model.frames[-1],k) for k in ('pore pressure','temperature'))
@@ -208,7 +208,7 @@ def mass_checks(exe, out, timeout=600):
     reports=[]
     for method,drained,scaling in [('pt',False,1e5),('pt',True,1e5),('explicit',False,1e4),('gvs',False,1e6)]:
         folder=out/(method+('-drained' if drained else '-sealed'));folder.mkdir();cfg=config(method,drained);cfg['control']['inertial_scaling']=repr(scaling)
-        m=c.run(exe,folder,cfg,timeout=timeout);dim=int(m.ndims);bulk=2e7+(1e7/3 if dim==2 else 0)
+        m=run_model(exe,folder,cfg,'column',timeout=timeout);dim=int(m.ndims);bulk=2e7+(1e7/3 if dim==2 else 0)
         pprev=0.;epsprev=0.;boundary=0.;worst=0.;budget=0.;history=[]
         for f,t in zip(m.frames,m.time):
             pressure=m.read_field(f,'pore pressure');mass=m.read_field(f,'fluid mass').sum();buf=m.read_field(f,'hydraulic split buffer').sum();balance=m.read_field(f,'fluid mass balance');boundary+=balance[3];eps=-.01*t
@@ -224,8 +224,8 @@ def mass_checks(exe, out, timeout=600):
         assert budget<2e-9,budget
         assert worst<(1e-8 if drained else 1e-4),worst
         resume=copy.deepcopy(cfg);resume['sim'].update(is_restarting='true',restarting_from_modelname=m.modelname,restarting_from_frame='50',max_steps='100')
-        resumed=c.run(exe,folder,resume,'resumed',timeout=timeout);count=c.compare_continuation(folder,m.modelname,resumed)
-        resume['control']['fixed_dt']='.025';resume['sim']['max_steps']='70';changed=c.run(exe,folder,resume,'changed',timeout=timeout)
+        resumed=run_model(exe,folder,resume,'resumed',timeout=timeout);count=compare_continuation(folder,m.modelname,resumed)
+        resume['control']['fixed_dt']='.025';resume['sim']['max_steps']='70';changed=run_model(exe,folder,resume,'changed',timeout=timeout)
         # A changed dt must retain the old extensive buffer without rescaling it.
         changed_boundary=sum(m.read_field(f,'fluid mass balance')[3] for f in m.frames if f<=50)
         for f in changed.frames[1:]:
@@ -252,10 +252,9 @@ def heat_checks(exe, out, timeout=600):
     cfg['mat'].update(porosity_model='1',biot_coeff='[.98]',bulk_modulus_s='[1e9]',fluid_bulk_modulus='[1e8]',
         rho0='[2650]',alpha='[0]',fluid_alpha='[.0002]',heat_capacity='[1000]',fluid_heat_capacity='[4180]',therm_cond='[0]')
     cfg['ic'].update(temperature_option='4',temp_background='273',temp_anomaly_amplitude='0')
-    seed=out/'mesh';seed.mkdir();m=c.run(exe,seed,cfg,timeout=timeout)
+    seed=out/'mesh';seed.mkdir();m=run_model(exe,seed,cfg,'column',timeout=timeout)
     x,conn=(m.read_field(0,key) for key in ('coordinate','connectivity'));dim=int(m.ndims)
-    vol=np.abs(np.linalg.det(x[conn][:,1:]-x[conn][:,:1]))/math.factorial(dim)
-    weights=np.zeros(len(x));np.add.at(weights,conn,np.broadcast_to(vol[:,None]/conn.shape[1],conn.shape))
+    vol=simplex_volumes(x,conn);weights=lumped_volumes(x,conn,vol)
     assert abs(vol.sum()-1)<1e-12
     def point_sources(strength):
         d=dict(enabled='true',num_points=str(len(x)),points_x=json.dumps(x[:,0].tolist()),points_z=json.dumps(x[:,-1].tolist()),
@@ -278,7 +277,7 @@ def heat_checks(exe, out, timeout=600):
                 cell=Cell(fluid_expansion=expansion)
             else:
                 case['heat_injection']=point_sources(power);cell=ref
-            model=c.run(exe,path,case,timeout=timeout)
+            model=run_model(exe,path,case,'column',timeout=timeout)
             supplied=well=carried=reaction=boundary=0.;worst=0.;pold=0.;told=273.
             history=[]
             for f,t in zip(model.frames,model.time):
@@ -310,20 +309,18 @@ def heat_checks(exe, out, timeout=600):
             if kind=='sealed':assert worst<1e-5,worst
             else:assert worst<.1,worst
             resume=copy.deepcopy(case);resume['sim'].update(is_restarting='true',restarting_from_modelname=model.modelname,restarting_from_frame=str(steps//2))
-            resumed=c.run(exe,path,resume,'resumed',timeout=timeout)
-            count=c.compare_continuation(path,model.modelname,resumed)
+            resumed=run_model(exe,path,resume,'resumed',timeout=timeout)
+            count=compare_continuation(path,model.modelname,resumed)
             # Changing the prescribed reference boundary must not change the EOS
             # reference saved with the physical inventory. All actual T BCs are off.
             boundary_case=copy.deepcopy(resume);boundary_case['bc']['surface_temperature']='303'
-            boundary_model=c.run(exe,path,boundary_case,'boundary',timeout=timeout)
+            boundary_model=run_model(exe,path,boundary_case,'boundary',timeout=timeout)
             for frame in boundary_model.frames[1:]:
                 for field in ('fluid mass','hydraulic split buffer','solid heat capacity','pore pressure','temperature','pending temperature increment'):
                     np.testing.assert_array_equal(model.read_field(frame,field),boundary_model.read_field(frame,field))
             incompatible=copy.deepcopy(resume);incompatible['sim']['modelname']='bad-law'
             incompatible['mat']['fluid_bulk_modulus']='[2e8]'
-            with (path/'bad-law.cfg').open('w') as stream:incompatible.write(stream)
-            failed = run_solver([str(exe), 'bad-law.cfg'], log=path / 'bad-law.log', cwd=path, env=dict(os.environ, OMP_NUM_THREADS='1'))
-            assert failed.returncode==22,(path/'bad-law.log').read_text()
+            expect_exit(exe,path,'bad-law',incompatible,22,timeout=timeout)
             np.savetxt(path/'history.csv',history,delimiter=',',comments='',header='time_s,p_Pa,T_K,M_kg,R_kg,Q_J,well_heat_J,boundary_heat_J,thermal_reaction_J,E_J')
             reports.append(dict(kind=kind,steps=steps,reference_error=worst,exact_restart_payloads=count))
             errors.append(worst);print('PASS',kind,steps,worst,flush=True)
@@ -341,7 +338,7 @@ def remap_checks(exe, out, timeout=600):
         cfg['mat']['porosity_model']='1'
         reset_boundaries(cfg['bc'], tbc='0')
         if kind=='thermal':cfg['control'].update(has_thermal_diffusion='true',has_fluid_thermal_advection='true')
-        c.run(exe,folder,cfg,'input',timeout=timeout)
+        run_des(exe,folder,'input',cfg,timeout=timeout)
         model=Dynearthsol(str(folder/'flow'));rows=scan_frames(model.modelname)
         log=(folder/'input.log').read_text()
         by_frame={row['frame']:row for row in rows};pairs=[];last=None;before=None

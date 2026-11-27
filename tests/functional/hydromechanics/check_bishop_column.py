@@ -21,7 +21,6 @@ starting frame; element-layer strains are integrated from the fixed base.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -39,24 +38,15 @@ H, TABLE0, TABLE1 = 10.0, 9.0, 5.0
 COLUMN = dict(height=H, phi=0.4, biot=0.9, bulk=2e7, shear=1e7)
 GRAIN = COLUMN['bulk']/(1 - COLUMN['biot'])      # consistent with the Biot coefficient
 FLUID_BULK, PERM = 1e5, 1e-10                    # compressible pore fluid; permeable column
-LAWS = dict(van_genuchten=(Retention('van_genuchten', 1/2e4, 1.6, 0.1), 1),
-            brooks_corey=(Retention('brooks_corey', 1/1e4, 0.8, 0.05), 2),
-            gardner=(Retention('gardner', 0.5/GAMMA), 3))
+LAWS = dict(van_genuchten=Retention('van_genuchten', 1/2e4, 1.6, 0.1),
+            brooks_corey=Retention('brooks_corey', 1/1e4, 0.8, 0.05),
+            gardner=Retention('gardner', 0.5/GAMMA))
 LAYERED = ('van_genuchten', 'gardner')          # below and above z = INTERFACE
 INTERFACE = 7.0                                  # between TABLE1 and TABLE0
 DURATION = 4e5                                   # end time (s)
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
-
-
-def retention_lists(laws):
-    rets = [LAWS[k][0] for k in laws]
-    out = dict(retention_model='[' + ', '.join(str(LAWS[k][1]) for k in laws) + ']',
-               retention_alpha='[' + ', '.join(repr(r.alpha) for r in rets) + ']',
-               residual_saturation='[' + ', '.join(repr(r.sr) for r in rets) + ']',
-               retention_n='[' + ', '.join(repr(r.n if r.n is not None else 2.0) for r in rets) + ']')
-    return out
+from des_case import digest, layer_strain, provenance, read_config, retention_options, run_des, write_json
 
 
 def layered_column(z):
@@ -65,7 +55,7 @@ def layered_column(z):
     upper = zf >= INTERFACE
     dpi, dse = np.empty_like(zf), np.empty_like(zf)
     for side, key in ((~upper, LAYERED[0]), (upper, LAYERED[1])):
-        ret = LAWS[key][0]
+        ret = LAWS[key]
         p0, p1 = -GAMMA*(zf[side] - TABLE0), -GAMMA*(zf[side] - TABLE1)
         dpi[side] = bishop_pressure(ret, p1) - bishop_pressure(ret, p0)
         dse[side] = (1 - ret.sr)*(ret.se(p1) - ret.se(p0))
@@ -77,7 +67,7 @@ def layered_column(z):
 
 def reference(law, z):
     if law == 'layered': return layered_column(z)
-    return bishop_column(LAWS[law][0], z, table0=TABLE0, table1=TABLE1, rho=RHO, g=G, **COLUMN)
+    return bishop_column(LAWS[law], z, table0=TABLE0, table1=TABLE1, rho=RHO, g=G, **COLUMN)
 
 
 def config(ndims, h, law, steps):
@@ -110,18 +100,8 @@ def config(ndims, h, law, steps):
                       shear_modulus=each(COLUMN['shear']), biot_coeff=each(COLUMN['biot']),
                       porosity=each(COLUMN['phi']), bulk_modulus_s=each(GRAIN), fluid_bulk_modulus=each(FLUID_BULK),
                       hydraulic_perm=each(PERM), fluid_visc=each(MU), fluid_rho0=each(RHO), fluid_alpha=each(0.0),
-                      **retention_lists(laws))
+                      **retention_options(*(LAWS[k] for k in laws)))
     return cfg
-
-
-def layer_strain(coord, conn, ezz, h):
-    """Volume-weighted mean vertical strain of each element layer, base upward."""
-    z = coord[conn][:, :, -1].mean(axis=1) + H
-    layer = np.floor(z/h).astype(int)
-    n = int(round(H/h))
-    vol = np.bincount(layer, minlength=n).astype(float)   # equal-volume elements in a structured column
-    assert len(vol) == n and vol.min() > 0, 'the column mesh must be structured in layers of height h'
-    return np.bincount(layer, weights=ezz, minlength=n)/vol
 
 
 def compare(folder, h, law):
@@ -133,8 +113,9 @@ def compare(folder, h, law):
     p = model.read_field(last['frame'], 'pore pressure')
     drained = float(np.max(np.abs(p - (-GAMMA*(z - TABLE1)))))/(GAMMA*(TABLE0 - TABLE1))
     zz = coord.shape[1] - 1                         # strain is (xx, zz, xz) in 2D, (xx, yy, zz, ...) in 3D
-    e0 = layer_strain(coord, conn, model.read_field(base['frame'], 'strain')[:, zz], h)
-    e1 = layer_strain(coord, conn, model.read_field(last['frame'], 'strain')[:, zz], h)
+    # Layers count upward from the fixed base; equal-volume elements make their mean volume-weighted.
+    e0 = layer_strain(coord, conn, model.read_field(base['frame'], 'strain')[:, zz], h, -H, H)
+    e1 = layer_strain(coord, conn, model.read_field(last['frame'], 'strain')[:, zz], h, -H, H)
     zn = np.arange(len(e0) + 1)*h
     u = np.concatenate(([0], np.cumsum((e1 - e0)*h)))
     ref = reference(law, zn)
@@ -146,21 +127,17 @@ def compare(folder, h, law):
 
 def study(exe, out, ndims, spacings, steps, laws):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   ndims=ndims, steps=steps, duration_s=DURATION, column=COLUMN, tables=[TABLE0, TABLE1], cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for law in laws:
         for h in spacings:
             folder = out/f'{law}-h{h:g}'; folder.mkdir()
-            with (folder/'bishop.cfg').open('w') as f: config(ndims, h, law, steps).write(f)
-            run_solver([str(exe), 'bishop.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+            run_des(exe, folder, 'bishop', config(ndims, h, law, steps), timeout=20000)
             assert Dynearthsol(str(folder/'bishop')).ndims == ndims, 'the executable and --ndims disagree'
             item = compare(folder, h, law)
             item['input_sha256'] = digest(folder/'bishop.cfg')
             result['cases'].append(item)
-            (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+            write_json(out/'summary.json', result)
             print(json.dumps({k: v for k, v in item.items() if k not in ('z', 'u_des', 'u_ref')}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

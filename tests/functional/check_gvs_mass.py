@@ -7,13 +7,9 @@ per step. Checks the mass actually used, rather than only saved dt or vmax.
 """
 
 import argparse
-import configparser
-import hashlib
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -21,7 +17,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames
-from pt_initial_checkpoint import fields
+from des_test_utils import digest, fields, lumped_volumes, read_config, roller_free, run_des
 
 
 def main():
@@ -33,14 +29,12 @@ def main():
     args = parser.parse_args()
     executable, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    executable_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
+    executable_hash = digest(executable)
     summary = {}
     for ceiling in ('shear', 'bulk'):
         folder = output / ceiling
         folder.mkdir()
-        cfg = configparser.ConfigParser()
-        cfg.optionxform = str
-        cfg.read(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
+        cfg = read_config(ROOT / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
         cfg['sim'].update(modelname='fresh', max_steps='64', max_time_in_yr='1e6',
                           output_step_interval='1', checkpoint_frame_interval='1',
                           has_initial_checkpoint='yes')
@@ -62,12 +56,7 @@ def main():
                               fluid_bulk_modulus='[1e6]')
             cfg['bc'].update(hbc_x1='0',stress_val_z1='-10000')
         timeout = 900 if args.content_model else 60
-        with (folder / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
-        env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
-        with (folder / 'run.log').open('w') as stream:
-            subprocess.run([str(executable), 'input.cfg'], cwd=folder, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        run_des(executable, folder, 'input', cfg, timeout)
         model = Dynearthsol(str(folder / 'fresh'))
         rows = scan_frames(str(folder / 'fresh'))
         times = {r['frame']: r['time'] for r in rows}
@@ -75,23 +64,13 @@ def main():
         x = model.read_field(0, 'coordinate')
         conn = model.read_field(0, 'connectivity')
         dim = model.ndims
-        cells = x[conn]
-        volume = np.abs(np.linalg.det(cells[:, 1:] - cells[:, :1])) / math.factorial(dim)
-        lumped_volume = np.zeros(len(x))
-        np.add.at(lumped_volume, conn, np.broadcast_to((volume / (dim + 1))[:, None], conn.shape))
-        free = np.ones_like(x, dtype=bool)
-        for d in range(dim - 1):
-            free[:, d] = ~(np.isclose(x[:, d], 0) | np.isclose(x[:, d], 1))
-        free[:, -1] = ~np.isclose(x[:, -1], -1)
+        lumped_volume = lumped_volumes(x, conn)
+        free = roller_free(x)
         old_velocity = model.read_field(0, 'velocity')
         scale_min, scale_max, max_error = float('inf'), 0., 0.
         for previous, frame in zip(model.frames, model.frames[1:]):
             if args.moving_mesh:
-                previous_x = model.read_field(previous,'coordinate')
-                previous_cells = previous_x[conn]
-                previous_volume = np.abs(np.linalg.det(previous_cells[:,1:]-previous_cells[:,:1]))/math.factorial(dim)
-                lumped_volume.fill(0)
-                np.add.at(lumped_volume,conn,np.broadcast_to((previous_volume/(dim+1))[:,None],conn.shape))
+                lumped_volume = lumped_volumes(model.read_field(previous,'coordinate'), conn)
             scale = max(1e-10, np.max(np.linalg.norm(old_velocity[conn].mean(axis=1), axis=1)))
             wave_speed = min(scale * 1e6, math.sqrt((1e7 if ceiling == 'shear' else 2e7) / 2650))
             mass = lumped_volume * 2e7 / wave_speed**2
@@ -115,11 +94,7 @@ def main():
         assert scale_max / scale_min > 100, 'GVS did not change its scale enough to exercise mass updates'
         cfg['sim'].update(modelname='resumed', is_restarting='true',
                           restarting_from_modelname='fresh', restarting_from_frame='16')
-        with (folder / 'restart.cfg').open('w') as stream:
-            cfg.write(stream)
-        with (folder / 'restart.log').open('w') as stream:
-            subprocess.run([str(executable), 'restart.cfg'], cwd=folder, env=env,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+        run_des(executable, folder, 'restart', cfg, timeout)
         resumed = Dynearthsol(str(folder / 'resumed'))
         fresh_steps = {r['steps']: r for r in rows}
         for row in scan_frames(str(folder / 'resumed')):
@@ -134,7 +109,7 @@ def main():
                                 max_relative_velocity_identity_error=max_error,
                                 velocity_scale_min=scale_min, velocity_scale_max=scale_max,
                                 exact_restart=True)
-    assert hashlib.sha256(executable.read_bytes()).hexdigest() == executable_hash
+    assert digest(executable) == executable_hash
     (output / 'summary.json').write_text(json.dumps(dict(executable_sha256=executable_hash,
                                                         content_model=args.content_model,moving_mesh=args.moving_mesh,
                                                         cases=summary), indent=2) + '\n')

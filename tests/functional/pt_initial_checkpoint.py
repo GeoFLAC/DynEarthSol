@@ -7,35 +7,11 @@ Use --require-remesh with a config that triggers mesh quality control to check
 continuation across an actual mesh change, not just checkpoint serialization.
 """
 import argparse
-import configparser
 import json
 from pathlib import Path
 import struct
-import subprocess
 
-from des_test_utils import checkpoint_file, native_offsets
-
-
-def fields(path):
-    found = checkpoint_file(path)
-    if found is not None and found != Path(path):
-        import h5py
-        import numpy as np
-        result = {}
-        with h5py.File(found, 'r') as stream:
-            def read_dataset(name, obj):
-                if isinstance(obj, h5py.Dataset):
-                    value = obj[...]
-                    if np.issubdtype(value.dtype, np.number):
-                        assert np.isfinite(value).all(), (found, name)
-                    result[name] = value.tobytes()
-                    result['@' + name + '.layout'] = str((value.shape, value.dtype.str)).encode()
-            stream.visititems(read_dataset)
-        return result
-    data = Path(path).read_bytes()
-    entries = list(native_offsets(data).items())
-    return {name: data[pos:entries[i + 1][1] if i + 1 < len(entries) else len(data)]
-            for i, (name, pos) in enumerate(entries)}
+from des_test_utils import fields, physical_differences, read_config, run_des
 
 
 def main():
@@ -60,9 +36,7 @@ def main():
     if not executable.is_file() or not source.is_file():
         raise FileNotFoundError('Executable and source config must exist')
     output.mkdir(parents=True, exist_ok=False)
-    cfg = configparser.ConfigParser(strict=False)
-    cfg.optionxform = str
-    cfg.read(source)
+    cfg = read_config(source, strict=False)
     assert cfg.getboolean('control', 'has_PT')
     if cfg.getint('mesh', 'meshing_option', fallback=1) in (90, 91):
         poly = Path(cfg['mesh']['poly_filename'])
@@ -77,11 +51,7 @@ def main():
             cfg['sim'].update(modelname='resumed', is_restarting='yes',
                               restarting_from_modelname=str(output / 'fresh'),
                               restarting_from_frame=str(args.restart_frame))
-        with (output / (phase + '.cfg')).open('w') as stream:
-            cfg.write(stream)
-        with (output / (phase + '.log')).open('w') as stream:
-            subprocess.run([str(executable), phase + '.cfg'], cwd=output,
-                           stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=args.timeout)
+        run_des(executable, output, phase, cfg, args.timeout, threads=None)
         if phase == 'fresh':
             initial = fields(output / 'fresh.chkpt.000000')
             assert struct.unpack('i', initial['initial equilibrium done'])[0] == 1
@@ -100,10 +70,7 @@ def main():
             a = fields(output / f'fresh.{suffix}.{frame:06d}')
             b = fields(output / f'resumed.{suffix}.{frame:06d}')
             assert a.keys() == b.keys()
-            # Runtime/provenance records differ between fresh and restarted
-            # processes. All physical state still requires byte equality.
-            differences[f'{suffix}.{frame}'] = [key for key in a
-                if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a[key] != b[key]]
+            differences[f'{suffix}.{frame}'] = physical_differences(a, b)
     (output / 'comparison.json').write_text(json.dumps(differences, indent=2) + '\n')
     assert not any(differences.values()), differences
     if args.require_stationary:

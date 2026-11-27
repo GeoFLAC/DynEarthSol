@@ -10,7 +10,6 @@ import argparse
 import csv
 import json
 import math
-import os
 from pathlib import Path
 import time
 
@@ -21,11 +20,8 @@ import consolidation as pf
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, run_solver, source_revision
-
-
-def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2, allow_nan=False) + '\n')
+from des_case import (check_hashes, digest, file_hashes, hydraulic_row_bound, material_properties, read_config,
+                      run_des, source_revision, write_config, write_json)
 
 
 def configuration(dim, spacing, dt, settings):
@@ -49,23 +45,10 @@ def row_bound(case, cfg, dim):
     The study requires one hydraulic substep, so that mesh refinement cannot
     also change hydraulic time resolution through automatic subcycling.
     """
-    x, conn = case['coordinate'], case['connectivity']
-    cells = x[conn]
-    delta = cells[:, 1:] - cells[:, :1]
-    volume = np.abs(np.linalg.det(delta)) / math.factorial(dim)
-    grad = np.linalg.inv(delta).swapaxes(1, 2)
-    grad = np.concatenate((-grad.sum(axis=1, keepdims=True), grad), axis=1)
-    mat = lambda name: json.loads(cfg['mat'][name])[0]
-    bulk = mat('bulk_modulus') + (mat('shear_modulus') / 3 if dim == 2 else 0)
-    storage = (mat('porosity') / mat('fluid_bulk_modulus') +
-               (mat('biot_coeff') - mat('porosity')) / mat('bulk_modulus_s') +
-               mat('biot_coeff')**2 / bulk)
-    mobility = mat('hydraulic_perm') / mat('fluid_visc')
-    operator = mobility * volume[:, None, None] * (grad @ grad.swapaxes(1, 2))
-    mass, rows = np.zeros(len(x)), np.zeros(len(x))
-    np.add.at(mass, conn, np.broadcast_to((storage * volume / (dim + 1))[:, None], conn.shape))
-    np.add.at(rows, conn, np.abs(operator).sum(axis=2))
-    return float(np.min(mass[rows > 0] / rows[rows > 0]))
+    m = material_properties(cfg)
+    bulk = m['bulk'] + (m['shear'] / 3 if dim == 2 else 0)
+    storage = m['porosity'] / m['fluid_bulk'] + (m['biot'] - m['porosity']) / m['grain_bulk'] + m['biot']**2 / bulk
+    return hydraulic_row_bound(case['coordinate'], case['connectivity'], storage, m['permeability'] / m['viscosity'])
 
 
 def plan(settings):
@@ -87,15 +70,11 @@ def simulate(output, settings):
         analysis_sha256={name: digest(Path(__file__).with_name(name)) for name in
                          ('consolidation_refinement.py', 'consolidation.py', 'terzaghi_reference.py')},
         reader_sha256=digest(pf.ROOT / 'Dynearthsol.py'), runs=plan(settings))
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     for key, run in provenance['runs'].items():
         dim = run['dimension']
-        group = output / key
-        folder = group / f'terzaghi-{dim}d'
+        folder = output / key / f'terzaghi-{dim}d'
         folder.mkdir(parents=True)
-        cfg = configuration(dim, run['spacing_m'], run['dt_s'], settings)
-        with (folder / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
+        write_config(folder / 'input.cfg', configuration(dim, run['spacing_m'], run['dt_s'], settings))
         exe = pf.ROOT / f'dynearthsol{dim}d'
         run.update(executable=str(exe), executable_sha256=digest(exe),
                    input_sha256=digest(folder / 'input.cfg'), status='running')
@@ -103,7 +82,7 @@ def simulate(output, settings):
         print(f'Running {key} ({", ".join(run["roles"])})', flush=True)
         start = time.monotonic()
         try:
-            run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, timeout=settings['timeout_s'], check=True)
+            run_des(exe, folder, 'input', None, settings['timeout_s'])
             if digest(exe) != run['executable_sha256']:
                 raise RuntimeError('Executable changed during the run')
         except Exception as error:
@@ -111,7 +90,7 @@ def simulate(output, settings):
             write_json(output / 'provenance.json', provenance)
             raise
         run.update(status='complete', elapsed_s=time.monotonic() - start,
-                   saves_sha256={p.name: digest(p) for p in sorted(folder.glob('terzaghi.save.*'))})
+                   saves_sha256=file_hashes(folder.glob('terzaghi.save.*')))
         write_json(output / 'provenance.json', provenance)
 
 
@@ -130,9 +109,7 @@ def analyze(output, settings):
         folder = output / key / f'terzaghi-{dim}d'
         if run['status'] != 'complete' or digest(folder / 'input.cfg') != run['input_sha256']:
             raise RuntimeError(f'{key}: incomplete run or changed configuration')
-        for name, sha in run['saves_sha256'].items():
-            if digest(folder / name) != sha:
-                raise RuntimeError(f'{key}: changed raw output {name}')
+        check_hashes(run['saves_sha256'], folder)
         case = pf.load_case(output / key, dim)
         np.testing.assert_allclose(case['times'], samples, rtol=0, atol=1e-8)
         cfg = read_config(folder / 'input.cfg')

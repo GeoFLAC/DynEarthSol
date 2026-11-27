@@ -7,8 +7,6 @@ an explicit tolerance because ADR scalar reductions can change floating-point
 summation order; the report also records whether every dataset matches exactly.
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +21,8 @@ from run_mpi import execute
 
 ROOT = Path(__file__).resolve().parents[3]
 FUNCTIONAL = ROOT / 'tests/functional'
+sys.path.insert(0, str(FUNCTIONAL))
+from des_test_utils import digest, read_config, runtime_key
 CASES = ('elastic', 'maxwell', 'hydrostatic', 'remesh', 'mmg-remesh', 'dynamic', 'oblique', 'running-remesh', 'failure')
 
 
@@ -38,7 +38,7 @@ def compare_outputs(reference, current, rtol, atol):
             a, b = {}, {}
             for source, target in ((left, a), (right, b)):
                 def visit(name, obj):
-                    if isinstance(obj, h5py.Dataset) and name.split('/')[-1] not in ('walltime_sec', 'provenance'):
+                    if isinstance(obj, h5py.Dataset) and not runtime_key(name):
                         target[name] = obj[()]
                 source.visititems(visit)
             assert a.keys() == b.keys(), filename
@@ -105,8 +105,7 @@ def main():
                   partitioner='metis', checks=[])
     executables = {2: (args.serial.resolve(), args.mpi.resolve()),
                    3: (args.serial3d.resolve(), args.mpi3d.resolve())}
-    report['executables'] = {str(p):hashlib.sha256(p.read_bytes()).hexdigest()
-                             for pair in executables.values() for p in pair}
+    report['executables'] = {str(p):digest(p) for pair in executables.values() for p in pair}
     try:
         for dim in args.dimensions:
             for option in args.options:
@@ -119,9 +118,7 @@ def main():
                         'dynamic': 'pt_dynamic_restart.cfg', 'oblique': 'pt_oblique_restart.cfg',
                         'running-remesh': 'pt_remesh_restart.cfg'}[case]
                     source = ROOT/'examples'/fixture if case in ('elastic', 'maxwell', 'failure') else FUNCTIONAL/fixture
-                    cfg = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
-                    cfg.optionxform = str
-                    cfg.read(source)
+                    cfg = read_config(source, inline_comment_prefixes=('#', ';'))
                     cfg['control']['PT_option'] = str(option)
                     if 'remesh' in case:
                         # MMG-adapted meshes need more relaxation passes than

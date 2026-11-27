@@ -11,7 +11,6 @@ Constant properties and disabled mechanical feedback isolate transport.
 """
 
 import argparse
-import json
 import math
 from pathlib import Path
 import shutil
@@ -24,8 +23,8 @@ L, WIDTH, P, END, DT = 10., 1., 1000., 10., .05
 RATE = ct.DIFFUSIVITY*math.pi**2/L**2
 
 
-from des_case import digest
-from des_test_utils import run_des
+from des_case import check_manifest, digest, file_hashes, run_des, write_json
+from des_test_utils import simplex_volumes
 
 
 def run(executable, folder, spacing):
@@ -59,8 +58,7 @@ def run(executable, folder, spacing):
     model = ct.Dynearthsol(str(folder/'pulse'))
     rows = ct.scan_frames(str(folder/'pulse'))
     assert len(rows) == round(END/DT)+1
-    cells = x[conn]
-    volume = np.abs(np.linalg.det(cells[:, 1:]-cells[:, :1]))/6
+    volume = simplex_volumes(x, conn)
     initial_stored = ct.STORAGE*float(volume @ initial[conn].mean(axis=1))
     exact_initial_stored = 2*ct.STORAGE*P*WIDTH**2*L/math.pi
     cumulative_boundary = 0.
@@ -93,8 +91,8 @@ def run(executable, folder, spacing):
                   seed_save_sha256=digest(folder/'seed.save.000000'),
                   seed_checkpoint_sha256=digest(folder/'seed.chkpt.000000'),
                   input_sha256=digest(folder/'pulse.cfg'), history=history,
-                  outputs_sha256={p.name: digest(p) for p in sorted(folder.glob('pulse.*'))
-                                  if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'})
+                  outputs_sha256=file_hashes(p for p in folder.glob('pulse.*')
+                                             if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'))
     print(folder.name, 'pressure error', result['max_pressure_error_over_amplitude'],
           'relative budget error', result['global_budget_error_over_initial'], flush=True)
     return result
@@ -103,9 +101,8 @@ def run(executable, folder, spacing):
 def study(executable, output, spacings, manifest):
     output.mkdir(parents=True, exist_ok=False)
     binary_hash = digest(executable)
-    solver = json.loads(manifest.read_text()) if manifest else None
+    solver = check_manifest(manifest, binary_hash)
     if solver:
-        assert binary_hash in solver['binaries'].values()
         shutil.copy2(manifest, output/'solver-qualification.json')
     for source in (Path(__file__), Path(ct.__file__)):
         shutil.copy2(source, output/source.name)
@@ -117,12 +114,12 @@ def study(executable, output, spacings, manifest):
                                   storage_per_Pa=ct.STORAGE, duration_s=END, dt_s=DT), cases=[])
     for h in spacings:
         summary['cases'].append(run(executable, output/f'h{h:g}', h))
-        (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n')
+        write_json(output/'summary.json', summary)
     ordered = sorted(summary['cases'], key=lambda c: -c['spacing_m'])
     summary['passed'] = (ordered[-1]['max_pressure_error_over_amplitude'] < .01 and
                          ordered[-1]['max_pressure_error_over_amplitude'] < ordered[0]['max_pressure_error_over_amplitude'])
     assert digest(executable) == binary_hash
-    (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n')
+    write_json(output/'summary.json', summary)
     assert summary['passed'], 'Pressure accuracy/convergence target not met; keep the raw evidence'
     return summary
 

@@ -20,9 +20,7 @@ along each run's own vertical strain.
 """
 import argparse
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -40,7 +38,8 @@ STRAIN, DURATION = -1e-3, 1000.0                   # final vertical strain, end 
 S0 = MAT['porosity']/MAT['fluid_bulk'] + (MAT['biot'] - MAT['porosity'])/MAT['grain_bulk']
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import provenance, read_config, reset_boundaries, retention_options, run_des, write_json
+from des_test_utils import checkpoint_array, fields, physical_differences, runtime_key
 
 
 def exact(state, strain):
@@ -81,8 +80,7 @@ def config(ndims, steps, state, pt_option=0):
                       biot_coeff=f"[{MAT['biot']!r}]", porosity=f"[{MAT['porosity']!r}]",
                       fluid_bulk_modulus=f"[{MAT['fluid_bulk']!r}]", bulk_modulus_s=f"[{MAT['grain_bulk']!r}]",
                       hydraulic_perm=f"[{MAT['permeability']!r}]", fluid_visc=f"[{MAT['viscosity']!r}]",
-                      retention_model='[3]', retention_alpha=f'[{alpha!r}]',
-                      residual_saturation=f"[{MAT['sr']!r}]", retention_n='[2]')
+                      **retention_options(Retention('gardner', alpha, sr=MAT['sr'])))
     return cfg
 
 
@@ -104,19 +102,15 @@ def compare(folder, state):
 
 def study(exe, out, ndims, steps, explicit, states, pt_option=0):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   ndims=ndims, material=MAT, states=STATES, pt_option=pt_option, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for state, n in [(s, n) for s in states for n in list(steps) + ([0] if explicit else [])]:
         folder = out/f"{state}-{f'pt-{n}' if n else 'explicit'}"; folder.mkdir()
-        with (folder/'cell.cfg').open('w') as f: config(ndims, n, state, pt_option).write(f)
-        run_solver([str(exe), 'cell.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+        run_des(exe, folder, 'cell', config(ndims, n, state, pt_option), timeout=20000)
         assert Dynearthsol(str(folder/'cell')).ndims == ndims, 'the executable and --ndims disagree'
         item = dict(state=state, mode='explicit' if n == 0 else 'PT', steps=n, **compare(folder, state))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     return result
 
@@ -128,18 +122,12 @@ def restart_checks(exe, out, ndims, state, steps=40):
     the checkpointed step until its next slow update (10 steps), so the second
     run is a genuine variable-step sequence; it is compared at its last saved
     frame, on its own strain path."""
-    sys.path.insert(0, str(ROOT/'tests'/'functional'))
-    from pt_initial_checkpoint import fields
-    env = dict(os.environ, OMP_NUM_THREADS='1')
     half = steps//2
     out.mkdir(parents=True, exist_ok=False)
     fresh = config(ndims, steps, state)
     fresh['sim'].update(output_step_interval=str(half), checkpoint_frame_interval='1')
-    run = lambda folder, cfg, name: (folder.mkdir(exist_ok=True), cfg.write((folder/f'{name}.cfg').open('w')),
-        subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=env, stdout=(folder/f'{name}.log').open('w'),
-                       stderr=subprocess.STDOUT, check=True, timeout=20000))
     fresh['sim']['modelname'] = 'fresh'
-    run(out, fresh, 'fresh')
+    run_des(exe, out, 'fresh', fresh, timeout=20000)
     assert Dynearthsol(str(out/'fresh')).ndims == ndims, 'the executable and --ndims disagree'
     report = {}
     for name, factor in (('same', 1), ('finer', 4)):
@@ -149,28 +137,25 @@ def restart_checks(exe, out, ndims, state, steps=40):
                           output_step_interval=str(half),   # a different interval stops restart output
                           checkpoint_frame_interval='1')
         cfg['control']['fixed_dt'] = repr(DURATION/steps/factor)
-        run(out, cfg, name)
+        run_des(exe, out, name, cfg, timeout=20000)
     last = lambda name: out/f"{name}.save.{scan_frames(str(out/name))[-1]['frame']:06d}"
     a, b = fields(last('fresh')), fields(last('same'))
     assert scan_frames(str(out/'fresh'))[-1]['time'] == scan_frames(str(out/'same'))[-1]['time']
-    runtime = lambda key: (key.rsplit('/', 1)[-1].lstrip('@').removesuffix('.layout') in ('walltime_sec', 'provenance')
-                           or '/provenance/' in key)
-    keys = [k for k in a if k in b and not runtime(k)]
-    different = [k for k in keys if a[k] != b[k]]
+    different = physical_differences(a, b)
     assert not different, ('The same step must reproduce the fresh run exactly', different)
-    report['same_step_identical_payloads'] = len(keys)
+    report['same_step_identical_payloads'] = sum(not runtime_key(k) for k in a)
     zz = ndims - 1                                      # strain is (xx, zz, xz) in 2D, (xx, yy, zz, ...) in 3D
     for name in ('fresh', 'finer'):
         # A restarted run has no frame 0, so read its last frame's payloads directly.
         row = scan_frames(str(out/name))[-1]
-        f = fields(out/f"{name}.save.{row['frame']:06d}")
-        strain = np.frombuffer(f['strain'], dtype=np.float64).reshape(-1, 3 if ndims == 2 else 6)
+        path = out/f"{name}.save.{row['frame']:06d}"
+        strain = checkpoint_array(path, 'strain').reshape(-1, 3 if ndims == 2 else 6)
         eps = float(np.mean(strain[:, zz]))
-        p = float(np.mean(np.frombuffer(f['pore pressure'], dtype=np.float64)))
+        p = float(np.mean(checkpoint_array(path, 'pore pressure')))
         ref = float(exact(state, [eps])[0])
         report[f'{name}_time'] = row['time']
         report[f'{name}_error_over_change'] = abs(p - ref)/abs(ref - STATES[state][0])
-    (out/'restart.json').write_text(json.dumps(report, indent=1))
+    write_json(out/'restart.json', report)
     return report
 
 

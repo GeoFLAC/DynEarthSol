@@ -9,9 +9,7 @@ closed budget and discrete superposition as well as the analytical error.
 """
 
 import argparse
-import json
 import math
-import os
 from pathlib import Path
 import shutil
 
@@ -25,7 +23,8 @@ WELLS = ((60., 80., ct.Q), (100., 80., .6*ct.Q), (80., 100., -.25*ct.Q))
 SCALE = sum(abs(q) for _, _, q in WELLS)/(4*math.pi*ct.T)
 
 
-from des_case import digest, run_solver, source_revision
+from des_case import check_manifest, digest, file_hashes, run_des, source_revision, write_json
+from des_test_utils import simplex_volumes
 
 
 def reference(xy, time, wells):
@@ -56,17 +55,14 @@ def config(spacing, dt, wells):
 
 def run(executable, folder, spacing, dt, wells):
     folder.mkdir()
-    with (folder/'input.cfg').open('w') as stream:
-        config(spacing, dt, wells).write(stream)
-    run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, check=True, timeout=600, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+    run_des(executable, folder, 'input', config(spacing, dt, wells), timeout=600)
     model = ct.Dynearthsol(str(folder/'multiwell'))
     rows = ct.scan_frames(str(folder/'multiwell'))
     assert len(rows) == 9
     x = model.read_field(0, 'coordinate')
     assert model.ndims == 3
     conn = model.read_field(0, 'connectivity')
-    cells = x[conn]
-    volume = np.abs(np.linalg.det(cells[:, 1:]-cells[:, :1]))/6
+    volume = simplex_volumes(x, conn)
     p0 = model.read_field(0, 'pore pressure')
     radii = np.stack([np.hypot(x[:, 0]-wx, x[:, 1]-wy) for wx, wy, _ in wells])
     band = (radii.min(axis=0) >= 10) & (radii.min(axis=0) <= 30)
@@ -91,8 +87,8 @@ def run(executable, folder, spacing, dt, wells):
     result = dict(spacing_m=spacing, dt_s=dt, wells=wells, nodes=len(x), elements=len(conn),
                   frames=frames, max_error_over_scale=max(f['max_error_over_scale'] for f in frames),
                   max_volume_error_m3=max(f['absolute_volume_error_m3'] for f in frames),
-                  outputs_sha256={p.name: digest(p) for p in sorted(folder.glob('multiwell.*'))
-                                  if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'},
+                  outputs_sha256=file_hashes(p for p in folder.glob('multiwell.*')
+                                             if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'),
                   input_sha256=digest(folder/'input.cfg'))
     assert result['max_volume_error_m3'] < sum(abs(q) for _, _, q in wells)*PUMP*1e-10
     assert max(f['far_reference_over_scale'] for f in frames) < 1e-5
@@ -104,10 +100,7 @@ def run(executable, folder, spacing, dt, wells):
 def study(executable, output, spacings, manifest):
     output.mkdir(parents=True, exist_ok=False)
     binary_hash = digest(executable)
-    solver = None
-    if manifest:
-        solver = json.loads(manifest.read_text())
-        assert binary_hash in solver['binaries'].values()
+    solver = check_manifest(manifest, binary_hash)
     summary = dict(executable=str(executable), executable_sha256=binary_hash,
                    solver_commit=solver['implementation_commit'] if solver else None,
                    binary_manifest_sha256=digest(manifest) if manifest else None,
@@ -122,7 +115,7 @@ def study(executable, output, spacings, manifest):
         shutil.copy2(manifest, output/'solver-qualification.json')
 
     def save():
-        (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n')
+        write_json(output/'summary.json', summary)
 
     for spacing in spacings:
         key = f'joint-h{spacing:g}-dt1'

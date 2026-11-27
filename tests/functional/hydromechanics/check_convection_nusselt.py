@@ -16,7 +16,6 @@ steady solution in benchmarks/poromechanics/convection_steady.py.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -31,7 +30,8 @@ FLUID_BULK = 1e1                     # Pa; storage only sets the transient
 DURATION, OUTPUTS = 1.6e6, 32        # s: steady by about 0.5e6 s at h = 0.05 m
 
 
-from des_case import digest, run_solver, source_diff, source_revision
+from des_case import digest, provenance, run_des, write_json
+from des_test_utils import simplex_gradients, simplex_volumes
 
 
 def config(h, ra, dt):
@@ -42,20 +42,10 @@ def config(h, ra, dt):
     return cfg
 
 
-def element_gradients(coord, conn):
-    """Constant gradients of linear triangles: (nelem, 3 nodes, 2) and areas."""
-    x, z = coord[conn][:, :, 0], coord[conn][:, :, 1]
-    det = (x[:, 1]-x[:, 0])*(z[:, 2]-z[:, 0]) - (x[:, 2]-x[:, 0])*(z[:, 1]-z[:, 0])
-    g = np.empty(conn.shape + (2,))
-    g[:, 0, 0], g[:, 1, 0], g[:, 2, 0] = z[:, 1]-z[:, 2], z[:, 2]-z[:, 0], z[:, 0]-z[:, 1]
-    g[:, 0, 1], g[:, 1, 1], g[:, 2, 1] = x[:, 2]-x[:, 1], x[:, 0]-x[:, 2], x[:, 1]-x[:, 0]
-    return g/det[:, None, None], np.abs(det)/2
-
-
 def nusselt_des(folder, ra):
     model = cc.Dynearthsol(str(folder/'box')); rows = cc.scan_frames(str(folder/'box'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
-    grad, area = element_gradients(coord, conn)
+    grad, area = simplex_gradients(coord, conn), simplex_volumes(coord, conn)
     k = ra/critical_rayleigh(1, 1)*critical_rayleigh(1, 1)/cc.rayleigh(cc.RHO, cc.G, cc.ALPHA, cc.DT, 1, 1, cc.CF, cc.MU, cc.LAMBDA)
     top = np.abs(coord[conn][:, :, 1]).min(axis=1) < 1e-9       # elements touching the top
     out = []
@@ -73,26 +63,22 @@ def nusselt_des(folder, ra):
 
 def study(exe, out, ras, spacings, dt):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(cc.ROOT),
+    result = dict(provenance(exe, __file__, out),
                   dt=dt, duration_s=DURATION, fluid_bulk_Pa=FLUID_BULK,
                   reference={f'{ra:g}': nusselt(ra, cache=out/f'reference-ra{ra:g}.npz') for ra in ras}, cases=[])
     result['reference_sha256'] = {f'{ra:g}': digest(out/f'reference-ra{ra:g}.npz') for ra in ras}
-    (out/'source.diff').write_bytes(source_diff(cc.ROOT))
     for ra in ras:
         ref = result['reference'][f'{ra:g}']['nu_extrapolated']
         for h in spacings:
             folder = out/f'ra{ra:g}-h{h:g}'; folder.mkdir()
-            with (folder/'box.cfg').open('w') as f: config(h, ra, dt).write(f)
-            run_solver([str(exe), 'box.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+            run_des(exe, folder, 'box', config(h, ra, dt), timeout=40000)
             series = nusselt_des(folder, ra)
             last = series[-1]
             item = dict(ra=ra, spacing_m=h, series=series, nu=last['nu'], nu_wall=last['nu_wall'], nu_ref=ref,
                         error=abs(last['nu']/ref - 1), wall_error=abs(last['nu_wall']/ref - 1),
                         steady_change=abs(series[-1]['nu'] - series[-5]['nu'])/last['nu'])
             result['cases'].append(item)
-            (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+            write_json(out/'summary.json', result)
             print(json.dumps({k: v for k, v in item.items() if k != 'series'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

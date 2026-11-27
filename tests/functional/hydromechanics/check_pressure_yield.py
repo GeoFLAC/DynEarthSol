@@ -17,7 +17,6 @@ step bounds the measurement to one pressure increment.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -37,7 +36,7 @@ REF = PressureYield(bulk=MAT['bulk'], shear=MAT['shear'], biot=MAT['biot'], cohe
 DP = 0.95*float(REF.apex(0.0))                     # final pressure rise (Pa)
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, run_des, write_json
 
 
 def config(ndims, h, steps, mode='pt', scaling=1e5, pt_option=None):
@@ -102,19 +101,15 @@ def compare(folder):
 
 def study(exe, out, ndims, spacings, steps, mode='pt', scaling=1e5, pt_option=None):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   ndims=ndims, steps=steps, mode=mode, scaling=scaling, pt_option=pt_option, material=MAT, rho_bulk=RHO_BULK, kappa=REF.kappa, surcharge=Q, dp_max=DP, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'layer.cfg').open('w') as f: config(ndims, h, steps, mode, scaling, pt_option).write(f)
-        run_solver([str(exe), 'layer.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        run_des(exe, folder, 'layer', config(ndims, h, steps, mode, scaling, pt_option), timeout=40000)
         assert Dynearthsol(str(folder/'layer')).ndims == ndims, 'the executable and --ndims disagree'
         item = dict(spacing_m=h, **compare(folder), input_sha256=digest(folder/'layer.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'profile'}), flush=True)
     return result
 

@@ -12,7 +12,6 @@ to the averaged (generalised Bear-Corapcioglu) model.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 
 import pumping_slab as ps
@@ -20,7 +19,7 @@ import pumping_slab as ps
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, run_solver
+from des_case import digest, provenance, run_des, write_json
 
 
 def main():
@@ -30,14 +29,12 @@ def main():
     a = p.parse_args()
     exe, out = a.executable.resolve(), a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(Path(__file__)),
-                  pumping_slab_sha256=digest(Path(ps.__file__)), cases=[])
+    result = dict(provenance(exe, Path(__file__)), pumping_slab_sha256=digest(Path(ps.__file__)), cases=[])
     for h in a.resolutions:
-        folder = out/f'res{h:g}'; case = folder/'slab-3d'; case.mkdir(parents=True)
+        case = out/f'res{h:g}'/'slab-3d'; case.mkdir(parents=True)
         cfg = ps.config(h)
         cfg['mesh']['meshing_elem_shape'] = '1'
-        with (case/'input.cfg').open('w') as f: cfg.write(f)
-        run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, check=True, env=dict(os.environ, OMP_NUM_THREADS='1'), timeout=14400)
+        run_des(exe, case, 'input', cfg, 14400)
         aq, rows = ps.compare(case)
         model = ps.Dynearthsol(str(case/'slab'))
         summary = [{k: v for k, v in row.items() if k != 'plot'} for row in rows]
@@ -48,7 +45,7 @@ def main():
                     vertical_rms=max(r['vertical_rms'] for r in summary),
                     input_sha256=digest(case/'input.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'rows'}), flush=True)
     assert digest(exe) == result['executable_sha256']
 

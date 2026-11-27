@@ -7,10 +7,8 @@ covers the elastic case only, not the plastic or poroelastic tunnel.
 """
 
 import argparse
-import json
 import itertools
 import math
-import os
 from pathlib import Path
 import shutil
 import sys
@@ -23,18 +21,13 @@ sys.path.insert(0, str(ROOT/'benchmarks/poromechanics'))
 sys.path.insert(0, str(ROOT/'tests/functional'))
 from Dynearthsol import Dynearthsol
 from kirsch_reference import annulus
-from pt_initial_checkpoint import fields
 
 A, R, P = 1., 20., 1e5
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver
-
-
-def check_binary(solver, binary_hash):
-    hashes = {value['sha256'] if isinstance(value, dict) else value
-              for value in solver['binaries'].values()}
-    assert binary_hash in hashes
+from des_case import (check_manifest, digest, file_hashes, read_config, reset_boundaries, run_des,
+                      write_json, write_poly)
+from des_test_utils import checkpoint_array, simplex_gradients, simplex_volumes
 
 
 def polygon(path, spacing, refined_radius=None):
@@ -61,19 +54,11 @@ def polygon(path, spacing, refined_radius=None):
             ids.append(len(points)); points.append((refined_radius*np.cos(angle), -refined_radius*np.sin(angle)))
         ids.append(len(markers)-1)
         edges += [(i, j, 0) for i, j in zip(ids[:-1], ids[1:])]
-    with path.open('w') as stream:
-        stream.write(f'{len(points)} 2 0 0\n')
-        for i, (x, z) in enumerate(points):
-            stream.write(f'{i} {x:.17g} {z:.17g}\n')
-        stream.write(f'{len(edges)} 1\n')
-        for i, (start, end, marker) in enumerate(edges):
-            stream.write(f'{i} {start} {end} {marker}\n')
-        if refined_radius is None:
-            stream.write(f'0\n1\n0 {R/3} {-R/3} 0 {16*spacing**2}\n')
-        else:
-            inner_seed = (A+refined_radius)/(2*np.sqrt(2))
-            stream.write(f'0\n2\n0 {R/3} {-R/3} 0 {16*spacing**2}\n')
-            stream.write(f'1 {inner_seed} {-inner_seed} 0 {spacing**2/2}\n')
+    regions = [(R/3, -R/3, 0, 16*spacing**2)]
+    if refined_radius is not None:
+        inner_seed = (A+refined_radius)/(2*np.sqrt(2))
+        regions.append((inner_seed, -inner_seed, 0, spacing**2/2))
+    write_poly(path, points, edges, regions)
 
 
 def config(spacing):
@@ -95,6 +80,15 @@ def config(spacing):
     return cfg
 
 
+def polar(values, normal):
+    """Radial, hoop and shear components of (xx, zz, xz) tensors for unit radial directions normal."""
+    nx, nz = normal.T
+    rr = nx**2*values[:, 0]+nz**2*values[:, 1]+2*nx*nz*values[:, 2]
+    hoop = nz**2*values[:, 0]+nx**2*values[:, 1]-2*nx*nz*values[:, 2]
+    shear = nx*nz*(values[:, 1]-values[:, 0])+(nx**2-nz**2)*values[:, 2]
+    return rr, hoop, shear
+
+
 def compare(folder):
     model = Dynearthsol(str(folder/'kirsch'))
     assert model.ndims == 2
@@ -104,10 +98,7 @@ def compare(folder):
     radius = np.linalg.norm(centre, axis=1)
     radial = centre/radius[:, None]
     values = model.read_field(model.frames[-1], 'stress')
-    nx, nz = radial.T
-    rr = nx**2*values[:, 0] + nz**2*values[:, 1] + 2*nx*nz*values[:, 2]
-    hoop = nz**2*values[:, 0] + nx**2*values[:, 1] - 2*nx*nz*values[:, 2]
-    shear = nx*nz*(values[:, 1]-values[:, 0]) + (nx**2-nz**2)*values[:, 2]
+    rr, hoop, shear = polar(values, radial)
     band = (radius >= 1.1*A) & (radius <= 5*A)
     exact_rr, exact_hoop = annulus(radius[band], A, R, P)
     errors = dict(radial_rms_over_load=float(np.sqrt(np.mean((rr[band]-exact_rr)**2)))/P,
@@ -116,9 +107,7 @@ def compare(folder):
                   max_error_over_load=float(max(np.max(np.abs(rr[band]-exact_rr)),
                                                 np.max(np.abs(hoop[band]-exact_hoop))))/P)
     assert all(np.isfinite(v) for v in errors.values())
-    strain = model.read_field(model.frames[-1], 'strain')
-    er = nx**2*strain[:, 0]+nz**2*strain[:, 1]+2*nx*nz*strain[:, 2]
-    et = nz**2*strain[:, 0]+nx**2*strain[:, 1]-2*nx*nz*strain[:, 2]
+    er, et, _ = polar(model.read_field(model.frames[-1], 'strain'), radial)
     bulk, modulus = 1e9, 1e9
     lame = bulk-2*modulus/3
     exact_volume = (exact_rr+exact_hoop)/(2*(lame+modulus))
@@ -126,7 +115,7 @@ def compare(folder):
     exact_et = (exact_hoop-lame*exact_volume)/(2*modulus)
     errors['radial_strain_rms_over_P_G'] = float(np.sqrt(np.mean((er[band]-exact_er)**2)))/(P/modulus)
     errors['hoop_strain_rms_over_P_G'] = float(np.sqrt(np.mean((et[band]-exact_et)**2)))/(P/modulus)
-    out_of_plane = np.frombuffer(fields(folder/f'kirsch.chkpt.{model.frames[-1]:06d}')['stressyy'], dtype=np.float64)
+    out_of_plane = checkpoint_array(folder/f'kirsch.chkpt.{model.frames[-1]:06d}', 'stressyy')
     poisson = (3*bulk-2*modulus)/(2*(3*bulk+modulus))
     errors['out_of_plane_rms_over_load'] = float(np.sqrt(np.mean(
         (out_of_plane[band]-poisson*(exact_rr+exact_hoop))**2)))/P
@@ -138,9 +127,8 @@ def compare(folder):
 
 def force_balance(x, conn, values, pressure, outer_radius):
     """Independently assemble the quarter-annulus P1 force residual."""
-    vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-    area = np.abs(np.linalg.det(vertices))/2
-    gradients = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
+    area = simplex_volumes(x, conn)
+    gradients = simplex_gradients(x, conn)
     tensor = np.zeros((len(conn), 2, 2))
     tensor[:, 0, 0], tensor[:, 1, 1] = values[:, 0], values[:, 1]
     tensor[:, 0, 1] = tensor[:, 1, 0] = values[:, 2]
@@ -171,9 +159,8 @@ def force_balance(x, conn, values, pressure, outer_radius):
 def study(executable, output, spacings, manifest):
     output.mkdir(parents=True, exist_ok=False)
     binary_hash = digest(executable)
-    solver = json.loads(manifest.read_text()) if manifest else None
+    solver = check_manifest(manifest, binary_hash)
     if solver:
-        check_binary(solver, binary_hash)
         shutil.copy2(manifest, output/'solver-qualification.json')
     for source in (Path(__file__), ROOT/'benchmarks/poromechanics/kirsch_reference.py'):
         shutil.copy2(source, output/source.name)
@@ -182,18 +169,16 @@ def study(executable, output, spacings, manifest):
                    runner_sha256=digest(Path(__file__)),
                    reference=dict(opening_radius_m=A, outer_radius_m=R, outer_pressure_Pa=P,
                                   finite_boundary_hoop_factor=R**2/(R**2-A**2)), cases=[])
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     for h in spacings:
         folder = output/f'h{h:g}'; folder.mkdir()
         polygon(folder/'annulus.poly', h)
-        with (folder/'input.cfg').open('w') as stream: config(h).write(stream)
-        run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=600)
+        run_des(executable, folder, 'input', config(h), timeout=600)
         case = dict(spacing_m=h, folder=folder.name, **compare(folder), input_sha256=digest(folder/'input.cfg'),
                     mesh_input_sha256=digest(folder/'annulus.poly'),
-                    outputs_sha256={p.name:digest(p) for p in sorted(folder.glob('kirsch.*'))
-                                    if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'})
+                    outputs_sha256=file_hashes(p for p in folder.glob('kirsch.*')
+                                               if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'))
         summary['cases'].append(case)
-        (output/'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False)+'\n')
+        write_json(output/'summary.json', summary)
         print(h, case['errors'], flush=True)
     assert digest(executable) == binary_hash
     fine = min(summary['cases'], key=lambda c:c['spacing_m'])
@@ -210,7 +195,7 @@ def study(executable, output, spacings, manifest):
     report = dict(summary, passed=bool(passed), analysis_sha256=digest(Path(__file__)),
                   reference_sha256=digest(ROOT/'benchmarks/poromechanics/kirsch_reference.py'),
                   scope='Dry isotropic compression, plane-strain annulus. Plasticity, anisotropic far loading and coupled injection are not qualified.')
-    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+    write_json(output/'qualification.json', report)
     assert passed, 'Selected-mesh accuracy target not met; retain the raw evidence'
     return summary
 

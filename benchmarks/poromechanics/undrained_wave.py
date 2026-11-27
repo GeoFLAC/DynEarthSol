@@ -9,10 +9,7 @@ optional finite-density model with a declared constant fictitious mass.
 """
 
 import argparse
-import hashlib
-import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -24,13 +21,8 @@ from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
-
-
-def run(executable, folder, cfg, name, timeout=120):
-    with (folder / f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(executable), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=timeout, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
+from des_case import digest, expect_exit, file_hashes, provenance, read_config, reset_boundaries, run_des, write_json
+from des_test_utils import fields, lumped_volumes, native_offsets, simplex_heights, simplex_volumes
 
 
 def study(executable, output, spacing, steps, amplitude, samples=4, restart_check=False,
@@ -51,16 +43,12 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
     modulus = bulk + 4*shear/3 + alpha*alpha/storage
     speed = math.sqrt(modulus/density)
     period = 2/speed
-    summary = dict(executable=str(executable), executable_sha256=digest(executable),
-                   analyzer_sha256=digest(Path(__file__)),
-                   source_commit=source_revision(ROOT),
+    summary = dict(provenance(executable, __file__, output),
                    content_model=content_model, scaling=scaling if content_model else None,
                    gvs=gvs, cycles=cycles, moving_mesh=moving_mesh,
                    reference=dict(storage_Pa_inv=storage, undrained_modulus_Pa=modulus,
                                   density_kg_m3=density, wave_speed_m_s=speed, period_s=period), cases={})
-    patch = source_diff(ROOT)
-    (output / 'source.diff').write_bytes(patch)
-    summary['source_diff_sha256'] = hashlib.sha256(patch).hexdigest()
+    summary['source_diff_sha256'] = digest(output / 'source.diff')
     snapshots = {}
     for count in steps:
         folder = output / f'steps-{count}'
@@ -89,7 +77,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
                           biot_coeff=f'[{alpha}]', fluid_bulk_modulus=f'[{fluid_bulk}]',
                           bulk_modulus_s=f'[{grain_bulk}]', rho0='[2650]', fluid_rho0='[1000]',
                           hydraulic_perm='[0]', retention_model='[0]', alpha='[0]')
-        run(executable, folder, cfg, 'seed',900 if content_model else 120)
+        run_des(executable, folder, 'seed', cfg, 900 if content_model else 120)
         cfg['control']['fixed_dt'] = repr(period/count)
         seed = Dynearthsol(str(folder / 'seed'))
         if seed.format != 'binary':
@@ -110,12 +98,11 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         cfg['sim'].update(modelname='wave', is_restarting='true', restarting_from_modelname=str(folder/'seed'),
                           restarting_from_frame='0', max_steps=str(count*cycles),
                           max_time_in_yr=repr(10*cycles*period/YEAR2SEC), output_step_interval=str(count//samples))
-        run(executable, folder, cfg, 'wave',900 if content_model else 120)
+        run_des(executable, folder, 'wave', cfg, 900 if content_model else 120)
         model = Dynearthsol(str(folder / 'wave'))
         rows = scan_frames(str(folder / 'wave'))
-        volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
-        nodal_volume = np.zeros(len(x))
-        np.add.at(nodal_volume, conn, np.broadcast_to((volume/(dim+1))[:, None], conn.shape))
+        volume = simplex_volumes(x, conn)
+        nodal_volume = lumped_volumes(x, conn, volume)
         measured = []
         snapshots[count] = []
         initial_mass = model.read_field(0,'fluid mass') if content_model else None
@@ -128,9 +115,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
             exact_v = amplitude*np.sin(np.pi*(x[:, -1]+1))*np.cos(2*np.pi*time/period)
             exact_p = -alpha*amplitude/(storage*speed)*np.cos(np.pi*(x[:, -1]+1))*np.sin(2*np.pi*time/period)
             eps = strain[:, :dim].sum(axis=1)
-            projection = np.zeros(len(x))
-            np.add.at(projection, conn, np.broadcast_to((volume*eps/(dim+1))[:, None], conn.shape))
-            content = alpha*projection/nodal_volume + storage*p
+            content = alpha*lumped_volumes(x, conn, volume*eps)/nodal_volume + storage*p
             measured.append(dict(time_s=time, velocity_error_over_amplitude=float(np.max(np.abs(v-exact_v))/amplitude),
                                  pressure_error_over_amplitude=float(np.max(np.abs(p-exact_p))/(alpha*amplitude/(storage*speed))),
                                  max_local_fluid_content_error=float(np.max(np.abs(content))),
@@ -145,12 +130,10 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
                                            seed_checkpoint_sha256=digest(folder/'seed.chkpt.000000'),
                                            input_sha256=digest(folder/'wave.cfg'))
         if restart_check:
-            sys.path.insert(0, str(ROOT/'tests/functional'))
-            from pt_initial_checkpoint import fields
             quarter = next(r for r in rows if r['steps'] == count//4)
             cfg['sim'].update(modelname='resumed', restarting_from_modelname=str(folder/'wave'),
                               restarting_from_frame=str(quarter['frame']))
-            run(executable, folder, cfg, 'resume',900 if content_model else 120)
+            run_des(executable, folder, 'resume', cfg, 900 if content_model else 120)
             resumed = Dynearthsol(str(folder/'resumed'))
             original = {r['steps']:r for r in rows}
             for r in scan_frames(str(folder/'resumed')):
@@ -174,16 +157,13 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
             else:
                 cfg['control']['is_quasi_static']='true'
                 cfg['control']['has_poroelastic_pressure_feedback']='false'
-            with (folder/'wrong-order.cfg').open('w') as stream:cfg.write(stream)
-            rejected = run_solver([str(executable), 'wrong-order.cfg'], log=folder / 'wrong-order.log', cwd=folder, timeout=60)
-            assert rejected.returncode == 22
-            assert ('finite-density' if content_model else 'hydraulic step ordering differs') in (folder/'wrong-order.log').read_text().lower()
+            rejected = expect_exit(executable, folder, 'wrong-order', cfg, 22, timeout=60)
+            assert ('finite-density' if content_model else 'hydraulic step ordering differs') in rejected.stdout.lower()
             summary['cases'][str(count)].update(restart_physical_fields_exact=True,
                                               incompatible_ordering_rejected=True)
-        summary['cases'][str(count)]['outputs_sha256'] = {
-            p.name: digest(p) for p in sorted(folder.glob('wave.*'))
-            if p.suffix == '.info' or '.save.' in p.name or '.chkpt.' in p.name}
-        (output / 'summary.json').write_text(json.dumps(summary, indent=2, allow_nan=False))
+        summary['cases'][str(count)]['outputs_sha256'] = file_hashes(
+            p for p in folder.glob('wave.*') if p.suffix == '.info' or '.save.' in p.name or '.chkpt.' in p.name)
+        write_json(output / 'summary.json', summary)
         print(count, 'maximum errors:', {
             key: max(r[key] for r in measured) for key in measured[0] if key != 'time_s'}, flush=True)
     if restart_check and not content_model:
@@ -192,18 +172,9 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         cfg['sim'].update(modelname='automatic', is_restarting='false', max_steps='1',
                           output_step_interval='1')
         cfg['control'].update(is_quasi_static='false', fixed_dt='0', dt_fraction='.8')
-        run(executable, folder, cfg, 'automatic')
+        run_des(executable, folder, 'automatic', cfg)
         auto = Dynearthsol(str(folder/'automatic'))
-        points = auto.read_field(0,'coordinate')[auto.read_field(0,'connectivity')]
-        volumes = np.abs(np.linalg.det(points[:,1:]-points[:,:1]))/math.factorial(dim)
-        measures = []
-        for omit in range(dim+1):
-            face = np.delete(points,omit,axis=1)
-            if dim == 2:
-                measures.append(np.linalg.norm(face[:,1]-face[:,0],axis=1))
-            else:
-                measures.append(np.linalg.norm(np.cross(face[:,1]-face[:,0],face[:,2]-face[:,0]),axis=1)/2)
-        height = np.min(dim*volumes/np.max(measures,axis=0))
+        height = simplex_heights(auto.read_field(0,'coordinate'), auto.read_field(0,'connectivity')).min()
         expected = .8*height/(5*speed)
         actual = scan_frames(str(folder/'automatic'))[1]['time']
         np.testing.assert_allclose(actual, expected, rtol=2e-14, atol=0)
@@ -212,8 +183,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         # next-step dt: the restart must select the undrained wave limit.
         (folder/'legacy-seed.save.000000').write_bytes((folder/'seed.save.000000').read_bytes())
         checkpoint = bytearray((folder/'seed.chkpt.000000').read_bytes())
-        entries = dict(line.split(b'\t') for line in bytes(checkpoint[:4096]).split(b'\0',1)[0].splitlines()[1:])
-        position = int(entries[b'dt'])
+        position = native_offsets(checkpoint)['dt']
         checkpoint[position:position+8] = np.float64(1).tobytes()
         marker = b'physical hydraulic step\t'
         assert marker in checkpoint[:4096]
@@ -221,14 +191,14 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         (folder/'legacy-seed.chkpt.000000').write_bytes(checkpoint)
         cfg['sim'].update(modelname='converted', is_restarting='true',
                           restarting_from_modelname=str(folder/'legacy-seed'), restarting_from_frame='0')
-        run(executable,folder,cfg,'converted')
+        run_des(executable,folder,'converted',cfg)
         converted_step = scan_frames(str(folder/'converted'))[1]['time']
         np.testing.assert_allclose(converted_step, expected, rtol=2e-14, atol=0)
         summary['automatic_step'] = dict(expected_s=float(expected), actual_s=actual,
             matches_undrained_wave_limit=True, smaller_than_drained_limit=True,
             initial_ordering_conversion_reselects_step=True,
             input_sha256=digest(folder/'automatic.cfg'))
-        (output/'summary.json').write_text(json.dumps(summary,indent=2,allow_nan=False))
+        write_json(output/'summary.json', summary)
     assert digest(executable) == summary['executable_sha256']
     if content_model:
         counts = sorted(steps)
@@ -242,7 +212,7 @@ def study(executable, output, spacing, steps, amplitude, samples=4, restart_chec
         summary['passed'] = True
         summary['temporal_successive_differences'] = differences
         summary['scope'] = 'Small-amplitude constant-scaled-mass undrained wave; no damping or parameter fit'
-        (output/'summary.json').write_text(json.dumps(summary,indent=2,allow_nan=False))
+        write_json(output/'summary.json', summary)
 
 
 if __name__ == '__main__':

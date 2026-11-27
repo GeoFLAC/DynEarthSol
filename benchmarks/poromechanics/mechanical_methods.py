@@ -7,12 +7,9 @@ Run one dimension at a time with a 6 GiB virtual-memory limit.
 """
 
 import argparse
-import configparser
-import hashlib
 import itertools
 import json
 import math
-import os
 from pathlib import Path
 import subprocess
 import time
@@ -25,7 +22,9 @@ import consolidation as pf
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import run_solver, source_revision
+from des_case import (check_hashes, check_manifest, digest, file_hashes, material_properties, read_config, run_des,
+                      source_diff, source_revision, write_config, write_json)
+from des_test_utils import facet_areas, simplex_gradients, simplex_volumes
 
 def cases(settings):
     methods = settings.get('methods', ['pt0', 'pt1', 'explicit', 'gvs-shear', 'gvs-bulk'])
@@ -47,23 +46,20 @@ def cases(settings):
 def run(output, settings):
     executable = Path(settings.get('executable') or
                       pf.ROOT / f'dynearthsol{settings["dimension"]}d').resolve()
-    source_diff = subprocess.check_output(['git', 'diff', 'HEAD'], cwd=pf.ROOT)
-    (output / 'source.diff').write_bytes(source_diff)
+    (output / 'source.diff').write_bytes(source_diff())
     manifest = settings.get('binary_manifest')
-    solver = json.loads(Path(manifest).read_text()) if manifest else None
+    solver = check_manifest(manifest, digest(executable))
     if solver:
-        assert cr.digest(executable) in solver['binaries'].values(), 'Executable does not match its qualification'
         (output/'solver-qualification.json').write_bytes(Path(manifest).read_bytes())
     provenance = dict(source_commit=source_revision(pf.ROOT),
                       solver_commit=solver.get('implementation_commit') if solver else None,
-                      binary_manifest_sha256=cr.digest(Path(manifest)) if manifest else None,
-                      source_diff_sha256=hashlib.sha256(source_diff).hexdigest(),
-                      executable_sha256=cr.digest(executable),
-                      analysis_sha256={name: cr.digest(Path(__file__).with_name(name)) for name in
+                      binary_manifest_sha256=digest(manifest) if manifest else None,
+                      source_diff_sha256=digest(output / 'source.diff'),
+                      executable_sha256=digest(executable),
+                      analysis_sha256={name: digest(Path(__file__).with_name(name)) for name in
                                        ('mechanical_methods.py', 'consolidation.py',
                                         'consolidation_refinement.py', 'terzaghi_reference.py')},
-                      reader_sha256=cr.digest(pf.ROOT / 'Dynearthsol.py'), cases={})
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
+                      reader_sha256=digest(pf.ROOT / 'Dynearthsol.py'), cases={})
     for name, control in cases(settings):
         folder = output / name / f'terzaghi-{settings["dimension"]}d'
         folder.mkdir(parents=True)
@@ -77,23 +73,22 @@ def run(output, settings):
         cfg['sim'].update(max_steps=str(settings['max_steps']),
                           output_time_interval_in_yr=str(settings['duration_s']/10/pf.YEAR2SEC),
                           checkpoint_frame_interval='1', info_display_step_interval='100000')
-        with (folder / 'input.cfg').open('w') as stream:
-            cfg.write(stream)
-        record = dict(control=control, input_sha256=cr.digest(folder / 'input.cfg'), status='running')
+        write_config(folder / 'input.cfg', cfg)
+        record = dict(control=control, input_sha256=digest(folder / 'input.cfg'), status='running')
         provenance['cases'][name] = record
-        cr.write_json(output / 'provenance.json', provenance)
+        write_json(output / 'provenance.json', provenance)
         start = time.monotonic()
         try:
-            run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=settings['timeout_s'])
-            if cr.digest(executable) != provenance['executable_sha256']:
+            run_des(executable, folder, 'input', None, settings['timeout_s'])
+            if digest(executable) != provenance['executable_sha256']:
                 raise RuntimeError('Executable changed during comparison')
             record['status'] = 'complete'
         except (subprocess.SubprocessError, RuntimeError) as error:
             record.update(status='failed', error=str(error))
         record.update(elapsed_s=time.monotonic()-start,
-                      output_sha256={p.name: cr.digest(p) for p in sorted(folder.glob('terzaghi.*'))
-                                     if '.save.' in p.name or '.chkpt.' in p.name})
-        cr.write_json(output / 'provenance.json', provenance)
+                      output_sha256=file_hashes(p for p in folder.glob('terzaghi.*')
+                                                if '.save.' in p.name or '.chkpt.' in p.name))
+        write_json(output / 'provenance.json', provenance)
         print(name, record['status'], flush=True)
 
 
@@ -103,9 +98,8 @@ def diagnostics(folder, case, cfg):
     frame = model.frames[-1]
     x, conn = case['coordinate'], case['connectivity']
     dim = x.shape[1]
-    vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-    volume = np.abs(np.linalg.det(vertices)) / math.factorial(dim)
-    gradients = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
+    volume = simplex_volumes(x, conn)
+    gradients = simplex_gradients(x, conn)
     values = model.read_field(frame, 'stress')
     stress = np.zeros((len(conn), dim, dim))
     for d in range(dim):
@@ -124,16 +118,14 @@ def diagnostics(folder, case, cfg):
         face = list(face)
         if count != 1 or not np.all(np.isclose(x[face, -1], 0)):
             continue
-        area = np.linalg.norm(x[face[1]]-x[face[0]]) if dim == 2 else np.linalg.norm(
-            np.cross(x[face[1]]-x[face[0]], x[face[2]]-x[face[0]]))/2
-        force[face, -1] -= load * area / dim
+        force[face, -1] -= load * facet_areas(x[face]) / dim
     for d in range(dim - 1):
         force[np.isclose(x[:, d], 0) | np.isclose(x[:, d], 1), d] = 0
     force[np.isclose(x[:, -1], -10), -1] = 0
     strain = model.read_field(frame, 'strain')
     trace = strain[:, :dim].sum(axis=1)
-    shear = json.loads(cfg['mat']['shear_modulus'])[0]
-    bulk = json.loads(cfg['mat']['bulk_modulus'])[0]
+    m = material_properties(cfg)
+    shear, bulk = m['shear'], m['bulk']
     energy = np.sum(volume * ((bulk-2*shear/3)*trace**2/2 + shear*(
         np.sum(strain[:, :dim]**2, axis=1) + 2*np.sum(strain[:, dim:]**2, axis=1))))
     # Physical reference mass uses the constant initial saturated mixture.
@@ -150,22 +142,18 @@ def diagnostics(folder, case, cfg):
 
 def analyze(output, settings):
     provenance = json.loads((output / 'provenance.json').read_text())
-    report = dict(settings=settings, analysis_sha256=cr.digest(Path(__file__)),
+    report = dict(settings=settings, analysis_sha256=digest(Path(__file__)),
                   qualification='Exploratory; stability alone does not establish accuracy.', cases={})
     for name, record in provenance['cases'].items():
         folder = output / name / f'terzaghi-{settings["dimension"]}d'
-        if cr.digest(folder / 'input.cfg') != record['input_sha256']:
+        if digest(folder / 'input.cfg') != record['input_sha256']:
             raise RuntimeError(f'{name}: changed configuration')
-        for filename, sha in record['output_sha256'].items():
-            if cr.digest(folder / filename) != sha:
-                raise RuntimeError(f'{name}: changed output {filename}')
+        check_hashes(record['output_sha256'], folder)
         result = dict(status=record['status'], elapsed_s=record['elapsed_s'])
         if record['status'] == 'complete':
             try:
                 case = pf.load_case(output / name, settings['dimension'])
-                cfg = configparser.ConfigParser()
-                cfg.read(folder / 'input.cfg')
-                metrics = dict(case['metrics'], **diagnostics(folder, case, cfg))
+                metrics = dict(case['metrics'], **diagnostics(folder, case, read_config(folder / 'input.cfg')))
                 if any(value is not None and not np.isfinite(value) for value in metrics.values()):
                     raise RuntimeError('Nonfinite analysis metric')
                 result.update(metrics)
@@ -178,7 +166,7 @@ def analyze(output, settings):
         else:
             result['error'] = record['error']
         report['cases'][name] = result
-    cr.write_json(output / 'summary.json', report)
+    write_json(output / 'summary.json', report)
     print(json.dumps(report, indent=2))
 
 
@@ -219,7 +207,7 @@ def main():
                         methods=args.methods,
                         max_steps=args.max_steps)
         output.mkdir(parents=True, exist_ok=False)
-        cr.write_json(output / 'settings.json', settings)
+        write_json(output / 'settings.json', settings)
         run(output, settings)
     analyze(output, settings)
 

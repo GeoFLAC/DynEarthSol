@@ -22,7 +22,6 @@ Drawdown is compared with benchmarks/poromechanics/hantush_reference.py.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -44,7 +43,7 @@ AQUITARD = dict(porosity=1e-4, biot=.3)
 SOLID = dict(bulk=1e12, shear=1e12, fluid_bulk=2.2e9, grain_bulk=1e20, visc=1e-3)
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
 
 def storage(layer):
     return (layer['porosity']/SOLID['fluid_bulk'] + (layer['biot']-layer['porosity'])/SOLID['grain_bulk']
@@ -123,18 +122,14 @@ def compare(folder, h):
 
 def study(exe, out, spacings):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   reference=dict(L=L, B=B, Q=Q, leakage_factor=LAMBDA, anisotropy=ANISOTROPY, pump_until_s=PUMP, end_s=END, dt_s=DT,
                                  storage_per_Pa=STORAGE, aquitard_storage_per_Pa=STORAGE_AQUITARD,
                                  diffusivity=DIFFUSIVITY, permeability=PERM, transmissivity=T, storativity=S,
                                  pressure_scale_Pa=SCALE, window=WINDOW), cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'hantush.cfg').open('w') as f: config(h).write(f)
-        run_solver([str(exe), 'hantush.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=20000)
+        run_des(exe, folder, 'hantush', config(h), timeout=20000)
         model, frames, nodes = compare(folder, h)
         strain = max(float(np.abs(model.read_field(f, 'strain')).max()) for f in model.frames)
         item = dict(spacing_m=h, nodes=nodes, frames=frames,
@@ -145,7 +140,7 @@ def study(exe, out, spacings):
                     max_abs_strain=strain, input_sha256=digest(folder/'hantush.cfg'))
         assert strain < 1e-6, ('stiff skeleton must stay rigid', strain)
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=2, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

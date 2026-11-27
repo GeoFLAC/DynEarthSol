@@ -12,7 +12,6 @@ limit (a=b=0), independently of state/slip-rate accuracy.
 
 import argparse
 import json
-import os
 from pathlib import Path
 import shutil
 
@@ -31,7 +30,9 @@ CASES = (
 )
 
 
-from des_case import run_solver
+from des_case import digest, file_hashes, retention_options, run_des, write_json
+
+LAW = Retention('gardner', 1e-5, sr=.1)
 
 def config(ndims, rheology, confinement, pressure, biot, retention):
     cfg = cell.config(ndims, STEPS, 'moderate', 1)
@@ -46,19 +47,18 @@ def config(ndims, rheology, confinement, pressure, biot, retention):
     cfg['ic'].update(weakzone_option='0', initial_stress_option='1', initial_stress=json.dumps(initial),
                       pore_pressure_value=repr(pressure))
     cfg['mat'].update(rheology_type=rheology, bulk_modulus='[1e9]', shear_modulus='[1e9]',
-                      alpha='[0]', hydraulic_perm='[0]', retention_model=f'[{retention}]',
-                      retention_alpha='[1e-5]', residual_saturation='[.1]',
-                      biot_coeff=f'[{biot}]', is_plane_strain=str(ndims == 2).lower(),
+                      alpha='[0]', hydraulic_perm='[0]', biot_coeff=f'[{biot}]', is_plane_strain=str(ndims == 2).lower(),
                       cohesion0='[1e5]', cohesion1='[1e5]', friction_angle0='[30]', friction_angle1='[30]',
                       dilation_angle0='[0]', dilation_angle1='[0]', max_tension='1e9',
                       direct_a='[0]', evolution_b='[0]', state_var_model='1')
+    cfg['mat'].update(retention_options(LAW), retention_model=f'[{retention}]')
     return cfg
 
 
 def compare(folder, ndims, confinement, pressure, biot, retention):
     model = cell.Dynearthsol(str(folder/'cell'))
     assert model.nnode_list[0] == 2**ndims
-    se = float(Retention('gardner', 1e-5, sr=.1).se(pressure)) if retention else 1.
+    se = float(LAW.se(pressure)) if retention else 1.
     q = biot*se*pressure
     yield_load = float(COHESION*np.cos(PHI)+(confinement-q)*np.sin(PHI))
     worst, final_load = 0., None
@@ -85,26 +85,23 @@ def compare(folder, ndims, confinement, pressure, biot, retention):
 
 def study(executable, output, ndims, show_failure):
     output.mkdir(parents=True, exist_ok=False)
-    binary_hash = cell.digest(executable)
+    binary_hash = digest(executable)
     sources = (Path(__file__), Path(cell.__file__), cell.ROOT/'benchmarks/poromechanics/unsaturated_reference.py')
     for source in sources: shutil.copy2(source, output/source.name)
     report = dict(executable=str(executable), executable_sha256=binary_hash, ndims=ndims,
-                  source_sha256={p.name:cell.digest(p) for p in sources}, cases={})
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
+                  source_sha256=file_hashes(sources), cases={})
     for rheology in ('elasto-plastic', 'elasto-plastic-rate-state-friction'):
         for name, confinement, pressure, biot, retention in CASES:
             folder = output/f'{rheology}-{name}'; folder.mkdir()
-            cfg = config(ndims, rheology, confinement, pressure, biot, retention)
-            with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-            run_solver([str(executable), 'input.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=120)
+            run_des(executable, folder, 'input', config(ndims, rheology, confinement, pressure, biot, retention))
             case = compare(folder, ndims, confinement, pressure, biot, retention)
             report['cases'][folder.name] = case
             print(folder.name, json.dumps(case), flush=True)
-    assert cell.digest(executable) == binary_hash
+    assert digest(executable) == binary_hash
     report['passed'] = all(c['passed'] for c in report['cases'].values())
-    report['files_sha256'] = {str(p.relative_to(output)):cell.digest(p) for p in sorted(output.rglob('*'))
-                              if p.is_file() and (p.suffix in ('.cfg', '.info') or '.save.' in p.name or '.chkpt.' in p.name)}
-    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+    report['files_sha256'] = file_hashes((p for p in output.rglob('*')
+                                          if p.suffix in ('.cfg', '.info') or '.save.' in p.name or '.chkpt.' in p.name), output)
+    write_json(output/'qualification.json', report)
     assert report['passed'] or show_failure, 'Pressure-dependent strength fails the reference'
 
 

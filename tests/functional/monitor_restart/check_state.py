@@ -7,11 +7,7 @@ import struct
 
 from run_monitor_restart import (DEFAULT_CFG, clone_baseline, read_histories, render_cfg,
                                  run_config)
-
-
-def checkpoint(folder):
-    path = folder/'monitor_restart.chkpt.000001'
-    return path if path.is_file() else Path(str(path)+'.vtkhdf')
+from des_test_utils import checkpoint_file, native_offsets
 
 
 def change(path, key, value=None, *, integer=False, rename=None):
@@ -36,9 +32,7 @@ def change(path, key, value=None, *, integer=False, rename=None):
         assert len(old) == len(new) and data[:4096].count(old) == 1
         data[:4096] = data[:4096].replace(old, new)
     else:
-        entries = dict(line.rsplit(b'\t', 1) for line in
-                       bytes(data[:4096]).split(b'\0', 1)[0].splitlines()[1:])
-        fmt, offset = '<i' if integer else '<d', int(entries[key.encode()])
+        fmt, offset = '<i' if integer else '<d', native_offsets(data)[key]
         if callable(value):
             value = value(struct.unpack_from(fmt, data, offset)[0])
         struct.pack_into(fmt, data, offset, value)
@@ -70,7 +64,7 @@ def main():
     for name, key, value, integer, rename, error in cases:
         folder = output/name
         clone_baseline(baseline, folder)
-        change(checkpoint(folder), key, value, integer=integer, rename=rename)
+        change(checkpoint_file(folder/'monitor_restart.chkpt.000001'), key, value, integer=integer, rename=rename)
         before = read_histories(folder)
         run_config(exe, restart_cfg, folder, 'restart', threads=1, expected_error=error)
         assert read_histories(folder) == before, name

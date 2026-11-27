@@ -9,7 +9,6 @@ failing on it.
 """
 import argparse
 import json
-import math
 from pathlib import Path
 import sys
 
@@ -21,7 +20,8 @@ from Dynearthsol import Dynearthsol, scan_frames
 import fluid_content as water
 
 
-from des_case import read_config
+from des_case import digest, read_config, write_json
+from des_test_utils import checkpoint_file, simplex_volumes
 
 def analyze(config, until=None):
     config = config.resolve()
@@ -50,13 +50,12 @@ def analyze(config, until=None):
         if cfg.getboolean('control', 'has_PT', fallback=False) else 0.
     x = model.read_field(rows[0]['frame'], 'coordinate')
     conn = model.read_field(rows[0]['frame'], 'connectivity')
-    volume = abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     previous = model.read_field(rows[0]['frame'], 'pore pressure')
     if lag:
         # A restart's initial save may have no corresponding new checkpoint.
         prefix, frame = Path(model.modelname), rows[0]['frame']
-        checkpoint = Path(f'{prefix}.chkpt.{frame:06d}')
-        if checkpoint.is_file() or Path(str(checkpoint)+'.vtkhdf').is_file():
+        if checkpoint_file(f'{prefix}.chkpt.{frame:06d}') is not None:
             source = model
         else:
             assert cfg.getboolean('sim', 'is_restarting', fallback=False)
@@ -101,10 +100,10 @@ def main():
     args = parser.parse_args()
     report, history = analyze(args.config, args.until)
     report.update(passed=report['normalized_content_defect'] < 1e-9,
-                  config_sha256=water.digest(args.config), analyzer_sha256=water.digest(__file__))
+                  config_sha256=digest(args.config), analyzer_sha256=digest(__file__))
     if args.output:
         assert not args.output.exists(), args.output
-        water.write_json(args.output, report)
+        write_json(args.output, report)
         np.savetxt(args.output.with_suffix('.csv'), history, delimiter=',', comments='',
                    header='time_s,physical_content_m3,pending_content_m3,boundary_net_m3,defect_m3')
     print(json.dumps(report, indent=2))

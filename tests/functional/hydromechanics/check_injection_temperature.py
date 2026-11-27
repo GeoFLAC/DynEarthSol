@@ -24,7 +24,6 @@ which acts as a line source of q/4 per unit thickness: a sanity check.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -45,7 +44,8 @@ REF = Avdonin(rate=Q, conductivity=MAT['conductivity'], capacity=CAPACITY, fluid
 TIMES = (1.25e5, 2.5e5, 3.75e5, 5e5)
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
+from des_test_utils import lumped_volumes
 
 
 def config(h, steps, ndims=2):
@@ -79,20 +79,10 @@ def config(h, steps, ndims=2):
     return cfg
 
 
-def lumped_area(coord, conn):
-    """Lumped nodal area (2D) or volume (3D)."""
-    c = coord[conn]
-    edges = c[:, 1:] - c[:, :1]
-    size = np.abs(np.linalg.det(edges))/(2 if coord.shape[1] == 2 else 6)
-    w = np.zeros(len(coord))
-    np.add.at(w, conn, size[:, None]/conn.shape[1])
-    return w
-
-
 def compare(folder):
     model = Dynearthsol(str(folder/'hot')); rows = scan_frames(str(folder/'hot'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
-    r = np.hypot(coord[:, 0], coord[:, -1]); area = lumped_area(coord, conn)
+    r = np.hypot(coord[:, 0], coord[:, -1]); area = lumped_volumes(coord, conn)
     thickness = np.ptp(coord[:, 1]) if coord.shape[1] == 3 else 1.0
     out = []
     for target in TIMES:
@@ -111,21 +101,17 @@ def compare(folder):
 
 def study(exe, out, spacings, steps, ndims=2):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   steps=steps, ndims=ndims, material=MAT, capacity=CAPACITY, nu=REF.nu, front_m=REF.front(DURATION), cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'hot.cfg').open('w') as f: config(h, steps, ndims).write(f)
-        run_solver([str(exe), 'hot.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        run_des(exe, folder, 'hot', config(h, steps, ndims), timeout=40000)
         frames, nodes = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, frames=frames, input_sha256=digest(folder/'hot.cfg'),
                     temperature_error=max(f['temperature_error'] for f in frames),
                     heat_error=max(f['heat_error'] for f in frames))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     return result
 

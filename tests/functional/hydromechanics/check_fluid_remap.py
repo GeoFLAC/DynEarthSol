@@ -7,8 +7,6 @@ This does not check total retained mass or energy.
 """
 import argparse
 import json
-import math
-import os
 from pathlib import Path
 import sys
 
@@ -17,10 +15,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
-from pt_initial_checkpoint import fields
 
 
-from des_case import read_config, reset_boundaries, run_solver
+from des_case import read_config, reset_boundaries, run_des, write_json
+from des_test_utils import checkpoint_file, fields, physical_differences, runtime_key, simplex_volumes
 
 def configuration(case):
     cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
@@ -58,16 +56,10 @@ def configuration(case):
     return cfg
 
 
-def run(exe, folder, cfg, name, timeout=120):
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, check=True, timeout=timeout, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1'))
-
-
 def inventories(model, frame, cfg):
     dim = int(model.ndims)
     x, cells = (model.read_field(frame, key) for key in ('coordinate', 'connectivity'))
-    volume = np.abs(np.linalg.det(x[cells][:, 1:]-x[cells][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, cells)
     value = lambda key: json.loads(cfg['mat'][key])[0]
     phi, alpha = value('porosity'), value('biot_coeff')
     storage = phi/value('fluid_bulk_modulus')+(alpha-phi)/value('bulk_modulus_s')
@@ -94,7 +86,7 @@ def continuation(exe, folder, cfg, rows):
     checkpoint = next(r['frame'] for r in rows if r['steps'] == 1)
     cfg['sim'].update(modelname='continued', is_restarting='true',
         restarting_from_modelname=str(folder/'flow'), restarting_from_frame=str(checkpoint))
-    run(exe, folder, cfg, 'restart')
+    run_des(exe, folder, 'restart', cfg)
     count = 0
     for row in scan_frames(str(folder/'continued')):
         frame = row['frame']
@@ -103,16 +95,14 @@ def continuation(exe, folder, cfg, rows):
             if frame == checkpoint and suffix == 'chkpt':
                 continue
             a, b = (folder/f'{name}.{suffix}.{frame:06d}' for name in ('flow', 'continued'))
-            present = lambda p: p.exists() or Path(str(p)+'.vtkhdf').exists()
-            assert present(a) == present(b)
-            if not present(a):
+            assert (checkpoint_file(a) is None) == (checkpoint_file(b) is None)
+            if checkpoint_file(a) is None:
                 continue
             old, new = fields(a), fields(b)
             assert old.keys() == new.keys()
-            for key in old:
-                if key.split('/')[-1] not in ('walltime_sec', 'provenance'):
-                    assert old[key] == new[key], (frame, suffix, key)
-                    count += 1
+            different = physical_differences(old, new)
+            assert not different, (frame, suffix, different)
+            count += sum(not runtime_key(key) for key in old)
     return count
 
 
@@ -129,7 +119,7 @@ def main():
         folder = output/case
         folder.mkdir()
         cfg = configuration(case)
-        run(exe, folder, cfg, 'input')
+        run_des(exe, folder, 'input', cfg)
         model = Dynearthsol(str(folder/'flow'))
         rows = scan_frames(model.modelname)
         pairs = [(a, b) for a, b in zip(rows, rows[1:]) if a['steps'] == b['steps'] and a['time'] == b['time']]
@@ -153,8 +143,8 @@ def main():
         records.append(dict(case=case, maximum_relative_remap_defect=max(defects),
                             exact_restart_payloads=exact, pairs=len(pairs)))
         print('PASS fluid remap', case, flush=True)
-    (output/'summary.json').write_text(json.dumps(dict(passed=True, cases=records,
-        scope='Fixed-property saturated linear Biot inventories; not evolving-storage/unsaturated qualification'), indent=2)+'\n')
+    write_json(output/'summary.json', dict(passed=True, cases=records,
+        scope='Fixed-property saturated linear Biot inventories; not evolving-storage/unsaturated qualification'))
 
 
 if __name__ == '__main__':

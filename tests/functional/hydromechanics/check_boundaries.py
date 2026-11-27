@@ -5,9 +5,7 @@ Usage: check_boundaries.py EXECUTABLE OUTPUT_DIRECTORY
 """
 import argparse
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -17,8 +15,7 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
 
-from des_case import read_config, run_solver
-from des_test_utils import run_des
+from des_case import read_config, restart_check, run_des, write_json
 
 def mesh_tags(exe, output):
     """Imported tag names do not determine which pressure faces intersect."""
@@ -61,8 +58,7 @@ def mesh_tags(exe, output):
         cfg['bc'].update(hbc_pressure=json.dumps(values), stress_bc_z1='0')
         cfg['ic'].update(pore_pressure_option='2', pore_pressure_value='0',
                          has_body_force_adjustment='false', weakzone_option='0')
-        with (folder/'input.cfg').open('w') as stream: cfg.write(stream)
-        done = run_solver([str(exe), 'input.cfg'], log=folder / 'run.log', cwd=folder, timeout=60, env=dict(os.environ, OMP_NUM_THREADS='1'))
+        done = run_des(exe, folder, 'input', cfg, timeout=60, check=False)
         result[name] = dict(returncode=done.returncode, expected=expected)
         if done.returncode == 0:
             model = Dynearthsol(str(folder/'tags')); x = model.read_field(0, 'coordinate')
@@ -73,17 +69,16 @@ def mesh_tags(exe, output):
                     np.testing.assert_array_equal(p[np.isclose(x[:, 0], 0)], 1000)
                     np.testing.assert_array_equal(p[np.isclose(x[:, 0], 1)], values[5])
         elif done.returncode == 11:
-            result[name]['actual_node_diagnostic'] = 'Node ' in (folder/'run.log').read_text()
+            result[name]['actual_node_diagnostic'] = 'Node ' in done.stdout
     # A changed condition on restart must be checked against the saved mesh.
     cfg.read(output/'disjoint/input.cfg')
     cfg['sim'].update(modelname='bad-restart', is_restarting='yes',
                       restarting_from_modelname=str(output/'disjoint/tags'), restarting_from_frame='1', max_steps='3')
     cfg['bc']['hbc_x0'] = '2'
-    with (output/'restart.cfg').open('w') as stream: cfg.write(stream)
-    done = run_solver([str(exe), 'restart.cfg'], log=output / 'restart.log', cwd=output, timeout=60, env=dict(os.environ, OMP_NUM_THREADS='1'))
+    done = run_des(exe, output, 'restart', cfg, timeout=60, check=False)
     result['restart-shared'] = dict(returncode=done.returncode, expected=11,
-                                    actual_node_diagnostic='Node ' in (output/'restart.log').read_text())
-    (output/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
+                                    actual_node_diagnostic='Node ' in done.stdout)
+    write_json(output/'summary.json', result)
     assert all(c['returncode'] == c['expected'] for c in result.values()), result
     assert all(c.get('actual_node_diagnostic', True) for c in result.values()), result
     print(json.dumps(result, indent=2))
@@ -149,13 +144,8 @@ def main():
         if mode == 'flux-side':
             cfg['bc'].update(hbc_z1='0', hbc_x0='3', hbc_flux='[-1e-7,0,0,0,0,0]')
         cfg['mat']['permeability_tensor'] = '[2,1,1,0,0.3,0]'
-        source = output / f'{mode}.cfg'
-        with source.open('w') as f:
-            cfg.write(f)
         case = output / mode
-        subprocess.run([sys.executable, str(ROOT/'tests/functional/pt_initial_checkpoint.py'),
-                        str(exe), str(source), str(case), '--restart-frame', '1', '--steps', '4'],
-                       env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=240)
+        restart_check(exe, cfg, case, 4, 1)
         model = Dynearthsol(str(case/'fresh'))
         worst = 0.0
         times = {r['frame']: r['time'] for r in scan_frames(str(case/'fresh'))}
@@ -185,7 +175,7 @@ def main():
             previous = times[frame]
         result[mode] = dict(max_relative_step_balance_error=worst, exact_restart=True)
     result['initial-schedule'] = initial_schedule(exe, output/'initial-schedule')
-    (output/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
+    write_json(output/'summary.json', result)
     print(json.dumps(result, indent=2))
     if model.ndims == 2:
         mesh_tags(exe, output/'mesh-tags')

@@ -8,7 +8,6 @@ reference. These scaled coefficients isolate transport, not an application.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -20,7 +19,7 @@ sys.path.insert(0,str(ROOT))
 from Dynearthsol import Dynearthsol, scan_frames, YEAR2SEC
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, file_hashes, provenance, read_config, reset_boundaries, run_des, write_json
 
 def exact(x,t,v,d):
     if t == 0:
@@ -33,9 +32,7 @@ def exact(x,t,v,d):
 def study(exe,out,spacings,steps,porosity,restart):
     out.mkdir(parents=True,exist_ok=False)
     (out/'runner.py').write_bytes(Path(__file__).read_bytes())
-    result=dict(executable=str(exe),executable_sha256=digest(exe),runner_sha256=digest(Path(__file__)),
-        source_commit=source_revision(ROOT),cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
+    result=dict(provenance(exe,__file__,out),cases=[])
     rho_s,cs,rho_f,cf,q,conductivity=2500.,2000.,1000.,4000.,1.,23500.
     capacity=(1-porosity)*rho_s*cs+porosity*rho_f*cf
     velocity=rho_f*cf*q/capacity
@@ -43,10 +40,6 @@ def study(exe,out,spacings,steps,porosity,restart):
     duration=.4/velocity
     result['reference']=dict(bulk_capacity=capacity,velocity=velocity,diffusivity=diffusivity,
                             duration_s=duration,porosity=porosity,scaled_hydraulic_storage=True)
-    env=dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
-    def run(folder,cfg,name):
-        with (folder/f'{name}.cfg').open('w') as f:cfg.write(f)
-        run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=180)
     for h in spacings:
         for count in steps:
             folder=out/f'h{h:g}-n{count}';folder.mkdir()
@@ -67,7 +60,7 @@ def study(exe,out,spacings,steps,porosity,restart):
                 fluid_rho0=f'[{rho_f}]',fluid_heat_capacity=f'[{cf}]',fluid_visc='[1]',hydraulic_perm='[1]',
                 porosity=f'[{porosity}]',biot_coeff='[1]',fluid_bulk_modulus='[1e-6]',
                 bulk_modulus='[1e9]',shear_modulus='[1e9]',retention_model='[0]')
-            run(folder,cfg,'fresh')
+            run_des(exe,folder,'fresh',cfg,timeout=180)
             model=Dynearthsol(str(folder/'column'));rows=scan_frames(str(folder/'column'))
             x=model.read_field(0,'coordinate')[:,0]
             errors=[];prange=[]
@@ -86,7 +79,7 @@ def study(exe,out,spacings,steps,porosity,restart):
                 quarter=rows[1]
                 cfg['sim'].update(modelname='continued',is_restarting='true',
                     restarting_from_modelname=str(folder/'column'),restarting_from_frame=str(quarter['frame']))
-                run(folder,cfg,'restart')
+                run_des(exe,folder,'restart',cfg,timeout=180)
                 resumed=Dynearthsol(str(folder/'continued'))
                 fresh={r['steps']:r for r in rows}
                 for row in scan_frames(str(folder/'continued')):
@@ -94,10 +87,10 @@ def study(exe,out,spacings,steps,porosity,restart):
                     for key in ('temperature','pore pressure','velocity','stress','strain','coordinate'):
                         np.testing.assert_array_equal(model.read_field(f['frame'],key),resumed.read_field(row['frame'],key))
                 item['physical_restart_exact']=True
-            item['outputs_sha256']={p.name:digest(p) for p in folder.glob('column.*')
-                if '.save.' in p.name or '.chkpt.' in p.name or p.suffix=='.info'}
+            item['outputs_sha256']=file_hashes(p for p in folder.glob('column.*')
+                if '.save.' in p.name or '.chkpt.' in p.name or p.suffix=='.info')
             result['cases'].append(item)
-            (out/'summary.json').write_text(json.dumps(result,indent=2,allow_nan=False))
+            write_json(out/'summary.json',result)
             print(json.dumps(item|{'outputs_sha256':'recorded'}),flush=True)
     assert digest(exe)==result['executable_sha256']
 

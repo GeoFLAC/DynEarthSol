@@ -92,7 +92,7 @@ except ImportError:
 from scipy import spatial
 from numpy.linalg  import eigh
 from fractions import Fraction
-from Dynearthsol import Dynearthsol
+from Dynearthsol import Dynearthsol, OPTIONAL_ELEM_FIELDS, OPTIONAL_NODE_FIELDS
 
 # Save in ASCII or encoded binary.
 # Some old VTK programs cannot read binary VTK files.
@@ -366,13 +366,7 @@ def process_single_frame(args):
         #convert_field(des, frame, 'tmass', fvtu)
         #convert_field(des, frame, 'volume_n', fvtu)
         convert_field(des, frame, 'pore pressure', fvtu)
-        for name in ('fluid mass', 'hydraulic split buffer', 'solid mass',
-                     'solid heat capacity', 'pending temperature increment'):
-            try:
-                convert_field(des,frame,name,fvtu)
-            except (KeyError,NameError):
-                # Older or uncoupled outputs can omit these inventory fields.
-                pass
+        convert_optional_fields(des, frame, OPTIONAL_NODE_FIELDS, fvtu)
 
         # node number for debugging
         vtk_dataarray(fvtu, np.arange(nnode, dtype=np.int32), 'node number')
@@ -427,14 +421,7 @@ def process_single_frame(args):
         convert_field(des, frame, 'density', fvtu)
         convert_field(des, frame, 'material', fvtu)
         convert_field(des, frame, 'viscosity', fvtu)
-        for name in ('porosity', 'permeability', 'matrix pressure', 'saturation',
-                     'pore dilation', 'plastic volume increment',
-                     'effective saturation', 'relative permeability', 'bulk density',
-                     'shear heating', 'pending shear heat'):
-            try:
-                convert_field(des, frame, name, fvtu)
-            except KeyError:
-                pass  # Optional hydraulic cell fields.
+        convert_optional_fields(des, frame, OPTIONAL_ELEM_FIELDS, fvtu)
         
         # element number for debugging
         vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
@@ -889,6 +876,15 @@ def convert_field(des, frame, name, fvtu):
     else:
         vtk_dataarray(fvtu, field, name)
     return
+
+
+def convert_optional_fields(des, frame, names, fvtu):
+    '''Convert those of names that this frame holds.'''
+    for name in names:
+        try:
+            convert_field(des, frame, name, fvtu)
+        except KeyError:
+            pass
 
 
 def vtk_dataarray(f, data, data_name=None, data_comps=None):

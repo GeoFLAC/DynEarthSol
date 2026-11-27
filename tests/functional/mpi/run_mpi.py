@@ -8,7 +8,6 @@ Both executables must use HDF5 output; full physical datasets are checked exactl
 except the sums over nodes in NODE_SUMS, which the ranks add in another order.
 """
 import argparse
-import configparser
 import json
 import os
 from pathlib import Path
@@ -22,6 +21,8 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tests/functional"))
+from des_test_utils import read_config
 # Output fields the current executables write that a reference from an earlier commit may lack.
 ADDED_FIELDS = {"dv surface acc facets"}
 # Sums over the nodes of a frame, which MPI adds in another order. Each order of n
@@ -40,9 +41,7 @@ def command_text(command):
 
 
 def configure(ndims, moving, resolution, steps=196, output_interval=49):
-    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-    cfg.optionxform = str
-    cfg.read(ROOT / "examples/core-complex-mmg.cfg")
+    cfg = read_config(ROOT / "examples/core-complex-mmg.cfg", inline_comment_prefixes=("#", ";"))
     cfg["sim"].update(modelname="result", max_steps=str(steps), max_time_in_yr="1e20",
                       output_step_interval=str(output_interval),
                       output_time_interval_in_yr="1e20", checkpoint_frame_interval="1")
@@ -206,9 +205,7 @@ def main():
     if args.serial3d:
         cases += [("defaults.cfg",3,40),("aniso_test.cfg",3,2)]
     for example, ndims, steps in cases:
-        cfg=configparser.ConfigParser(inline_comment_prefixes=("#",";"))
-        cfg.optionxform = str
-        cfg.read(ROOT / "examples" / example)
+        cfg=read_config(ROOT / "examples" / example, inline_comment_prefixes=("#",";"))
         cfg["sim"].update(modelname="result",max_steps=str(steps),max_time_in_yr="1e20",
                           output_step_interval=str(max(1,steps//4)),
                           output_time_interval_in_yr="1e20",is_outputting_averaged_fields="no")
@@ -235,9 +232,7 @@ def main():
     optional.append(("hydration",2))
     for name,ndims in optional:
         if name=="hydration":
-            cfg=configparser.ConfigParser(inline_comment_prefixes=("#",";"))
-            cfg.optionxform = str
-            cfg.read(ROOT / "examples/subduction.cfg")
+            cfg=read_config(ROOT / "examples/subduction.cfg", inline_comment_prefixes=("#",";"))
             cfg["sim"].update(modelname="result",max_steps="40",max_time_in_yr="1e20",
                               output_step_interval="10",output_time_interval_in_yr="1e20",
                               is_outputting_averaged_fields="no")
@@ -275,9 +270,8 @@ def main():
                 # The physical-step solver must converge, including its
                 # initial equilibrium, so the case starts from the
                 # hydrostatic-equilibrium cfg.
-                cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-                cfg.optionxform = str
-                cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
+                cfg = read_config(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg",
+                                  inline_comment_prefixes=("#", ";"))
                 cfg["sim"].update(modelname="result", max_steps="8", max_time_in_yr="1e20",
                                   output_step_interval="2", output_time_interval_in_yr="1e20")
         label=f"optional-{name}-{ndims}d"
@@ -289,9 +283,8 @@ def main():
 
     # A well on a mesh pushed from one side, which moves some ranks' nodes and not others:
     # the screen moves with the material on every rank as in serial.
-    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-    cfg.optionxform = str
-    cfg.read(ROOT / "benchmarks/poromechanics/1d-consolidation-des2d_traction.cfg")
+    cfg = read_config(ROOT / "benchmarks/poromechanics/1d-consolidation-des2d_traction.cfg",
+                      inline_comment_prefixes=("#", ";"))
     cfg["sim"].update(modelname="result", max_steps="5", max_time_in_yr="1e20",
                       output_step_interval="1", output_time_interval_in_yr="1e20")
     cfg["mesh"].update(meshing_option="1", xlength="1200", zlength="100", resolution="10",
@@ -407,9 +400,7 @@ def main():
         poly.write_text(f"{len(points)} 2 0 0\n" + "".join(f"{i} {x} {z}\n" for i, (x, z) in enumerate(points))
                         + f"{len(facets)} 1\n" + "".join(f"{i} {a} {b} {f}\n" for i, (a, b, f) in enumerate(facets))
                         + "0\n1\n0 1000 -2000 0 -1\n")
-        cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-        cfg.optionxform = str
-        cfg.read(ROOT / "examples/defaults.cfg")
+        cfg = read_config(ROOT / "examples/defaults.cfg", inline_comment_prefixes=("#", ";"))
         cfg["sim"].update(modelname="result", max_steps=str(steps), max_time_in_yr="1e20",
                           output_step_interval=str(max(1, steps // 2)), output_time_interval_in_yr="1e20",
                           checkpoint_frame_interval="1", is_outputting_averaged_fields="no")

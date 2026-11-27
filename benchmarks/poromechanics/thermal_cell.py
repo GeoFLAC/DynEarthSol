@@ -10,8 +10,6 @@ known defect explicitly; it is not an energy qualification of open flow.
 
 import argparse
 import json
-import math
-import os
 from pathlib import Path
 import sys
 
@@ -20,7 +18,6 @@ import numpy as np
 import fluid_content as water
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 
-ROOT = water.ROOT
 T0, RATE, STOP, END = 273., 40., .25, 1.
 K, G, ALPHA, PHI, KF, KS = 2e7, 1e7, .98, .25, 1e8, 1e9
 EXPANSION = 2e-4
@@ -31,7 +28,8 @@ CAPACITY = (1-PHI)*2650.*1000.+PHI*FLUID
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import run_solver
+from des_case import check_hashes, digest, file_hashes, provenance, run_model, write_json
+from des_test_utils import lumped_volumes, simplex_volumes
 
 def configuration(method, boundary, dt):
     cfg = water.configuration(.5, dt, END, method, 1e5, water.INFLOW)
@@ -57,20 +55,10 @@ def configuration(method, boundary, dt):
     return cfg
 
 
-def run(exe, folder, cfg, name, env):
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=env, check=True, timeout=600)
-    return Dynearthsol(str(folder/name))
-
-
 def volumes(model):
     x, conn = (model.read_field(model.frames[0], key) for key in ('coordinate', 'connectivity'))
-    v = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(int(model.ndims))
-    lumped = np.zeros(len(x))
-    np.add.at(lumped, conn, np.broadcast_to((v/conn.shape[1])[:, None], conn.shape))
-    return x, conn, v, lumped
+    v = simplex_volumes(x, conn)
+    return x, conn, v, lumped_volumes(x, conn, v)
 
 
 def heating(cfg, x, lumped):
@@ -159,7 +147,7 @@ def analyze(folder, method, boundary, modelname='heated'):
                   full_open_energy_qualified=False)
     if boundary == 'drained':
         np.testing.assert_allclose(report['retained_enthalpy_residual_J'], report['drained_defect_reference_J'], rtol=1e-7)
-    water.write_json(folder/'analysis.json', report)
+    write_json(folder/'analysis.json', report)
     return report
 
 
@@ -177,13 +165,10 @@ def main():
     exe, output = args.executable.resolve(), args.output.resolve()
     if args.replay:
         manifest = json.loads((output/'manifest.json').read_text())
-        for name, sha in manifest['artifacts_sha256'].items():
-            assert water.digest(output/name) == sha, name
+        check_hashes(manifest['artifacts_sha256'], output)
     else:
         output.mkdir(parents=True, exist_ok=False)
-        manifest = dict(executable=str(exe), executable_sha256=water.digest(exe), command=sys.argv,
-                        runner_sha256=water.digest(__file__), cases=[])
-        env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
+        manifest = dict(provenance(exe, __file__), command=sys.argv, cases=[])
         for method in args.methods:
             for boundary in args.boundaries:
                 if method == 'explicit' and boundary == 'free':
@@ -193,22 +178,21 @@ def main():
                 name = f'{method}-{boundary}'; folder = output/name; folder.mkdir()
                 cfg = configuration(method, boundary, args.dt)
                 steps = cfg['sim']['max_steps']; cfg['sim']['max_steps'] = '1'
-                seed = run(exe, folder, cfg, 'seed', env)
+                seed = run_model(exe, folder, cfg, 'seed', timeout=600)
                 assert int(seed.ndims) == args.ndims
                 x, _, _, lumped = volumes(seed)
                 heating(cfg, x, lumped); cfg['sim']['max_steps'] = steps
-                run(exe, folder, cfg, 'heated', env)
-                assert water.digest(exe) == manifest['executable_sha256']
+                run_model(exe, folder, cfg, 'heated', timeout=600)
+                assert digest(exe) == manifest['executable_sha256']
                 manifest['cases'].append(dict(folder=name, method=method, boundary=boundary))
                 # Retain the raw failure evidence if an analytical check fails.
-                manifest['artifacts_sha256'] = {str(p.relative_to(output)): water.digest(p)
-                                                for p in sorted(output.glob('*/*')) if p.is_file()
-                                                and p.name not in ('analysis.json', 'history.csv')}
-                water.write_json(output/'manifest.json', manifest)
+                manifest['artifacts_sha256'] = file_hashes((p for p in output.glob('*/*')
+                                                            if p.name not in ('analysis.json', 'history.csv')), output)
+                write_json(output/'manifest.json', manifest)
                 print(json.dumps(analyze(folder, method, boundary)), flush=True)
     summary = dict(cases=[analyze(output/c['folder'], c['method'], c['boundary']) for c in manifest['cases']],
                    full_open_energy_qualified=False)
-    water.write_json(output/'summary.json', summary)
+    write_json(output/'summary.json', summary)
 
 
 if __name__ == '__main__':

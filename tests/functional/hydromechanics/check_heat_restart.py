@@ -4,13 +4,9 @@
 import argparse
 import copy
 import json
-import itertools
-import math
-import os
 from pathlib import Path
 import shutil
 import struct
-import subprocess
 import sys
 
 import numpy as np
@@ -18,7 +14,8 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks/poromechanics'), str(ROOT/'tests/functional')]
 import plastic_heat as heat
-from pt_initial_checkpoint import fields
+from des_case import expect_exit, write_json
+from des_test_utils import checkpoint_file, fields, native_offsets, simplex_heights, simplex_volumes
 
 HEAT_STATE = ('shear heat version', 'pending shear heat', 'shear heating')
 
@@ -31,23 +28,21 @@ def checkpoint_copy(prefix, frame, target, drop=(), replace=None):
         if source.exists():
             shutil.copy2(source, Path(f'{target}.{suffix}'))
     for suffix in ('save', 'chkpt'):
-        source = Path(f'{prefix}.{suffix}.{frame:06d}')
-        dest = Path(f'{target}.{suffix}.{frame:06d}')
-        if source.exists():
-            shutil.copy2(source, dest)
-        else:
-            shutil.copy2(Path(str(source)+'.vtkhdf'), Path(str(dest)+'.vtkhdf'))
+        source = checkpoint_file(f'{prefix}.{suffix}.{frame:06d}')
+        assert source is not None, (prefix, suffix, frame)
+        hdf5 = source.suffix == '.vtkhdf'
+        dest = Path(f'{target}.{suffix}.{frame:06d}' + ('.vtkhdf' if hdf5 else ''))
+        shutil.copy2(source, dest)
         if suffix != 'chkpt':
             continue
-        if dest.exists():
+        if not hdf5:
             data = dest.read_bytes()
-            lines = data[:4096].split(b'\0', 1)[0].splitlines()
-            header_size = int(lines[1].split(b'\t')[1])
+            header_size = next(iter(native_offsets(data).values()))
             payloads = fields(dest)
             for name in drop:
                 payloads.pop(name, None)
             payloads.update(replace)
-            header = lines[0]+b'\n'
+            header = data[:data.index(b'\n')+1]
             body = b''
             for name, value in payloads.items():
                 header += name.encode()+b'\t'+str(header_size+len(body)).encode()+b'\n'
@@ -57,7 +52,7 @@ def checkpoint_copy(prefix, frame, target, drop=(), replace=None):
         else:
             import h5py
             import numpy as np
-            with h5py.File(str(dest)+'.vtkhdf', 'r+') as stream:
+            with h5py.File(dest, 'r+') as stream:
                 for name in drop:
                     if name in stream:
                         del stream[name]
@@ -67,16 +62,10 @@ def checkpoint_copy(prefix, frame, target, drop=(), replace=None):
 
 
 def reject(exe, folder, cfg, name, reason):
+    """Run cfg as model name, which must exit with status 22 and log reason."""
     cfg = copy.deepcopy(cfg)
     cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    result = subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, text=True,
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=120,
-                            env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'))
-    (folder/f'{name}.log').write_text(result.stdout)
-    assert result.returncode == 22, (name, result.returncode, result.stdout[-2000:])
-    assert reason in result.stdout, (name, result.stdout[-2000:])
+    expect_exit(exe, folder, name, cfg, 22, message=reason)
 
 
 def rsf_reference(times, theta0, widths):
@@ -118,14 +107,8 @@ def rsf_case(exe, folder, dim, dt=.005, steps=12, coupled=False, method='pt1'):
     times = np.array([row['time'] for row in heat.scan_frames(model.modelname)])
     theta0 = model.read_field(model.frames[0], 'friction state variable')
     x, conn = (model.read_field(model.frames[0], key) for key in ('coordinate', 'connectivity'))
-    volume = abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
-    facets = []
-    for face in itertools.combinations(range(dim+1), dim):
-        points = x[conn][:, face, :]
-        area = np.linalg.norm(points[:, 1]-points[:, 0], axis=1) if dim == 2 else \
-            np.linalg.norm(np.cross(points[:, 1]-points[:, 0], points[:, 2]-points[:, 0]), axis=1)/2
-        facets.append(area)
-    widths = dim*volume/np.max(facets, axis=0)
+    volume = simplex_volumes(x, conn)
+    widths = simplex_heights(x, conn, volume)
     theta, mu, tau, energy = rsf_reference(times, theta0, widths)
     result = heat.analyze(model, capacity=capacity,
         reference=lambda ts: rsf_reference(ts, theta0, widths)[3] @ volume / volume.sum())
@@ -164,7 +147,7 @@ def rsf_case(exe, folder, dim, dt=.005, steps=12, coupled=False, method='pt1'):
         assert max(abs(value) for value in balances) < 1e-15, balances
         result['split_fluid_budget_m3'] = balances
     result['scope'] = 'Nonzero a/b, evolving aging state and friction; scalar boundary work minus elastic storage.'
-    (folder/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
+    write_json(folder/'summary.json', result)
     return result
 
 
@@ -224,7 +207,7 @@ def main():
                   reference=reference, changed_timestep=changed_result,
                   rsf=rsf_case(exe, folder/'rsf', args.ndims),
                   scope='Plastic and aging EP-RSF work and checkpoint ownership; this is not a complete earthquake cycle.')
-    (folder/'summary.json').write_text(json.dumps(result, indent=2)+'\n')
+    write_json(folder/'summary.json', result)
     shutil.copy2(__file__, folder/'checker.py')
     print(json.dumps({k: result[k] for k in ('dimensions', 'exact_continuation_payloads',
                                            'legacy_zero_exact_payloads', 'rejected_schemas')}, indent=2))

@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from Dynearthsol import Dynearthsol, YEAR2SEC, scan_frames
 import bishop_reference as br
 import strength_reduction_slope as srm
+from unsaturated_reference import Retention, bishop_pressure
 
 G_ACC, RHO_F, PHI_N = srm.G_ACC, 1000.0, 0.3
 RHO_S = (br.GAMMA/G_ACC - RHO_F*PHI_N)/(1 - PHI_N)        # saturated unit weight = br.GAMMA
@@ -39,7 +40,8 @@ FACTORS = [0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.1, 1.2, 1.3, 1.4]
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, reset_boundaries, source_revision
+from des_case import digest, provenance, reset_boundaries, write_json
+from des_test_utils import checkpoint_file
 
 
 def polygon(path, h):
@@ -111,10 +113,9 @@ def bishop(folder, name, frame):
     model = Dynearthsol(str(folder/name))
     x = model.read_field(frame, 'coordinate'); conn = model.read_field(frame, 'connectivity')
     p = model.read_field(frame, 'pore pressure')
-    se = np.where(p < 0, np.exp(ALPHA_G*np.minimum(p, 0)), 1.0)
-    sat = SR + (1 - SR)*se
+    retention = Retention('gardner', ALPHA_G, sr=SR)
     tri = Triangulation(x[:, 0], x[:, 1], conn)
-    chi_p = LinearTriInterpolator(tri, se*p); s = LinearTriInterpolator(tri, sat)
+    chi_p = LinearTriInterpolator(tri, bishop_pressure(retention, p)); s = LinearTriInterpolator(tri, retention.sat(p))
     def pore(xx, zz):
         return np.ma.filled(chi_p(xx, np.maximum(zz, br.BASE + 1e-9)), 0.0)
     def weight(xx, zz):
@@ -133,9 +134,7 @@ def study(exe, out, spacings, times, factors, workers, flow_threads=1, resume=No
     if slots and max(flow_threads, min(workers, len(factors))) > int(slots):
         raise ValueError('Flow threads and simultaneous trials must fit the scheduler allocation')
     out.mkdir(parents=True, exist_ok=False)
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  reference_sha256=digest(br.__file__), srm_sha256=digest(srm.__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__), reference_sha256=digest(br.__file__), srm_sha256=digest(srm.__file__),
                   rho_s=RHO_S, porosity=PHI_N, frozen=FROZEN, free_fluid=FREE_FLUID, alpha=ALPHA_G, sr=SR, permeability=PERMEABILITY,
                   fill_time=FILL_TIME, drain_time=DRAIN_TIME, frame=FRAME, duration=srm.DURATION, scaling=srm.SCALING,
                   damping=srm.DAMPING, flow_threads=flow_threads, trial_workers=workers, cases=[])
@@ -152,10 +151,8 @@ def study(exe, out, spacings, times, factors, workers, flow_threads=1, resume=No
                 if not 0 < row['time'] < FILL_TIME:
                     raise ValueError('Reservoir continuation must precede the original filling endpoint')
                 cfg['sim'].update(restarting_from_modelname=str(prefix), max_time_in_yr=repr(FILL_TIME/YEAR2SEC))
-                checkpoint = prefix.with_name(f'{prefix.name}.chkpt.{frame:06d}')
-                if not checkpoint.is_file(): checkpoint = checkpoint.with_suffix(checkpoint.suffix+'.vtkhdf')
                 result['reservoir_continuation'] = dict(frame=frame, time_s=row['time'],
-                    checkpoint_sha256=digest(checkpoint))
+                    checkpoint_sha256=digest(checkpoint_file(prefix.with_name(f'{prefix.name}.chkpt.{frame:06d}'))))
             else:
                 cfg = config(h, name, stage, restart, folder=folder)
             code = srm.run(exe, folder, name, cfg, threads=flow_threads)
@@ -182,7 +179,7 @@ def study(exe, out, spacings, times, factors, workers, flow_threads=1, resume=No
             print(json.dumps(dict(spacing_m=h, time=state['time'], fs_bishop=fs_bishop, largest_at_rest=max(rest, default=None),
                                   at_rest=[tr['at_rest'] for tr in state['trials']])), flush=True)
             result['cases'] = [c for c in result['cases'] if c['spacing_m'] != h] + [case]
-            (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+            write_json(out/'summary.json', result)
     return result
 
 

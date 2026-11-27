@@ -22,7 +22,6 @@ and the compared band stay inside the diffusion front of the far sides.
 import argparse
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -45,7 +44,7 @@ REF = AveragedAquifer(**PROPS)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, material_options, provenance, read_config, run_des, write_json
 
 
 OUTER = 2*L/math.sqrt(math.pi)                # radius of the circle with the quarter square's area (m)
@@ -94,11 +93,7 @@ def config(h, steps):
               well_schedule_time_in_yr='[' + ', '.join(repr(x/YEAR2SEC) for x in times) + ']',
               well_schedule_ratio='[' + ', '.join(repr(r) for r in ratios) + ']')
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
-    cfg['mat'].update(bulk_modulus=f"[{PROPS['bulk']!r}]", shear_modulus=f"[{PROPS['shear']!r}]",
-                      biot_coeff=f"[{PROPS['biot']!r}]", porosity=f"[{PROPS['porosity']!r}]",
-                      fluid_bulk_modulus=f"[{PROPS['fluid_bulk']!r}]", bulk_modulus_s=f"[{PROPS['grain_bulk']!r}]",
-                      hydraulic_perm=f"[{PROPS['permeability']!r}]", fluid_visc=f"[{PROPS['viscosity']!r}]",
-                      retention_model='[0]')
+    cfg['mat'].update(material_options(PROPS), retention_model='[0]')
     return cfg
 
 
@@ -127,23 +122,19 @@ def compare(folder):
 
 def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   steps=steps, duration_s=DURATION, schedule=SCHEDULE, properties=PROPS,
                   reference=dict(diffusivity=REF.diffusivity, specific_storage=REF.specific_storage,
                                  front_m=math.sqrt(4*REF.diffusivity*DURATION)), cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
-        with (folder/'basin.cfg').open('w') as f: config(h, steps).write(f)
-        run_solver([str(exe), 'basin.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        run_des(exe, folder, 'basin', config(h, steps), 40000)
         frames, nodes = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),
                     subsidence_error=max(f['subsidence_error'] for f in frames), input_sha256=digest(folder/'basin.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     assert digest(exe) == result['executable_sha256']
     return result

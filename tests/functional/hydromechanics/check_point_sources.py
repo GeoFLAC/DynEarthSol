@@ -9,11 +9,8 @@ monitor points do, and continue exactly on restart.
 """
 
 import argparse
-import ast
 import csv
 import json
-import math
-import os
 from pathlib import Path
 import shutil
 import struct
@@ -24,10 +21,10 @@ import numpy as np
 ROOT=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(ROOT));sys.path.insert(0,str(ROOT/'tests/functional'))
 from Dynearthsol import Dynearthsol,scan_frames,YEAR2SEC
-from pt_initial_checkpoint import fields
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver
+from des_case import digest, expect_exit, read_config, reset_boundaries, restart_check, run_des, write_json
+from des_test_utils import checkpoint_array, fields, lumped_volumes, physical_differences, runtime_key
 
 
 def config():
@@ -59,8 +56,7 @@ def amount(t,rate):
 def check_balance(folder,cfg):
     model=Dynearthsol(str(folder/'fresh'));dim=model.ndims
     x=model.read_field(0,'coordinate');conn=model.read_field(0,'connectivity')
-    cells=x[conn];vol=np.abs(np.linalg.det(cells[:,1:]-cells[:,0,None]))/math.factorial(dim)
-    nodal=np.zeros(len(x));np.add.at(nodal,conn.ravel(),np.repeat(vol/(dim+1),dim+1))
+    nodal=lumped_volumes(x,conn)
     mat=lambda k:json.loads(cfg['mat'][k])[0]
     # DES records in-plane mean stress in 2D; its fixed-stress compliance is
     # 1/(K+G/3), rather than the three-dimensional 1/K.
@@ -85,19 +81,15 @@ def check_balance(folder,cfg):
     return report
 
 
-def run(exe,folder,cfg,env,expect=0):
+def run(exe,folder,cfg,expect=0):
     folder.mkdir()
-    with (folder/'fresh.cfg').open('w') as f:cfg.write(f)
-    p = run_solver([str(exe), 'fresh.cfg'], log=folder / 'fresh.log', cwd=folder, env=env, timeout=180)
-    if p.returncode!=expect:
-        raise AssertionError((folder,p.returncode,expect,(folder/'fresh.log').read_text()[-2500:]))
+    expect_exit(exe,folder,'fresh',cfg,expect,timeout=180)
 
 
-def restart(exe,folder,cfg,env):
+def restart(exe,folder,cfg):
     cfg['sim'].update(modelname='resumed',is_restarting='true',
         restarting_from_modelname=str(folder/'fresh'),restarting_from_frame='1')
-    with (folder/'restart.cfg').open('w') as f:cfg.write(f)
-    run_solver([str(exe), 'restart.cfg'], log=folder / 'restart.log', cwd=folder, env=env, check=True, timeout=180)
+    run_des(exe,folder,'restart',cfg,timeout=180)
     count=0;clock_rounding=[]
     for suffix in ('save','chkpt'):
         for p in sorted(folder.glob(f'resumed.{suffix}.*')):
@@ -106,35 +98,23 @@ def restart(exe,folder,cfg,env):
             frame=p.with_suffix('') if p.suffix=='.vtkhdf' else p
             a,b=fields(folder/frame.name.replace('resumed.','fresh.',1)),fields(frame)
             assert a.keys()==b.keys()
+            # The non-PT output scheduler rebases its clock at restart, so
+            # reference_frame_time may differ by rounding: it is compared
+            # to 4 eps and recorded; every other field must match exactly.
+            different=physical_differences(a,b,rtol=dict(reference_frame_time=4*np.finfo(float).eps))
+            assert not different,(p,different)
             for key in a:
-                base=key.rsplit('/',1)[-1].lstrip('@').removesuffix('.layout')
-                if base in ('walltime_sec','provenance') or '/provenance/' in key:continue
-                if base=='reference_frame_time' and a[key]!=b[key]:
-                    # The non-PT output scheduler rebases its clock at restart, so
-                    # reference_frame_time may differ by rounding: it is compared
-                    # to 4 eps and recorded; every other field must match exactly.
+                if runtime_key(key):continue
+                if a[key]!=b[key]:
                     before,after=struct.unpack('d',a[key])[0],struct.unpack('d',b[key])[0]
-                    np.testing.assert_allclose(before,after,rtol=4*np.finfo(float).eps,atol=0)
                     clock_rounding.append(dict(file=p.name,fresh=before,resumed=after))
                     continue
-                assert a[key]==b[key],(p,key)
                 count+=1
     assert count>0
     return dict(exact_physical_payloads=count,legacy_output_clock_rounding=clock_rounding)
 
 
-def checkpoint_arrays(path,names):
-    """Named arrays of a checkpoint, native or HDF5."""
-    data=fields(path);found={}
-    for name in names:
-        key=next(k for k in data if not k.startswith('@') and k.split('/')[-1]==name)
-        layout=data.get('@'+key+'.layout')
-        kind=ast.literal_eval(layout.decode())[1] if layout else ('<i4' if name.endswith(('elements','wells')) else '<f8')
-        found[name]=np.frombuffer(data[key],dtype=np.dtype(kind))
-    return found
-
-
-def material(exe,out,dim,env):
+def material(exe,out,dim):
     """Sources are fixed in the material, as monitor points are. A column lifted
     rigidly and remeshed at every step carries a point source and a well screen;
     the positions their checkpoints give must follow the monitor points that
@@ -157,10 +137,7 @@ def material(exe,out,dim,env):
     if dim==2:
         for section in ('injection','heat_injection','monitor'):del cfg[section]['points_y']
         del cfg['bc']['well_y']
-    with (out/'remesh.cfg').open('w') as f:cfg.write(f)
-    run_solver([sys.executable,str(ROOT/'tests/functional/pt_initial_checkpoint.py'),str(exe),str(out/'remesh.cfg'),
-                str(out/'remesh'),'--steps',str(steps),'--restart-frame','1','--require-remesh'],
-               log=out/'remesh.log',env=env,check=True,timeout=240)
+    restart_check(exe,cfg,out/'remesh',steps,1,require_remesh=True)
     folder=out/'remesh';model=Dynearthsol(str(folder/'fresh'));nodes=dim+1
     axes=('x','y','z') if dim==3 else ('x','z')
     tracked={}
@@ -174,7 +151,8 @@ def material(exe,out,dim,env):
     gap=0.
     for frame in model.frames:
         x=model.read_field(frame,'coordinate');conn=model.read_field(frame,'connectivity')
-        a=checkpoint_arrays(folder/f'fresh.chkpt.{frame:06d}',names)
+        a={name:checkpoint_array(folder/f'fresh.chkpt.{frame:06d}',name,'<i4' if name.endswith(('elements','wells')) else '<f8')
+           for name in names}
         where=lambda element,weights:weights[:nodes]@x[conn[element]]
         found=[where(a['fluid point elements'][0],a['fluid point weights']),
                where(a['heat point elements'][0],a['heat point weights']),
@@ -200,7 +178,6 @@ def main():
     args=parser.parse_args();dim=args.dimension
     exe,out=args.executable.resolve(),args.output.resolve();out.mkdir(parents=True,exist_ok=False)
     shutil.copy2(Path(__file__),out/'runner.py')
-    env=dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
     result=dict(executable_sha256=digest(exe),checks={},runner_sha256=digest(Path(__file__)))
     modes=['combined','total-amount','half-step','subcycled','heat-only','fluid-only','mixed-capacity',
            'millimetres','centimetres','kilometres','point-and-well']
@@ -234,9 +211,9 @@ def main():
             for group in ('injection','heat_injection'):
                 del cfg[group]['points_y']
                 if mode=='legacy-coordinate':cfg[group]['points_y']=cfg[group].pop('points_z')
-        folder=out/mode;run(exe,folder,cfg,env)
+        folder=out/mode;run(exe,folder,cfg)
         assert Dynearthsol(str(folder/'fresh')).ndims==dim
-        records=check_balance(folder,cfg);payloads=restart(exe,folder,cfg,env)
+        records=check_balance(folder,cfg);payloads=restart(exe,folder,cfg)
         result['checks'][mode]=dict(balance=records,restart=payloads)
         print(f'PASS {dim}D {mode}: balance and exact physical restart; '+
               f'{len(payloads["legacy_output_clock_rounding"])} legacy output-clock roundings',flush=True)
@@ -255,7 +232,7 @@ def main():
             for group in ('injection','heat_injection'):del cfg[group]['points_y']
         if name=='bad-duration':del cfg['injection']['end_time_in_yr']
         cfg[section][key]=value
-        run(exe,out/name,cfg,env,11);result['checks'][name]=True
+        run(exe,out/name,cfg,11);result['checks'][name]=True
     for source in ('injection','heat_injection'):
         cfg=config()
         if dim==2:
@@ -263,11 +240,11 @@ def main():
         cfg[source]['points_x']='[0,0]'
         if source=='injection':cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
         else:cfg['bc'].update(tbc_x0='1',tbc_val_x0='300')
-        run(exe,out/(source+'-fixed-node'),cfg,env,51)
+        run(exe,out/(source+'-fixed-node'),cfg,51)
         result['checks'][source+'-fixed-node']=True
-    result['checks']['remesh']=material(exe,out,dim,env)
+    result['checks']['remesh']=material(exe,out,dim)
     assert digest(exe)==result['executable_sha256']
-    (out/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
+    write_json(out/'summary.json',result)
     print(f'PASS: {len(result["checks"])} point-source cases in {dim}D')
 
 

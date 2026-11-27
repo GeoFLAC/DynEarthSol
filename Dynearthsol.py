@@ -10,6 +10,14 @@ YEAR2SEC = 365.2422 * 86400
 # must match binaryio.cxx
 HEADERLEN = 4096
 
+# Fields that a frame holds only under some fluid-flow, heat-coupling or shear-heating options.
+OPTIONAL_NODE_FIELDS = ('fluid mass', 'hydraulic split buffer', 'solid mass',
+                        'solid heat capacity', 'pending temperature increment')
+OPTIONAL_ELEM_FIELDS = ('porosity', 'permeability', 'matrix pressure', 'saturation',
+                        'pore dilation', 'plastic volume increment',
+                        'effective saturation', 'relative permeability', 'bulk density',
+                        'shear heating', 'pending shear heat')
+
 
 def _scan_frame_hdf5(fname):
     import h5py
@@ -214,13 +222,10 @@ class Dynearthsol:
             count, shape = 5, (5,)
         elif name in ('fluid mass balance', 'sensible energy balance'):
             count, shape = 6, (6,)
-        elif name in set(['density', 'material', 'mesh quality', 'porosity', 'permeability', 'matrix pressure',
-                          'saturation', 'effective saturation', 'relative permeability', 'bulk density',
+        elif name in set(['density', 'material', 'mesh quality',
                           'plastic strain', 'plastic strain-rate',
                           'viscosity', 'edvoldt', 'volume', 'radiogenic source',
-                          'shear heating', 'pending shear heat',
-                          'pore dilation', 'plastic volume increment',
-                          'dynamic friction coefficient', 'friction state variable']):
+                          'dynamic friction coefficient', 'friction state variable']) or name in OPTIONAL_ELEM_FIELDS:
             count = nelem
             shape = (nelem, )
         elif name in set(['connectivity']):
@@ -229,9 +234,7 @@ class Dynearthsol:
         elif name in set(['coordinate', 'velocity', 'velocity averaged', 'force', 'PT residual force', 'coord0', 'displacement']):
             count = self.ndims * nnode
             shape = (nnode, self.ndims)
-        elif name in set(['bcflag', 'temperature', 'pore pressure', 'mass', 'tmass', 'volume_n',
-                          'fluid mass', 'hydraulic split buffer', 'solid mass', 'solid heat capacity',
-                          'pending temperature increment']):
+        elif name in set(['bcflag', 'temperature', 'pore pressure', 'mass', 'tmass', 'volume_n']) or name in OPTIONAL_NODE_FIELDS:
             count = nnode
             shape = (nnode, )
         else:

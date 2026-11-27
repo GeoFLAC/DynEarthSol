@@ -16,7 +16,6 @@ explicit strain form.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -34,7 +33,7 @@ DURATION, G, RHO = 7200.0, 9.81, 1000.0
 RAMP = 1e-3                                          # s, base pressure ramp to zero
 
 
-from des_case import digest, read_config, run_solver, source_diff, source_revision
+from des_case import digest, layer_strain, provenance, read_config, run_des, write_json
 
 
 def config(ndims, h, steps):
@@ -73,26 +72,19 @@ def config(ndims, h, steps):
     return cfg
 
 
-def layer_strain(coord, conn, ezz, h):
-    depth = -coord[conn][:, :, -1].mean(axis=1)
-    n = int(round(PROPS['height']/h)); layer = np.minimum((depth/h).astype(int), n - 1)
-    count = np.bincount(layer, minlength=n).astype(float)
-    assert count.min() > 0, 'the column mesh must be structured in layers of height h'
-    return np.bincount(layer, weights=ezz, minlength=n)/count
-
-
 def compare(folder, h, reference):
     model = Dynearthsol(str(folder/'drain')); rows = scan_frames(str(folder/'drain'))
     coord = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
     zz = coord.shape[1] - 1; zn = coord[:, -1] + PROPS['height']
-    e0 = layer_strain(coord, conn, model.read_field(0, 'strain')[:, zz], h)
+    # Element layers count down from the surface z = 0.
+    e0 = layer_strain(coord, conn, model.read_field(0, 'strain')[:, zz], h, 0., PROPS['height'])
     scale = RHO*G*PROPS['height']
     out = []
     for ref in reference:
         row = min(rows[1:], key=lambda r: abs(r['time'] - ref['time']))
         assert abs(row["time"] - ref["time"]) < 1.0, (row["time"], ref["time"])   # explicit runs pick their own step
         p = model.read_field(row['frame'], 'pore pressure')
-        e = layer_strain(coord, conn, model.read_field(row['frame'], 'strain')[:, zz], h) - e0
+        e = layer_strain(coord, conn, model.read_field(row['frame'], 'strain')[:, zz], h, 0., PROPS['height']) - e0
         settle = float(np.sum(e)*h)
         pref = np.interp(zn, ref['z'], ref['p'])
         out.append(dict(time=ref['time'], pressure_error=float(np.max(np.abs(p - pref)))/scale,
@@ -103,31 +95,27 @@ def compare(folder, h, reference):
 
 def study(exe, out, ndims, spacings, steps, explicit):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
     reference = REF.solve(200, TIMES)
     np.savez_compressed(out/'reference.npz', time=[r['time'] for r in reference],
                         z=reference[0]['z'], p=[r['p'] for r in reference],
                         saturation=[r['saturation'] for r in reference],
                         settlement=[r['settlement'] for r in reference])
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   ndims=ndims, steps=steps, properties=PROPS, reference_grid=200,
                   reference_sha256=digest(out/'reference.npz'),
                   reference=[dict(time=r['time'], settlement=r['settlement'], p_top=float(r['p'][-1]),
                                   saturation_top=float(r['saturation'][-1])) for r in reference], cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     runs = [(h, steps) for h in spacings] + ([(spacings[0], 0)] if explicit else [])
     for h, n in runs:
         folder = out/(f'h{h:g}' + ('-explicit' if n == 0 else '')); folder.mkdir()
-        with (folder/'drain.cfg').open('w') as f: config(ndims, h, n).write(f)
-        run_solver([str(exe), 'drain.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        run_des(exe, folder, 'drain', config(ndims, h, n), timeout=40000)
         assert Dynearthsol(str(folder/'drain')).ndims == ndims, 'the executable and --ndims disagree'
         frames = compare(folder, h, reference)
         item = dict(spacing_m=h, mode='explicit' if n == 0 else 'PT', steps=n, frames=frames,
                     pressure_error=max(f['pressure_error'] for f in frames),
                     settlement_error=max(f['settlement_error'] for f in frames), input_sha256=digest(folder/'drain.cfg'))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     return result
 

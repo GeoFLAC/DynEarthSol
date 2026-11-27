@@ -6,10 +6,8 @@ JSON summary. --analyze-only reuses the recorded inputs and provenance.
 """
 
 import argparse
-import hashlib
 import json
 import math
-import os
 from pathlib import Path
 
 import consolidation as pf
@@ -17,7 +15,7 @@ import consolidation as pf
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import run_solver
+from des_case import digest, run_des, write_config, write_json
 
 def run(output, binaries, biot, timeout, fixed_dt):
     provenance = {}
@@ -35,19 +33,16 @@ def run(output, binaries, biot, timeout, fixed_dt):
                 cfg['mat']['bulk_modulus_s'] = f'[{bulk / (1 - biot):.17g}]'
             if fixed_dt is not None:
                 cfg['control']['fixed_dt'] = f'{fixed_dt:.17g}'
-            with (case / 'input.cfg').open('w') as stream:
-                cfg.write(stream)
+            write_config(case / 'input.cfg', cfg)
             exe = bindir / f'dynearthsol{dim}d'
-            provenance[label][str(dim)] = dict(
-                executable=str(exe),
-                executable_sha256=hashlib.sha256(exe.read_bytes()).hexdigest(),
-                input_sha256=hashlib.sha256((case / 'input.cfg').read_bytes()).hexdigest())
+            provenance[label][str(dim)] = dict(executable=str(exe), executable_sha256=digest(exe),
+                                               input_sha256=digest(case / 'input.cfg'))
             # Persist before execution so later plotting never attributes an old
             # run to a binary that was rebuilt in the meantime.
-            (output / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+            write_json(output / 'provenance.json', provenance)
             print(f'Running {label} {dim}D, alpha={biot}', flush=True)
-            run_solver([str(exe), 'input.cfg'], log=case / 'run.log', cwd=case, env=dict(os.environ, OMP_NUM_THREADS='1'), check=True, timeout=timeout)
-            if hashlib.sha256(exe.read_bytes()).hexdigest() != provenance[label][str(dim)]['executable_sha256']:
+            run_des(exe, case, 'input', None, timeout)
+            if digest(exe) != provenance[label][str(dim)]['executable_sha256']:
                 raise RuntimeError('Executable changed during the run; rebuild before benchmarking')
 
 
@@ -56,7 +51,7 @@ def analyze(output, biot):
                for label in ('before', 'after')}
     summary['biot'] = biot
     summary['provenance'] = json.loads((output/'provenance.json').read_text())
-    (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
+    write_json(output/'summary.json', summary)
     print(json.dumps(summary, indent=2))
 
 
@@ -82,7 +77,7 @@ def main():
             parser.error('--fixed-dt-seconds must be positive and finite')
         output.mkdir(parents=True, exist_ok=False)
         biot = args.biot
-        (output / 'settings.json').write_text(json.dumps(dict(biot=biot, fixed_dt_seconds=args.fixed_dt_seconds)) + '\n')
+        write_json(output / 'settings.json', dict(biot=biot, fixed_dt_seconds=args.fixed_dt_seconds))
         run(output, dict(before=args.parent_bindir.resolve(), after=args.current_bindir.resolve()),
             biot, args.timeout, args.fixed_dt_seconds)
     analyze(output, biot)

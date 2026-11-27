@@ -17,7 +17,6 @@ p_w.
 """
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -40,7 +39,7 @@ REF = Borehole(radius=A, outer=R, bulk=MAT['bulk'], shear=MAT['shear'], biot=MAT
 BAND = (1.05*A, 4*A)
 
 
-from des_case import digest, read_config, reset_boundaries, run_solver, source_diff, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json
 
 
 def config(h, steps):
@@ -74,15 +73,13 @@ def compare(folder):
     x = model.read_field(0, 'coordinate'); conn = model.read_field(0, 'connectivity')
     rn = np.linalg.norm(x, axis=1)
     centre = x[conn].mean(axis=1); re = np.linalg.norm(centre, axis=1)
-    nx, nz = (centre/re[:, None]).T
     nodes, elems = (rn >= BAND[0]) & (rn <= BAND[1]), (re >= BAND[0]) & (re <= BAND[1])
     out = []
     for row in rows[1:]:
         t = row['time']
         p = model.read_field(row['frame'], 'pore pressure')
         s = model.read_field(row['frame'], 'stress')
-        srr = nx**2*s[:, 0] + nz**2*s[:, 1] + 2*nx*nz*s[:, 2]
-        stt = nz**2*s[:, 0] + nx**2*s[:, 1] - 2*nx*nz*s[:, 2]
+        srr, stt, _ = ck.polar(s, centre/re[:, None])
         fn, fe = REF.fields(rn[nodes], t), REF.fields(re[elems], t)
         out.append(dict(time=t, pressure_error=float(np.max(np.abs(p[nodes] - fn['p'])))/PW,
                         pressure_rms=float(np.sqrt(np.mean((p[nodes] - fn['p'])**2)))/PW,
@@ -94,23 +91,19 @@ def compare(folder):
 
 def study(exe, out, spacings, steps):
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, OMP_NUM_THREADS='1')
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__, out),
                   steps=steps, material=MAT, wall_pressure=PW, diffusivity=REF.c, cases=[])
-    (out/'source.diff').write_bytes(source_diff(ROOT))
     for h in spacings:
         folder = out/f'h{h:g}'; folder.mkdir()
         ck.polygon(folder/'annulus.poly', h, refined_radius=RING)
-        with (folder/'hole.cfg').open('w') as f: config(h, steps).write(f)
-        run_solver([str(exe), 'hole.cfg'], log=folder / 'run.log', cwd=folder, env=env, check=True, timeout=40000)
+        run_des(exe, folder, 'hole', config(h, steps), timeout=40000)
         frames, nodes, elements = compare(folder)
         item = dict(spacing_m=h, nodes=nodes, elements=elements, frames=frames, input_sha256=digest(folder/'hole.cfg'),
                     mesh_sha256=digest(folder/'annulus.poly'),
                     pressure_error=max(f['pressure_error'] for f in frames),
                     stress_error=max(max(f['radial_error'], f['hoop_error']) for f in frames))
         result['cases'].append(item)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
         print(json.dumps({k: v for k, v in item.items() if k != 'frames'}), flush=True)
     return result
 

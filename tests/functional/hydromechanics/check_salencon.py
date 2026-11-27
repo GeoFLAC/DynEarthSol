@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT/'benchmarks/poromechanics'))
 import check_kirsch as ck
 from salencon_reference import infinite_radius, plastic_radius, self_check, state
+from des_case import check_manifest, digest, file_hashes, write_json
+from des_test_utils import checkpoint_array, simplex_volumes
 
 A, R, P, C, F, K, G = 1., 20., 5e5, 1e5, 30., 13e10/6, 1e10
 
@@ -36,14 +38,6 @@ def config(spacing):
                       friction_angle0=f'[{F}]', friction_angle1=f'[{F}]',
                       dilation_angle0='[0]', dilation_angle1='[0]', max_tension='1e9')
     return cfg
-
-
-def polar(values, normal):
-    nx, nz = normal.T
-    rr = nx**2*values[:, 0]+nz**2*values[:, 1]+2*nx*nz*values[:, 2]
-    hoop = nz**2*values[:, 0]+nx**2*values[:, 1]-2*nx*nz*values[:, 2]
-    shear = nx*nz*(values[:, 1]-values[:, 0])+(nx**2-nz**2)*values[:, 2]
-    return rr, hoop, shear
 
 
 def yield_admissibility(values, syy):
@@ -77,13 +71,13 @@ def compare(folder, dilation=0.):
     np.testing.assert_array_equal(seed.read_field(initial, 'plastic strain'), np.zeros(len(conn)))
     centre = x[conn].mean(axis=1); radius = np.linalg.norm(centre, axis=1)
     values = model.read_field(final, 'stress')
-    rr, hoop, shear = polar(values, centre/radius[:, None])
+    rr, hoop, shear = ck.polar(values, centre/radius[:, None])
     # The innermost straight facets have centroids infinitesimally inside r=a;
     # accuracy observations exclude the wall's geometric approximation.
     band = (radius >= 1.05*A) & (radius <= 5*A)
     exact = state(radius[band], A, R, P, C, F, K, G, dilation=dilation)
-    er, et, _ = polar(model.read_field(final, 'strain'), centre/radius[:, None])
-    syy = np.frombuffer(ck.fields(folder/f'salencon.chkpt.{final:06d}')['stressyy'], dtype=np.float64)
+    er, et, _ = ck.polar(model.read_field(final, 'strain'), centre/radius[:, None])
+    syy = checkpoint_array(folder/f'salencon.chkpt.{final:06d}', 'stressyy')
     errors = {}
     for name, measured, target, scale in (
             ('radial_stress', rr[band], exact[0], P),
@@ -108,8 +102,7 @@ def compare(folder, dilation=0.):
     errors['displacement_rms_over_wall'] = float(np.sqrt(np.mean((radial_u[nodes]-exact_u)**2))/wall_u)
     errors['displacement_max_over_wall'] = float(np.max(np.abs(radial_u[nodes]-exact_u))/wall_u)
     plastic = model.read_field(final, 'plastic strain')
-    vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-    area = np.abs(np.linalg.det(vertices))/2
+    area = simplex_volumes(x, conn)
     plastic_area = float(area[plastic > 1e-8].sum())
     measured_b = float(np.sqrt(A*A+4*plastic_area/np.pi))
     b = plastic_radius(A, R, P, C, F)
@@ -153,16 +146,15 @@ def study(executable, output, spacings, manifest, pt_option=1, dilation=0., mixe
         raise ValueError('Require positive load steps and mesh spacings')
     self_check()
     output.mkdir(parents=True, exist_ok=False)
-    binary_hash = ck.digest(executable)
-    solver = json.loads(manifest.read_text()) if manifest else None
+    binary_hash = digest(executable)
+    solver = check_manifest(manifest, binary_hash)
     if solver:
-        ck.check_binary(solver, binary_hash)
         shutil.copy2(manifest, output/'solver-qualification.json')
     sources = [Path(__file__), Path(ck.__file__), ROOT/'benchmarks/poromechanics/salencon_reference.py']
     for source in sources: shutil.copy2(source, output/source.name)
     report = dict(executable=str(executable), executable_sha256=binary_hash,
                   solver_commit=solver['implementation_commit'] if solver else None,
-                  source_sha256={p.name:ck.digest(p) for p in sources},
+                  source_sha256=file_hashes(sources),
                   PT_option=pt_option, PT_CFL=pt_cfl, mixed_stress=mixed, load_steps=load_steps,
                   refined_radius_m=3*A if refined else None,
                   reference=dict(opening_radius_m=A, outer_radius_m=R, pressure_Pa=P,
@@ -199,23 +191,23 @@ def study(executable, output, spacings, manifest, pt_option=1, dilation=0., mixe
                                   failure=dict(spacing_m=h, phase=phase,
                                   solver_exit_code=getattr(error, 'returncode', None),
                                   reason=type(error).__name__))
-                    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+                    write_json(output/'qualification.json', report)
                     raise
             if step:
                 path.append(dict(model=phase, step=step, inner_pressure_Pa=-inner))
                 (folder/'load-path.json').write_text(json.dumps(path, indent=2)+'\n')
         case = dict(spacing_m=h, folder=folder.name, **compare(folder, dilation),
-                    inputs_sha256={p.name:ck.digest(p) for p in sorted(folder.iterdir())
-                                   if p.suffix == '.cfg' or p.name in ('annulus.poly', 'load-path.json')},
-                    outputs_sha256={p.name:ck.digest(p) for p in sorted(folder.iterdir())
-                                    if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'})
+                    inputs_sha256=file_hashes(p for p in folder.iterdir()
+                                              if p.suffix == '.cfg' or p.name in ('annulus.poly', 'load-path.json')),
+                    outputs_sha256=file_hashes(p for p in folder.iterdir()
+                                               if '.save.' in p.name or '.chkpt.' in p.name or p.suffix == '.info'))
         report['cases'].append(case)
-        (output/'summary.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+        write_json(output/'summary.json', report)
         print(h, case['errors'], 'force', case['max_free_force_over_PR'], flush=True)
-    assert ck.digest(executable) == binary_hash
+    assert digest(executable) == binary_hash
     qualify(report)
     report['scope'] = 'Dry isotropic unloading, perfect Mohr-Coulomb, plane strain; no fluid injection.'
-    (output/'qualification.json').write_text(json.dumps(report, indent=2, allow_nan=False)+'\n')
+    write_json(output/'qualification.json', report)
     assert report['passed'], 'Accuracy target not met; retain raw evidence'
     return report
 

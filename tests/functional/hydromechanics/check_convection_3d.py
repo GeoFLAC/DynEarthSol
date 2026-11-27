@@ -21,16 +21,15 @@ import check_convection as cc
 from convection_reference import critical_rayleigh,growth_rate,storage_growth_rate
 
 
-from des_case import run_solver, source_revision
+from des_case import digest, file_hashes, run_des, source_revision, write_json
+from des_test_utils import lumped_volumes
 
 def series(folder):
     model=cc.Dynearthsol(str(folder/'box'))
     rows=cc.scan_frames(str(folder/'box'))
     x=model.read_field(0,'coordinate');conn=model.read_field(0,'connectivity')
     assert x.shape[1]==3
-    volume=np.abs(np.linalg.det(x[conn][:,1:]-x[conn][:,:1]))/math.factorial(3)
-    weights=np.zeros(len(x))
-    np.add.at(weights,conn,np.broadcast_to(volume[:,None]/conn.shape[1],conn.shape))
+    weights=lumped_volumes(x,conn)
     assert abs(weights.sum()-1)<1e-10
     basis=8*weights*np.cos(math.pi*x[:,0])*np.cos(math.pi*x[:,1])*np.sin(math.pi*(x[:,2]+1))
     result=[]
@@ -51,15 +50,13 @@ def study(exe,out,spacing,ratio,steps,dt,seed,threads,fluid_bulk=1000.):
     cfg['mat']['fluid_bulk_modulus']=repr([fluid_bulk])
     cfg['ic']['temp_anomaly_ycenter']='0.25'
     cfg['sim'].update(has_marker_output='false',has_initial_checkpoint='false',checkpoint_frame_interval='100000')
-    with (out/'box.cfg').open('w') as stream:cfg.write(stream)
-    env=dict(os.environ,OMP_NUM_THREADS=str(threads),OPENBLAS_NUM_THREADS='1',MKL_NUM_THREADS='1')
-    run_solver([str(exe), 'box.cfg'], log=out / 'run.log', cwd=out, env=env, check=True, timeout=14400)
+    run_des(exe,out,'box',cfg,timeout=14400,threads=threads)
     measured,nodes,elements=series(out)
     result=dict(dimension=3,spacing_m=spacing,nodes=nodes,elements=elements,
         rayleigh=ra,critical_rayleigh=critical,mode=[1,1,1],seed_K=seed,steps=steps,dt_s=dt,threads=threads,fluid_bulk_Pa=fluid_bulk,
-        series=measured,executable_sha256=cc.digest(exe),runner_sha256=cc.digest(Path(__file__)),
-        shared_runner_sha256=cc.digest(Path(cc.__file__)),reference_sha256=cc.digest(Path(cc.ROOT/'benchmarks/poromechanics/convection_reference.py')),
-        input_sha256=cc.digest(out/'box.cfg'),source_commit=source_revision(cc.ROOT),
+        series=measured,executable_sha256=digest(exe),runner_sha256=digest(Path(__file__)),
+        shared_runner_sha256=digest(Path(cc.__file__)),reference_sha256=digest(Path(cc.ROOT/'benchmarks/poromechanics/convection_reference.py')),
+        input_sha256=digest(out/'box.cfg'),source_commit=source_revision(cc.ROOT),
         scope='Rigid saturated Darcy-Boussinesq matrix; linear 3D mode with exact finite-storage reference; no nonlinear steady-cell claim')
     if seed:
         values=np.array(measured);late=values[len(values)//2:]
@@ -75,9 +72,8 @@ def study(exe,out,spacing,ratio,steps,dt,seed,threads,fluid_bulk=1000.):
                       linearity_max_theta_over_dT=float(values[:,2].max()/cc.DT))
     else:
         result['rest_max_theta_over_dT']=max(row[2] for row in measured)/cc.DT
-    result['outputs_sha256']={p.name:cc.digest(p) for p in sorted(out.glob('box.*'))
-                             if '.save.' in p.name or p.suffix=='.info'}
-    (out/'summary.json').write_text(json.dumps(result,indent=2,allow_nan=False)+'\n')
+    result['outputs_sha256']=file_hashes(p for p in out.glob('box.*') if '.save.' in p.name or p.suffix=='.info')
+    write_json(out/'summary.json',result)
     print(json.dumps({k:v for k,v in result.items() if k not in ('series','outputs_sha256')},indent=2),flush=True)
     if seed:
         assert result['correct_sign']

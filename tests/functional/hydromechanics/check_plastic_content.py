@@ -12,7 +12,6 @@ import configparser
 import copy
 import json
 import math
-import os
 from pathlib import Path
 import sys
 
@@ -23,14 +22,14 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks/poromechanics'), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
 import fluid_content as water
-from check_restart_dt import compare_continuation
 
 SPEED, DURATION, DT = .001, 1., .01
 BULK, SHEAR, ALPHA, PHI, FLUID, GRAIN = 2e7, 1e7, 1., .25, 1e6, 1e20
 STORAGE = PHI/FLUID+(ALPHA-PHI)/GRAIN
 
 
-from des_case import reset_boundaries, run_solver
+from des_case import digest, file_hashes, hydraulic_substeps, reset_boundaries, run_model, write_json
+from des_test_utils import compare_continuation, simplex_gradients, simplex_volumes
 
 def configuration(method, psi, elastic=False, flowing=False):
     cfg = water.configuration(.5, DT, DURATION, method, 1e5, water.INFLOW)
@@ -47,15 +46,6 @@ def configuration(method, psi, elastic=False, flowing=False):
     return cfg
 
 
-def run(exe, folder, cfg, name='column', timeout=600):
-    cfg = copy.deepcopy(cfg)
-    cfg['sim']['modelname'] = name
-    with (folder/f'{name}.cfg').open('w') as stream:
-        cfg.write(stream)
-    run_solver([str(exe), f'{name}.cfg'], log=folder / f'{name}.log', cwd=folder, env=dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1'), check=True, timeout=timeout)
-    return Dynearthsol(str(folder/name))
-
-
 def analyze(folder, method, yielding, continuation=None, open_boundary=False):
     model = Dynearthsol(str(folder/'column'))
     dim = int(model.ndims)
@@ -64,19 +54,13 @@ def analyze(folder, method, yielding, continuation=None, open_boundary=False):
         resumed, start = continuation
         records = records[:start+1] + [(resumed, row) for row in scan_frames(resumed.modelname)[1:]]
     x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
-    volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     lag = ALPHA**2/(BULK+(SHEAR/3 if dim == 2 else 0)) if method == 'pt' else 0.
     cfg = configparser.ConfigParser(); cfg.read(folder/'column.cfg')
     mobility = json.loads(cfg['mat']['hydraulic_perm'])[0]/json.loads(cfg['mat']['fluid_visc'])[0]
     substeps = 1
     if mobility:
-        vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-        gradients = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
-        operator = mobility*volume[:, None, None]*(gradients @ gradients.swapaxes(1, 2))
-        mass, row_bound = np.zeros(len(x)), np.zeros(len(x))
-        np.add.at(mass, conn, np.broadcast_to(((STORAGE+lag)*volume/conn.shape[1])[:, None], conn.shape))
-        np.add.at(row_bound, conn, np.abs(operator).sum(axis=2))
-        substeps = math.ceil(DT/float(np.min(mass[row_bound > 0]/row_bound[row_bound > 0])))
+        substeps = hydraulic_substeps(x, conn, STORAGE+lag, mobility, DT)
         assert substeps > 1, 'the flowing control must exercise hydraulic substeps'
     scale = SPEED*DURATION*volume.sum()
     pressure_scale = ALPHA*SPEED*DURATION/STORAGE
@@ -137,7 +121,7 @@ def exact_continuation(exe, folder, cfg, source):
     cfg = copy.deepcopy(cfg)
     cfg['sim'].update(is_restarting='true', restarting_from_modelname=str(source),
                       restarting_from_frame='20', max_steps='24')
-    resumed = run(exe, folder, cfg, 'resumed')
+    resumed = run_model(exe, folder, cfg, 'resumed')
     return compare_continuation(folder, str(source), resumed)
 
 
@@ -151,11 +135,11 @@ def retention_check(exe, folder, ndims, replay=False):
     initial, coefficient = -5000., 2e-4
     cfg['ic']['pore_pressure_value'] = repr(initial)
     cfg['mat'].update(retention_model='[3]', retention_alpha=f'[{coefficient}]', residual_saturation='[0]')
-    model = Dynearthsol(str(folder/'column')) if replay else run(exe, folder, cfg)
+    model = Dynearthsol(str(folder/'column')) if replay else run_model(exe, folder, cfg, 'column')
     assert int(model.ndims) == ndims
     rows = scan_frames(str(folder/'column'))
     x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
-    volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(ndims)
+    volume = simplex_volumes(x, conn)
     lag = ALPHA**2/(BULK+(SHEAR/3 if ndims == 2 else 0))
     scale = SPEED*DURATION*volume.sum()
     reference, previous_increment, previous_time = initial, 0., 0.
@@ -211,12 +195,11 @@ def rsf_check(exe, folder, ndims, replay=False):
     cfg['mat'].update(rheology_type='elasto-plastic-rate-state-friction', direct_a=f'[{a}]',
                       evolution_b=f'[{b}]', characteristic_distance=f'[{dc}]',
                       characteristic_velocity=f'[{speed0}]', state_var_model='1')
-    model = Dynearthsol(str(folder/'column')) if replay else run(exe, folder, cfg)
+    model = Dynearthsol(str(folder/'column')) if replay else run_model(exe, folder, cfg, 'column')
     assert int(model.ndims) == ndims and len(model.read_field(0, 'coordinate')) == 2**ndims
     report = analyze(folder, 'pt', True)
     x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
-    vertices = np.concatenate((np.ones((*conn.shape, 1)), x[conn]), axis=2)
-    gradient = np.linalg.inv(vertices)[:, 1:, :].swapaxes(1, 2)
+    gradient = simplex_gradients(x, conn)
     width = 1/np.linalg.norm(gradient, axis=2).max(axis=1)
     velocity = width*SPEED if ndims == 2 else 2*width*SPEED/math.sqrt(3)
     theta = np.full(len(conn), dc/speed0)
@@ -276,10 +259,10 @@ def thermal_check(exe, folder, ndims, replay=False):
         model = Dynearthsol(str(folder/'column'))
     else:
         cfg['sim']['max_steps'] = '1'
-        seed = run(exe, folder, cfg, 'seed')
+        seed = run_model(exe, folder, cfg, 'seed')
         x, _, _, lumped = heat.volumes(seed)
         heat.heating(cfg, x, lumped); cfg['sim']['max_steps'] = '100'
-        model = run(exe, folder, cfg)
+        model = run_model(exe, folder, cfg, 'column')
     x, conn, volume, lumped = heat.volumes(model)
     assert int(model.ndims) == ndims and len(x) == 2**ndims
     beta = PHI*alpha_f+(ALPHA-PHI)*alpha_s
@@ -338,7 +321,7 @@ def main():
         report = json.loads((output/'summary.json').read_text())
         assert report['passed']
         for name, sha in report['artifacts_sha256'].items():
-            assert water.digest(output/name) == sha, name
+            assert digest(output/name) == sha, name
         for index, previous in enumerate(report['cases']):
             name = previous['case']; folder = output/name
             dim = previous['dimension']
@@ -360,14 +343,13 @@ def main():
             assert current == previous, (name, current, previous)
             report['cases'][index] = current
         for name, sha in report['artifacts_sha256'].items():
-            assert water.digest(output/name) == sha, ('replay changed an artifact', name)
-        report['analyzer_sha256'] = water.digest(__file__)
-        water.write_json(output/'summary.json', report)
+            assert digest(output/name) == sha, ('replay changed an artifact', name)
+        report['analyzer_sha256'] = digest(__file__)
+        write_json(output/'summary.json', report)
         print('PASS: all hashes, content references and restart payloads replayed')
         return
     output.mkdir(parents=True, exist_ok=False)
-    report = dict(executable=str(exe), executable_sha256=water.digest(exe),
-                  runner_sha256=water.digest(__file__), cases=[])
+    report = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__), cases=[])
     for method, psi, elastic, flowing in [('pt', 0, True, False), ('pt', 0, False, False),
                                          ('pt', 10, False, False), ('pt', -10, False, False),
                                          ('explicit', 10, False, False), ('pt', 10, False, True),
@@ -375,7 +357,7 @@ def main():
         name = f'{method}-psi{psi}'+('-elastic' if elastic else '')+('-flow' if flowing else '')
         folder = output/name; folder.mkdir()
         cfg = configuration(method, psi, elastic, flowing)
-        model = run(exe, folder, cfg)
+        model = run_model(exe, folder, cfg, 'column')
         assert int(model.ndims) == args.ndims
         item = dict(case=name, **analyze(folder, method, not elastic))
         if method == 'pt' and psi == 10 and not flowing:
@@ -386,10 +368,10 @@ def main():
             switched['control']['fixed_dt'] = '.02'
             switched['sim'].update(is_restarting='true', restarting_from_modelname=str(folder/'column'),
                                     restarting_from_frame='20', max_steps='60')
-            resumed = run(exe, changed, switched)
+            resumed = run_model(exe, changed, switched, 'column')
             item['changed_step'] = analyze(folder, method, True, (resumed, 20))
         report['cases'].append(item)
-        water.write_json(output/'summary.json', report)
+        write_json(output/'summary.json', report)
         print(json.dumps(item), flush=True)
     retained = output/'pt-gardner'; retained.mkdir()
     report['cases'].append(retention_check(exe, retained, args.ndims))
@@ -404,14 +386,13 @@ def main():
         drained = output/f'{method}-drained'; drained.mkdir()
         cfg = configuration(method, 10, flowing=True)
         cfg['bc']['hbc_z1'] = '2'
-        run(exe, drained, cfg)
+        run_model(exe, drained, cfg, 'column')
         report['cases'].append(dict(case=drained.name, **analyze(drained, method, True, open_boundary=True)))
         print(json.dumps(report['cases'][-1]), flush=True)
-    assert water.digest(exe) == report['executable_sha256']
-    report['artifacts_sha256'] = {str(p.relative_to(output)): water.digest(p) for p in sorted(output.rglob('*'))
-                                   if p.is_file() and p.name != 'summary.json'}
+    assert digest(exe) == report['executable_sha256']
+    report['artifacts_sha256'] = file_hashes((p for p in output.rglob('*') if p.name != 'summary.json'), output)
     report['passed'] = True
-    water.write_json(output/'summary.json', report)
+    write_json(output/'summary.json', report)
 
 
 if __name__ == '__main__':

@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT/'benchmarks/poromechanics'), str(ROOT/'tests/functional')]
 from Dynearthsol import Dynearthsol, scan_frames
 import fluid_content as water
-from check_restart_dt import mesh_measures, compare_continuation
-from pt_initial_checkpoint import fields
+from des_test_utils import (compare_continuation, fields, mesh_measures, physical_differences, record_name,
+                            roller_free, runtime_key, simplex_volumes)
 
 K, G, PHI, ALPHA, KF, KS = 2e7, 1e7, .25, .8, 1e8, 1e9
 DENSITY = (1-PHI)*2650+PHI*1000
@@ -30,10 +30,7 @@ UNDRAINED = K+4*G/3+ALPHA**2/STORAGE
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import reset_boundaries, run_model
-
-def run(exe, folder, cfg, name):
-    return run_model(exe, folder, cfg, name, timeout=120)
+from des_case import check_hashes, digest, file_hashes, provenance, reset_boundaries, run_model, write_json
 
 
 def configuration(method, scaling):
@@ -51,14 +48,9 @@ def analyze(folder, method, scaling):
     assert np.max(abs(warm.read_field(32, 'strain'))) > 1e-9
     before = fields(folder/'warm.save.000032')
     after = fields(folder/'physical.save.000032')
-
-    def ignored(key):
-        base = key.rsplit('/', 1)[-1].lstrip('@').removesuffix('.layout')
-        return base in ('walltime_sec', 'provenance', 'dt_sec') or '/provenance/' in key
-
-    keys = {key for key in before.keys() | after.keys() if not ignored(key)}
-    assert all(before.get(k) == after.get(k) for k in keys), [
-        k for k in keys if before.get(k) != after.get(k)]
+    keys = {key for key in before.keys() | after.keys() if not runtime_key(key) and record_name(key) != 'dt_sec'}
+    different = [key for key in physical_differences(before, after) if record_name(key) != 'dt_sec']
+    assert not different, different
     x, height, lumped = mesh_measures(dynamic)
     expected = .2*min(.5*height/math.sqrt(K/2650), height/(5*math.sqrt(UNDRAINED/DENSITY)))
     rows = scan_frames(str(folder/'physical'))
@@ -67,10 +59,7 @@ def analyze(folder, method, scaling):
     # Restart emits an initial save, then checkpoints after accepted steps.
     checkpoint = fields(folder/'physical.chkpt.000033')
     np.testing.assert_allclose(np.frombuffer(checkpoint['dt'], dtype=np.float64)[0], expected, rtol=2e-13)
-    free = np.ones_like(x, dtype=bool)
-    for d in range(x.shape[1]-1):
-        free[:, d] = ~(np.isclose(x[:, d], 0) | np.isclose(x[:, d], 1))
-    free[:, -1] = ~np.isclose(x[:, -1], -1)
+    free = roller_free(x)
     v0 = dynamic.read_field(dynamic.frames[0], 'velocity')
     v1 = dynamic.read_field(dynamic.frames[1], 'velocity')
     force = dynamic.read_field(dynamic.frames[1], 'force')
@@ -94,7 +83,7 @@ def analyze(folder, method, scaling):
     old_energy, physical_energy = .5*artificial*velocity_integral, .5*DENSITY*velocity_integral
     assert old_energy > 0 and physical_energy > 0 and old_dt != expected
     dim = int(dynamic.ndims)
-    volume = np.abs(np.linalg.det(x[conn][:, 1:]-x[conn][:, :1]))/math.factorial(dim)
+    volume = simplex_volumes(x, conn)
     budget = []
     for row in rows:
         frame = row['frame']
@@ -118,18 +107,18 @@ def analyze(folder, method, scaling):
 def case(exe, folder, method, scaling):
     folder.mkdir(exist_ok=False)
     cfg = configuration(method, scaling)
-    run(exe, folder, cfg, 'warm')
+    run_model(exe, folder, cfg, 'warm', timeout=120)
     physical = copy.deepcopy(cfg)
     physical['sim'].update(is_restarting='true', restarting_from_modelname=str(folder/'warm'),
                            restarting_from_frame='32', max_steps='38')
     physical['control'].update(is_quasi_static='false', use_global_velocity_scaling='false',
                                mass_scaling_reference_speed='shear')
-    run(exe, folder, physical, 'physical')
+    run_model(exe, folder, physical, 'physical', timeout=120)
     resumed = copy.deepcopy(physical)
     resumed['sim'].update(restarting_from_modelname=str(folder/'physical'), restarting_from_frame='34')
     sub = folder/'continuation'
     sub.mkdir()
-    run(exe, sub, resumed, 'resumed')
+    run_model(exe, sub, resumed, 'resumed', timeout=120)
     return analyze(folder, method, scaling)
 
 
@@ -142,26 +131,24 @@ def main():
     exe, output = args.executable.resolve(), args.output.resolve()
     if args.replay:
         report = json.loads((output/'summary.json').read_text())
-        for name, expected in report['artifacts_sha256'].items():
-            assert water.digest(output/name) == expected, name
+        check_hashes(report['artifacts_sha256'], output)
         for previous in report['cases']:
             name = f"{previous['method']}-S{previous['scaling']:g}"
             assert analyze(output/name, previous['method'], previous['scaling']) == previous, name
         print('PASS: inertia switch references, restart payloads and artifact hashes replayed')
         return
     output.mkdir(parents=True, exist_ok=False)
-    report = dict(executable_sha256=water.digest(exe), runner_sha256=water.digest(__file__), cases=[], passed=False)
+    report = dict(provenance(exe, __file__), cases=[], passed=False)
     for method in ('explicit', 'gvs-shear', 'gvs-bulk'):
         for scaling in (1e4, 1e5, 1e6):
             result = case(exe, output/f'{method}-S{scaling:g}', method, scaling)
             report['cases'].append(result)
             print(json.dumps(result), flush=True)
-            water.write_json(output/'summary.json', report)
-    assert water.digest(exe) == report['executable_sha256']
-    report['artifacts_sha256'] = {str(p.relative_to(output)): water.digest(p)
-        for p in sorted(output.rglob('*')) if p.is_file() and p.name != 'summary.json'}
+            write_json(output/'summary.json', report)
+    assert digest(exe) == report['executable_sha256']
+    report['artifacts_sha256'] = file_hashes((p for p in output.rglob('*') if p.name != 'summary.json'), output)
     report['passed'] = True
-    water.write_json(output/'summary.json', report)
+    write_json(output/'summary.json', report)
 
 
 if __name__ == '__main__':

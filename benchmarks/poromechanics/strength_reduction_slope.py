@@ -13,9 +13,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
-import os
 from pathlib import Path
-import subprocess
 import sys
 
 import numpy as np
@@ -37,7 +35,7 @@ FACTORS = [1.0, 1.2, 1.3, 1.33, 1.34, 1.35, 1.36, 1.37, 1.38, 1.39, 1.40, 1.45]
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'tests/functional/hydromechanics'))
-from des_case import digest, read_config, reset_boundaries, source_revision
+from des_case import digest, provenance, read_config, reset_boundaries, run_des, write_json, write_poly
 
 
 def polygon(path, h):
@@ -51,12 +49,8 @@ def polygon(path, h):
     for i, (a, mk) in enumerate(zip(corners, marks)):
         piece = seg(a, corners[(i + 1) % len(corners)])
         points += piece; markers += [mk]*len(piece)
-    with path.open('w') as f:
-        f.write(f'{len(points)} 2 0 0\n')
-        for i, (x, z) in enumerate(points): f.write(f'{i} {x:.17g} {z:.17g}\n')
-        f.write(f'{len(points)} 1\n')
-        for i, mk in enumerate(markers): f.write(f'{i} {i} {(i + 1) % len(points)} {mk}\n')
-        f.write(f'0\n1\n0 {WIDTH/2} {br.BASE/2} 0 {h*h/2}\n')
+    write_poly(path, points, [(i, (i + 1) % len(points), mk) for i, mk in enumerate(markers)],
+               [(WIDTH/2, br.BASE/2, 0, h*h/2)])
 
 
 def config(h, name, factor=None):
@@ -94,10 +88,7 @@ def config(h, name, factor=None):
 
 
 def run(exe, folder, name, cfg, threads=1):
-    with (folder/f'{name}.cfg').open('w') as f: cfg.write(f)
-    with (folder/f'{name}.log').open('w') as f:
-        return subprocess.run([str(exe), f'{name}.cfg'], cwd=folder, env=dict(os.environ, OMP_NUM_THREADS=str(threads)),
-                              stdout=f, stderr=subprocess.STDOUT, timeout=80000).returncode
+    return run_des(exe, folder, name, cfg, 80000, threads=threads, check=False).returncode
 
 
 def analyse(folder, name):
@@ -134,9 +125,7 @@ def at_rest(frames):
 def study(exe, out, spacings, factors, workers):
     out.mkdir(parents=True, exist_ok=False)
     fs_bishop, circle = br.embankment().critical(br.starts())
-    result = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__),
-                  reference_sha256=digest(br.__file__),
-                  source_commit=source_revision(ROOT),
+    result = dict(provenance(exe, __file__), reference_sha256=digest(br.__file__),
                   height=br.H, run=br.RUN, toe=br.TOE, crest=br.CREST, base=br.BASE, gamma=br.GAMMA, cohesion=br.COHESION,
                   friction_deg=math.degrees(br.FRICTION), young=E, poisson=NU, duration=DURATION, frames=FRAMES,
                   scaling=SCALING, damping=DAMPING, fs_bishop=fs_bishop, bishop_circle=list(br.embankment().circle(*circle)), cases=[])
@@ -157,7 +146,7 @@ def study(exe, out, spacings, factors, workers):
             print(json.dumps(dict(spacing_m=h, factor=f, at_rest=at_rest(frames), max_displacement=frames[-1]['max_displacement'],
                                   final_speed=frames[-1]['max_speed'])), flush=True)
         result['cases'].append(case)
-        (out/'summary.json').write_text(json.dumps(result, indent=1, allow_nan=False))
+        write_json(out/'summary.json', result)
     return result
 
 
