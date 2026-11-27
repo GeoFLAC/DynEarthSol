@@ -94,6 +94,38 @@ def main():
                           [0., 1., -7.503954127483875]])
             pairs.append((a, b))
             expected.append(reference_volume(a, b))
+            # A tetrahedron that an MMG remesh kept, against its copy in the new mesh,
+            # whose coordinates differ in the last place; and random tetrahedra at
+            # the same depth against copies moved by up to 4 units in the last place.
+            a = np.array([[.74999998381665256, .7500000118555008, -10.],
+                          [.50000001072470324, 1., -10.],
+                          [.50000000223933372, .50000003478627963, -10.],
+                          [.48439412002364574, .7498564414702279, -9.8441598611665153]])
+            b = np.array([[.74999998381665267, .7500000118555008, -10.],
+                          [.50000001072470324, 1., -10.],
+                          [.50000000223933383, .50000003478627975, -10.],
+                          [.48439412002364579, .74985644147022801, -9.8441598611665153]])
+            pairs.append((a, b))
+            expected.append(abs(np.linalg.det(a[1:]-a[0]))/6)
+            for _ in range(40):
+                a = rng.normal(size=(4, 3))*.3+[0., 0., -10.]
+                if abs(np.linalg.det(a[1:]-a[0])) < 1e-3:
+                    continue
+                b = a.copy()
+                for index, steps in np.ndenumerate(rng.integers(-4, 5, size=a.shape)):
+                    for _ in range(abs(steps)):
+                        b[index] = np.nextafter(b[index], np.sign(steps)*np.inf)
+                pairs.append((a, b))
+                expected.append(abs(np.linalg.det(a[1:]-a[0]))/6)
+            # A sliver 1e-9 thick in x against itself, and unit tetrahedra 1e-6 apart
+            # in x: neither overlap may change with the depth z.
+            sliver = np.array([[0., 0., 0.], [1e-9, 0., 0.], [0., 1., 0.], [0., 0., 1.]])
+            for depth in (0., -1e6, -6.4e6):
+                shift = np.array([0., 0., depth])
+                pairs.append((sliver+shift, sliver+shift))
+                expected.append(1e-9/6)
+                pairs.append((unit+shift, unit+shift+[1e-6, 0., 0.]))
+                expected.append((1-1e-6)**3/6)
         volume, product = calculate(exe, pairs)
         reverse, transpose = calculate(exe, [(b, a) for a, b in pairs])
         np.testing.assert_allclose(volume, expected, rtol=2e-10, atol=2e-12)

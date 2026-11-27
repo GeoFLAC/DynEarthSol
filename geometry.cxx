@@ -2381,10 +2381,15 @@ static void integrate(const Simplex &piece, const Shape &old, const Shape &curre
 }
 
 #ifdef THREED
-// Keep face topology while clipping: nearby planes must not produce two
-// overlapping copies of a face through a distance-based membership test.
+// The old simplex clipped by the half-spaces of the current one, face by face.
+// A vertex within tolerance[plane] of a plane lies on it: it stays in its faces
+// and joins that plane's cap, and only an edge from a vertex strictly inside to
+// one strictly outside is cut. A face lying in the plane is left to the cap, so
+// nearly coincident faces of the two simplices are counted once. Cap points
+// within merge[d] of each other in every direction d are one point.
 static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
-                           const Shape &current_shape, Real scale)
+                           const Shape &current_shape, const Real tolerance[N],
+                           const Real merge[NDIMS], Real scale)
 {
     struct Face { int count = 0; Point vertex[MAX_VERTEX] = {}; };
     struct Polyhedron { int count = 0; Face face[2*N] = {}; };
@@ -2395,36 +2400,46 @@ static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
         poly.face[f].count = NDIMS;
         for (int j = 0; j < NDIMS; ++j) poly.face[f].vertex[j] = old[corners[f][j]];
     }
-    constexpr Real eps = 128*std::numeric_limits<Real>::epsilon();
     Face cap, clipped;
+    auto append = [](Face &face, const Point &point) {
+        if (face.count == MAX_VERTEX)
+            die(EXIT_INTERNAL_ASSERT,"Simplex clip exceeds its face vertex bound.");
+        face.vertex[face.count++] = point;
+    };
+    auto add_to_cap = [&](const Point &point) {
+        for (int k = 0; k < cap.count; ++k) {
+            bool same = true;
+            for (int d = 0; d < NDIMS; ++d) same &= std::fabs(point[d]-cap.vertex[k][d]) <= merge[d];
+            if (same) return;
+        }
+        append(cap,point);
+    };
     for (int plane = 0; plane < N; ++plane) {
         next.count = 0;
         cap.count = 0;
-        auto append = [](Face &face, const Point &point) {
-            if (face.count == MAX_VERTEX)
-                die(EXIT_INTERNAL_ASSERT,"Simplex clip exceeds its face vertex bound.");
-            face.vertex[face.count++] = point;
-        };
         for (int f = 0; f < poly.count; ++f) {
             const Face &face = poly.face[f];
+            Real value[MAX_VERTEX];
+            int side[MAX_VERTEX];
+            bool flat = true;
+            for (int j = 0; j < face.count; ++j) {
+                value[j] = current_shape.at(plane,face.vertex[j]);
+                side[j] = value[j] > tolerance[plane] ? 1 : value[j] < -tolerance[plane] ? -1 : 0;
+                if (side[j] == 0) add_to_cap(face.vertex[j]);
+                flat &= side[j] == 0;
+            }
+            if (flat) continue;
             clipped.count = 0;
             for (int j = 0; j < face.count; ++j) {
-                const Point &a = face.vertex[j], &b = face.vertex[(j+1)%face.count];
-                const Real da = current_shape.at(plane,a), db = current_shape.at(plane,b);
-                const bool ina = da >= -eps, inb = db >= -eps;
-                if (ina) append(clipped,a);
-                if (ina == inb) continue;
-                const Real t = std::max(Real(0),std::min(Real(1),da/(da-db)));
+                const int k = (j+1)%face.count;
+                if (side[j] >= 0) append(clipped,face.vertex[j]);
+                if (side[j]*side[k] >= 0) continue;
+                const Real t = value[j]/(value[j]-value[k]);
                 Point crossing;
-                for (int d = 0; d < NDIMS; ++d) crossing[d] = a[d]+t*(b[d]-a[d]);
+                for (int d = 0; d < NDIMS; ++d)
+                    crossing[d] = face.vertex[j][d]+t*(face.vertex[k][d]-face.vertex[j][d]);
                 append(clipped,crossing);
-                bool duplicate = false;
-                for (int k = 0; k < cap.count; ++k) {
-                    Point delta;
-                    for (int d = 0; d < NDIMS; ++d) delta[d] = crossing[d]-cap.vertex[k][d];
-                    duplicate |= dot(delta,delta) < 64*eps*eps;
-                }
-                if (!duplicate) append(cap,crossing);
+                add_to_cap(crossing);
             }
             if (clipped.count >= NDIMS) next.face[next.count++] = clipped;
         }
@@ -2506,7 +2521,25 @@ static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
     if (!old_shape.build(old) || !current_shape.build(current))
         die(EXIT_MESH_QUALITY, "Degenerate simplex in conservative remapping.");
 #ifdef THREED
-    return clip(old,old_shape,current_shape,scale);
+    // The coordinates are doubles: a vertex that two meshes share can differ
+    // between them in each coordinate by a few units in the last place of that
+    // coordinate's magnitude, far more than long double rounding. Planes and
+    // points that close, direction by direction, coincide.
+    constexpr Real eps = 128*std::numeric_limits<Real>::epsilon();
+    Real position[NDIMS] = {}, merge[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) {
+        for (int j = 0; j < N; ++j)
+            position[d] = std::max({position[d],std::fabs(source[j][d]),std::fabs(target[j][d])});
+        position[d] *= 16*std::numeric_limits<double>::epsilon()/scale;
+        merge[d] = eps+position[d];
+    }
+    Real tolerance[N];
+    for (int p = 0; p < N; ++p) {
+        tolerance[p] = eps;
+        for (int d = 0; d < NDIMS; ++d)
+            tolerance[p] += position[d]*std::fabs(current_shape.coefficient[p][d+1]);
+    }
+    return clip(old,old_shape,current_shape,tolerance,merge,scale);
 #else
     Point normal[2*N]; Real constant[2*N];
     for (int p = 0; p < 2*N; ++p) {
