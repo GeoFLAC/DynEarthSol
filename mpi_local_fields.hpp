@@ -9,7 +9,7 @@
 #define MPI_NODE_ARRAYS(F) F(coord) F(coord0) F(vel) F(force) F(force_residual)
 #define MPI_ELEMENT_VECTORS(F) F(volume) F(volume_old) F(edvoldt) F(plstrain) \
  F(delta_plstrain) F(plstrain_remesh) F(stressyy) F(dpressure) F(viscosity) \
- F(old_mean_stress) F(radiogenic_source) F(dyn_fric_coeff) F(state_variable) F(matrix_pressure)
+ F(old_mean_stress) F(radiogenic_source) F(dyn_fric_coeff) F(state_variable)
 #define MPI_ELEMENT_ARRAYS(F) F(stress) F(strain) F(strain_rate)
 #endif
 #endif

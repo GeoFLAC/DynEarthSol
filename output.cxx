@@ -197,12 +197,8 @@ void Output::_write(const Variables& var, bool disable_averaging)
     
     bin.write_array(*var.temperature, "temperature", var.temperature->size());
     bin.write_array(*var.ppressure, "pore pressure", var.ppressure->size());
-    if (var.matrix_pressure)
-        bin.write_cell_array(*var.matrix_pressure, "matrix pressure", var.matrix_pressure->size());
     if (param_.control.has_hydraulic_diffusion && var.fluid_balance)
-        bin.write_aux_array(*var.fluid_balance, var.fluid_split ? "fluid mass balance" : "fluid balance", var.fluid_balance->size());
-    if (var.energy_balance)
-        bin.write_aux_array(*var.energy_balance,"sensible energy balance",var.energy_balance->size());
+        bin.write_aux_array(*var.fluid_balance, "fluid balance", var.fluid_balance->size());
     if (param_.control.has_hydraulic_diffusion && var.mat->has_retention) {
         double_vec saturation(var.nelem), effective_saturation(var.nelem), relperm(var.nelem), density(var.nelem);
 #ifndef ACC
@@ -224,28 +220,6 @@ void Output::_write(const Variables& var, bool disable_averaging)
         bin.write_cell_array(effective_saturation, "effective saturation", effective_saturation.size());
         bin.write_cell_array(relperm, "relative permeability", relperm.size());
         bin.write_cell_array(density, "bulk density", density.size());
-    }
-    if (var.pore_strain || var.mat->permeability_model) {
-        double_vec phi(var.nelem), perm(var.nelem);
-        for (int e = 0; e < var.nelem; ++e) {
-            phi[e] = var.mat->phi(e);
-            perm[e] = var.mat->perm(e);
-        }
-        bin.write_cell_array(phi, "porosity", phi.size());
-        bin.write_cell_array(perm, "permeability", perm.size());
-    }
-    if (var.pore_dilation) {
-        bin.write_cell_array(*var.pore_dilation,"pore dilation",var.pore_dilation->size());
-        bin.write_cell_array(*var.pore_plastic_increment,"plastic volume increment",var.pore_plastic_increment->size());
-    }
-    if (var.fluid_split) {
-        double_vec water(var.nnode);
-        for (int n = 0; n < var.nnode; ++n) water[n] = nodal_fluid_mass(param_,var,n);
-        bin.write_array(water,"fluid mass",water.size());
-        bin.write_array(*var.fluid_split,"hydraulic split buffer",var.fluid_split->size());
-        bin.write_array(*var.solid_mass,"solid mass",var.solid_mass->size());
-        bin.write_array(*var.solid_capacity,"solid heat capacity",var.solid_capacity->size());
-        bin.write_array(*var.pending_temperature,"pending temperature increment",var.pending_temperature->size());
     }
     bin.write_cell_array(*var.radiogenic_source, "radiogenic source", var.radiogenic_source->size());
     if (var.shear_heat) {
@@ -537,18 +511,6 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_array(*var.pending_heat, "pending shear heat", var.pending_heat->size());
         bin.write_array(*var.shear_heat, "shear heating", var.shear_heat->size());
     }
-    if (var.fluid_split) {
-        bin.write_scalar(1,"hydraulic content model");
-        bin.write_scalar(2,"hydraulic coupling version");
-        bin.write_scalar(int(var.fluid_pressure_consumed),"hydraulic pressure consumed");
-        bin.write_scalar(var.fluid_reference_temperature,"fluid reference temperature");
-        const auto reference = hydraulic_reference(param);
-        bin.write_aux_array(reference,"hydraulic reference law",reference.size());
-        bin.write_array(*var.fluid_split,"hydraulic split buffer",var.fluid_split->size());
-        bin.write_array(*var.solid_mass,"solid mass",var.solid_mass->size());
-        bin.write_array(*var.solid_capacity,"solid heat capacity",var.solid_capacity->size());
-        bin.write_array(*var.pending_temperature,"pending temperature increment",var.pending_temperature->size());
-    }
     if (hydraulic_strain_form(param))
         bin.write_scalar(1, "physical hydraulic step");
     bin.write_scalar(var.max_global_vel_mag, "max_global_vel_mag");
@@ -573,18 +535,8 @@ void Output::write_checkpoint(const Param& param, const Variables& var)
         bin.write_aux_array(pieces.mean, "well piece means", pieces.mean.size());
         bin.write_aux_array(pieces.length, "well piece lengths", pieces.length.size());
     }
-    if (var.matrix_pressure)
-        bin.write_array(*var.matrix_pressure, "matrix pressure", var.matrix_pressure->size());
     if (param.control.has_hydraulic_diffusion && var.fluid_balance)
-        bin.write_aux_array(*var.fluid_balance, var.fluid_split ? "fluid mass balance" : "fluid balance", var.fluid_balance->size());
-    if (var.energy_balance)
-        bin.write_aux_array(*var.energy_balance,"sensible energy balance",var.energy_balance->size());
-    if (var.pore_strain)
-        bin.write_array(*var.pore_strain, "pore strain", var.pore_strain->size());
-    if (var.pore_dilation) {
-        bin.write_array(*var.pore_dilation,"pore dilation",var.pore_dilation->size());
-        bin.write_array(*var.pore_plastic_increment,"plastic volume increment",var.pore_plastic_increment->size());
-    }
+        bin.write_aux_array(*var.fluid_balance, "fluid balance", var.fluid_balance->size());
     if (param.control.has_hydraulic_diffusion)
         bin.write_array(*var.dppressure, "pending pore pressure increment", var.dppressure->size());
     if (param.control.has_PT) {

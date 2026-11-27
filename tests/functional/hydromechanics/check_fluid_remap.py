@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check linear Biot fluid content across real remeshes and exact continuation.
 
-Fixed saturated material properties only. Across each remesh the mobile and
-matrix contents change only by what the domain change removes and adds, as
-DES reports it; a remesh that is not meant to change the domain changes its
+Fixed saturated material properties only. Across each remesh the mobile
+content changes only by what the domain change removes and adds, as DES
+reports it; a remesh that is not meant to change the domain changes its
 volume by at most 1e-6, and the moving-domain controls, a rigid translation,
 add or remove the uniform excess content of the swept volume. This does not
 check total retained mass or energy.
@@ -34,8 +34,6 @@ def configuration(case):
     if case in ('explicit', 'gvs'):
         cfg['control'].update(has_PT='false', fixed_dt='.001', inertial_scaling='1e5',
                               use_global_velocity_scaling=str(case == 'gvs'))
-    if case == 'matrix':
-        cfg['mat'].update(matrix_storage='[1e-9]', matrix_exchange='[1e-12]')
     if case in ('uncoupled', 'uncoupled-thermal'):
         cfg['control']['has_poroelastic_pressure_feedback'] = 'false'
     if case in ('thermal', 'uncoupled-thermal'):
@@ -80,9 +78,7 @@ def inventories(model, frame, cfg):
             beta -= alpha*value('bulk_modulus')*value('alpha')/mean_bulk
         temperature = model.read_field(frame, 'temperature')[cells].mean(axis=1)
         mobile -= float(volume@(beta*(temperature-cfg.getfloat('bc', 'surface_temperature'))))
-    matrix = (float(volume@model.read_field(frame, 'matrix pressure')*value('matrix_storage'))
-              if cfg.has_option('mat', 'matrix_storage') else 0.)
-    return dict(volume=float(volume.sum()), mobile=mobile, matrix=matrix,
+    return dict(volume=float(volume.sum()), mobile=mobile,
                 max_pressure=float(np.max(np.abs(pressure))), nodes=len(x), cells=len(cells))
 
 
@@ -118,7 +114,7 @@ def main():
     exe, output = args.executable.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     records = []
-    for case in ('drained', 'sealed', 'explicit', 'gvs', 'matrix', 'thermal',
+    for case in ('drained', 'sealed', 'explicit', 'gvs', 'thermal',
                  'uncoupled', 'uncoupled-thermal', 'domain-add', 'domain-remove'):
         folder = output/case
         folder.mkdir()
@@ -133,8 +129,6 @@ def main():
         mobile_changes = [added-removed+reaction for removed, added, reaction in
                           (map(float, m) for m in re.findall(
                               r'Biot content remap: removed/added/Dirichlet \[m\^\d\] = (\S+) (\S+) (\S+);', log))]
-        matrix_changes = [added-removed for removed, added in (map(float, m) for m in re.findall(
-                              r'Matrix content remap: removed/added \[m\^\d\] = (\S+) (\S+)', log))]
         assert remeshes and len(remeshes) == len(mobile_changes), (case, len(remeshes), len(mobile_changes))
         defects = []
         for i, (a, b) in enumerate(remeshes):
@@ -148,9 +142,6 @@ def main():
             defect = after['mobile']-before['mobile']-mobile_changes[i]
             defects.append(abs(defect)/scale)
             assert defects[-1] < 1e-10, (case, a['frame'], b['frame'], defect)
-            matrix_change = matrix_changes[i] if matrix_changes else 0.
-            np.testing.assert_allclose(after['matrix']-before['matrix'], matrix_change,
-                                       rtol=0, atol=1e-10*abs(before['matrix'])+1e-15)
         if case.startswith('domain'):
             before, after = (inventories(model, r['frame'], cfg) for r in remeshes[-1])
             np.testing.assert_allclose(after['volume']-before['volume'],

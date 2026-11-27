@@ -69,7 +69,6 @@ void MechanicalState::capture(const Variables& var)
     physical_time = var.time;
     connectivity = var.connectivity;
     if (var.shear_heat) shear_heat.resize(var.nelem);
-    if (var.pore_plastic_increment) pore_plastic_increment.resize(var.nelem);
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var) firstprivate(ee)
 #endif
@@ -87,7 +86,6 @@ void MechanicalState::capture(const Variables& var)
         dyn_fric_coeff[e] = (*var.dyn_fric_coeff)[e];
         state_variable[e] = (*var.state_variable)[e];
         if (var.shear_heat) shear_heat[e] = (*var.shear_heat)[e];
-        if (var.pore_plastic_increment) pore_plastic_increment[e] = (*var.pore_plastic_increment)[e];
     }
 }
 
@@ -114,7 +112,6 @@ void MechanicalState::restore(Variables& var) const
         (*var.dyn_fric_coeff)[e] = dyn_fric_coeff[e];
         (*var.state_variable)[e] = state_variable[e];
         if (var.shear_heat) (*var.shear_heat)[e] = shear_heat[e];
-        if (var.pore_plastic_increment) (*var.pore_plastic_increment)[e] = pore_plastic_increment[e];
     }
     #pragma acc wait
 }
@@ -236,7 +233,6 @@ bool is_finite_candidate(const Variables& var)
                !std::isfinite((*var.dpressure)[e]) ||
                !std::isfinite((*var.state_variable)[e]) || !std::isfinite((*var.dyn_fric_coeff)[e]);
         if (var.shear_heat) bad |= !std::isfinite((*var.shear_heat)[e]);
-        if (var.pore_plastic_increment) bad |= !std::isfinite((*var.pore_plastic_increment)[e]);
     }
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) var.mpi->maximum(&bad, 1);

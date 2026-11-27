@@ -59,7 +59,7 @@ struct Fixture {
     double_vec volume;
     double_vec temperature, pressure, pressure_increment, lookup;
     double_vec thermal_mass, heat_source, old_temperature, hydraulic_mass;
-    double_vec volume_rate, balance, matrix_pressure;
+    double_vec volume_rate, balance;
     uint_vec boundary_flags;
     tensor_t strain_rate, strain;
     int_vec2D markers;
@@ -697,8 +697,6 @@ static void test_material_trials() {
             auto* pending_heat = new double_vec(ne,17.);
             m->var.shear_heat = heat;
             m->var.pending_heat = pending_heat;
-            m->var.pore_plastic_increment = new double_vec(ne,19.);
-            m->var.pore_dilation = new double_vec(ne,23.);
             m->param.control.has_shear_heating = true;
             auto& p=m->param.mat;
             auto* baseline=new MechanicalState(ne);
@@ -756,7 +754,6 @@ static void test_material_trials() {
                     check("plastic increment",(*dpls)[e],0);
                     check("state unchanged",(*state)[e],10);
                     // Deliberately contaminate every snapshot scalar to check restore.
-                    (*m->var.pore_plastic_increment)[e]=99;
                     (*yy)[e]=(*dp)[e]=(*visc)[e]=(*pls)[e]=(*dpls)[e]=(*friction)[e]=(*state)[e]=99;
                 }
                 baseline->restore(m->var);
@@ -768,8 +765,6 @@ static void test_material_trials() {
                     check("restore delta_plstrain exact",(*m->var.delta_plstrain)[e]==baseline->delta_plstrain[e],1);
                     check("restore dyn_fric_coeff exact",(*m->var.dyn_fric_coeff)[e]==baseline->dyn_fric_coeff[e],1);
                     check("restore state_variable exact",(*m->var.state_variable)[e]==baseline->state_variable[e],1);
-                    check("restore plastic volume exact",(*m->var.pore_plastic_increment)[e]==baseline->pore_plastic_increment[e],1);
-                    check("trial retains recoverable dilation",(*m->var.pore_dilation)[e],23);
                 }
             }
             // Nonzero shear increment: a discarded trial must not accumulate
@@ -1923,73 +1918,12 @@ static void test_darcy_gravity_limit() {
         m->var.old_temperature=nullptr;
         p.alpha={0}; p.fluid_alpha={0};
     }
-    std::fill(mass->begin(),mass->end(),1.0);
-    for (double angle : {0.0, 0.37, 1.1}) {
-        const double c=std::cos(angle), s=std::sin(angle);
-        p.permeability_tensor={1+2*c*c, 1, 1+2*s*s, 0, 2*c*s, 0};
-        reset_material(*m);
-        double grad[NDIMS];
-        for(int d=0;d<NDIMS;++d) grad[d]=1e5*(d+1);
-        double dissipation=0, work=0, net=0;
-        for(int n=0;n<nn;++n) {
-            m->pressure[n]=0;
-            for(int d=0;d<NDIMS;++d) m->pressure[n]+=grad[d]*m->coord[n][d];
-        }
-        for(int e=0;e<ne;++e)
-            for(int i=0;i<NDIMS;++i) for(int j=0;j<NDIMS;++j)
-                dissipation+=m->volume[e]*1e-9*grad[i]*m->var.mat->perm_tensor[i][j]*grad[j];
-        reference=m->pressure;
-        std::fill(m->stress.data(),m->stress.data()+ne*NSTR,0.0);
-        m->param.control.gravity=0; m->var.dt=0.1;
-        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
-                             *rate,m->tmp_result,m->stress,*old_mean);
-        for(int n=0;n<nn;++n) {
-            net+=m->pressure_increment[n];
-            work+=reference[n]*m->pressure_increment[n];
-        }
-        check("rotated anisotropic Darcy dissipation",work/m->var.dt,dissipation);
-        check("rotated tensor conserves fluid",net,0);
-    }
-    p.permeability_tensor.clear();
-    reset_material(*m);
-    {
-        p.hydraulic_perm={0}; p.matrix_storage={1}; p.matrix_exchange={0.1};
-        reset_material(*m);
-        auto& matrix=m->matrix_pressure; matrix.assign(ne,0); m->var.matrix_pressure=&matrix;
-        std::fill(mass->begin(),mass->end(),0.0);
-        for(int e=0;e<ne;++e) for(int j=0;j<NODES_PER_ELEM;++j)
-            (*mass)[m->connectivity[e][j]]+=0.5*m->volume[e]/NODES_PER_ELEM;
-        double previous=0;
-        for(double dt : {0.02,0.01}) {
-            std::fill(matrix.begin(),matrix.end(),0);
-            m->pressure.assign(nn,1); m->var.dt=dt;
-            for(int k=0;k<int(10/dt);++k)
-                update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
-                                     *rate,m->tmp_result,m->stress,*old_mean);
-            const double exact=1.0/3+2.0/3*std::exp(-3.0);
-            const double error=std::abs(m->pressure[0]-exact);
-            check("exchange first-order time convergence",previous==0 || error<0.51*previous,1);
-            previous=error;
-            for(int n=0;n<nn;++n) check("exchange homogeneous transport pressure",m->pressure[n],m->pressure[0]);
-            for(int e=0;e<ne;++e) check("exchange conserves total reservoir fluid",0.5*m->pressure[0]+matrix[e],0.5);
-        }
-        m->pressure.assign(nn,1); std::fill(matrix.begin(),matrix.end(),0); m->var.dt=50;
-        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
-                             *rate,m->tmp_result,m->stress,*old_mean);
-        check("large fixed step uses stable explicit exchange substeps",m->pressure[0]>0 && m->pressure[0]<1,1);
-        for(int n=0;n<nn;++n)
-            check("pending pressure increment spans every substep",m->pressure_increment[n],1-m->pressure[n]);
-        for(int e=0;e<ne;++e) check("subcycled exchange fluid balance",0.5*m->pressure[0]+matrix[e],0.5);
-        m->var.matrix_pressure=nullptr;
-        p.matrix_exchange.clear(); p.matrix_storage.clear(); p.hydraulic_perm={1e-12};
-    }
     {
         const bool feedback=m->param.control.has_poroelastic_pressure_feedback;
         m->param.control.has_poroelastic_pressure_feedback=true;
-        p.biot_coeff={.6}; p.matrix_storage={1e-9};
+        p.biot_coeff={.6};
         auto& strain=m->strain; strain.resize(ne,0.0);
-        auto& matrix=m->matrix_pressure; matrix.assign(ne,2e5);
-        m->var.strain=&strain; m->var.matrix_pressure=&matrix;
+        m->var.strain=&strain;
         m->pressure.assign(nn,1e5); m->pressure_increment.assign(nn,-100);
         for(int e=0;e<ne;++e) strain[e][0]=.001;
         reset_material(*m);
@@ -1997,7 +1931,6 @@ static void test_darcy_gravity_limit() {
         ContentRemap remap(m->param,m->var);
         remap.transfer(m->var,m->coord,m->connectivity);
         m->pressure.assign(nn,2e5); m->pressure_increment.assign(nn,-500);
-        matrix.assign(ne,3e5);
         for(int e=0;e<ne;++e) {
             strain[e][0]=.002;
             for(int d=0;d<NSTR;++d) m->stress[e][d]=0;
@@ -2009,7 +1942,6 @@ static void test_darcy_gravity_limit() {
             check("remap numerical buffer independent of physical water",m->pressure_increment[n],-100);
         }
         for(int e=0;e<ne;++e) {
-            check("remap preserves immobile reservoir separately",matrix[e],2e5);
             const int n=m->connectivity[e][0];
             check("remap retains mechanical effective-stress reference",
                   (m->stress[e][0]+.6*(m->pressure[n]+m->pressure_increment[n]))/1e5,
@@ -2024,63 +1956,9 @@ static void test_darcy_gravity_limit() {
         for(int n=0;n<nn;++n)
             check("all-Dirichlet remap preserves imposed pressure",m->pressure[n],fixed_pressure);
         std::fill(flags->begin(),flags->end(),0); m->var.hbc_types[iboundz1]=0;
-        m->var.strain=nullptr; m->var.matrix_pressure=nullptr;
-        p.matrix_storage.clear();
+        m->var.strain=nullptr;
         m->param.control.has_poroelastic_pressure_feedback=feedback;
     }
-    p.biot_coeff[0]=0.6; p.bulk_modulus_s[0]=2.5e9;
-    p.permeability_model=1;
-    m->var.pore_strain=new double_vec(ne,0);
-    m->var.etmp=new double_vec(ne);
-    m->strain_rate.resize(ne,0.0);
-    m->var.strain_rate=&m->strain_rate;
-    reset_material(*m);
-    double_vec phi(ne,0.2);
-    for(int step=0;step<10;++step) {
-        m->var.dt=0.1;
-        std::fill(m->pressure_increment.begin(),m->pressure_increment.end(),-1000*(step+1));
-        for(int e=0;e<ne;++e) {
-            m->strain_rate[e][0]=(e+1)*1e-3;
-            const double deps=0.1*(e+1)*1e-3+1000*(step+1)/2.5e9;
-            // Independent RK4 integration of dphi/deps = alpha - phi.
-            for(int j=0;j<100;++j) {
-                const double h=deps/100;
-                const double a=0.6-phi[e], b=0.6-(phi[e]+h*a/2);
-                const double c=0.6-(phi[e]+h*b/2), d=0.6-(phi[e]+h*c);
-                phi[e]+=h*(a+2*b+2*c+d)/6;
-            }
-        }
-        update_porosity(m->var);
-        for(int e=0;e<ne;++e) {
-            const double actual=m->var.mat->phi(e);
-            check("Biot porosity against integrated pore-volume law",actual,phi[e]);
-            const double resistance=m->var.mat->perm(e)/1e-12*(1-actual)*(1-actual)/(actual*actual*actual);
-            check("Kozeny-Carman pore resistance",resistance,0.8*0.8/(0.2*0.2*0.2));
-        }
-    }
-    p.permeability_model=2;
-    for (double exponent : {0.5, 3.0, 5.0}) {
-        p.permeability_exponent={exponent};
-        reset_material(*m);
-        double previous=1e-12;
-        for (double eps : {0.0, 0.05, 0.1, 0.05, 0.0, -0.1}) {
-            std::fill(m->var.pore_strain->begin(),m->var.pore_strain->end(),eps);
-            const double phi=0.6-0.4*std::exp(-eps);
-            const double k=m->var.mat->perm(0);
-            if (eps == 0)
-                check("power law returns to reference permeability",k/1e-12,1);
-            else
-                check("power law logarithmic sensitivity",std::log(k/1e-12)/std::log(phi/0.2),exponent);
-            if (eps < 0) check("power law compaction reduces permeability",k < previous,1);
-            previous=k;
-        }
-    }
-    p.hydraulic_perm={0};
-    p.permeability_exponent={1e300};
-    reset_material(*m);
-    std::fill(m->var.pore_strain->begin(),m->var.pore_strain->end(),0.1);
-    check("impermeable power law avoids zero times overflow",m->var.mat->perm(0),0);
-    delete m->var.pore_strain; delete m->var.etmp;
     delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
 }
 
@@ -2187,45 +2065,6 @@ static void test_heat_remap() {
     }
 }
 
-static void test_fluid_state() {
-    std::printf("[Finite-density Biot mass and thermodynamic tangents]\n");
-    auto* m = new Fixture(); build_mesh(*m);
-    bind_fields(*m,273.);
-    auto& p=m->param.mat;
-    p.nmat=1; p.rheol_type=MatProps::rh_elastic;
-    p.rho0={2650}; p.alpha={3e-5}; p.porosity={.2}; p.biot_coeff={.6};
-    p.bulk_modulus={2e7}; p.shear_modulus={1e7};
-    p.visc_exponent={1}; p.visc_coefficient={1};
-    p.heat_capacity={1000}; p.therm_cond={1}; p.fluid_bulk_modulus={1e8};
-    p.bulk_modulus_s={1e8}; p.fluid_rho0={1000}; p.fluid_alpha={2e-4};
-    p.hydraulic_perm={0}; p.fluid_visc={1e-3};
-    reset_material(*m);
-    const MatProps& mat=*m->var.mat;
-    for (double eps : {-.01,0.,.01})
-        for (double theta : {0.,10.,30.}) {
-            // Equal constituent moduli give a closed sealed-cell pressure.
-            const double pressure=1e8*(std::log((.2*std::exp(2e-4*theta)+
-                .4*std::exp(3e-5*theta))/.6)-eps);
-            const double t=273+theta;
-            const auto state=fluid_state(mat,0,pressure,t,273.,.2,0.,273.,eps);
-            const double j=std::exp(eps), mass=j*state.density*state.porosity;
-            check("finite EOS sealed mass",mass/200,1);
-            auto mass_at=[&](double pp,double tt,double ee) {
-                const auto s=fluid_state(mat,0,pp,tt,273.,.2,0.,273.,ee);
-                return std::exp(ee)*s.density*s.porosity;
-            };
-            const double dp=(mass_at(pressure+1000,t,eps)-mass_at(pressure-1000,t,eps))/2000;
-            const double dt=(mass_at(pressure,t+.01,eps)-mass_at(pressure,t-.01,eps))/.02;
-            const double de=(mass_at(pressure,t,eps+1e-5)-mass_at(pressure,t,eps-1e-5))/2e-5;
-            check("mass pressure tangent",dp/(j*state.pressure_slope),1);
-            check("mass temperature tangent",dt/(j*state.temperature_slope),1);
-            check("Biot mass volume tangent",de/(j*state.density*.6),1);
-            const auto anchored=fluid_state(mat,0,pressure,t,273.,state.porosity,pressure,t);
-            check("constitutive anchor exact",anchored.porosity==state.porosity,1);
-        }
-    delete m->var.mat; delete m;
-}
-
 static void test_strain_pressure(bool scaled = false) {
     std::printf("[Strain-driven storage, heating and subcycling: %s mass]\n",
                 scaled ? "scaled" : "physical");
@@ -2315,7 +2154,6 @@ static void test_fluid_heat_transport() {
     p.heat_capacity={1000}; p.therm_cond={0}; p.fluid_bulk_modulus={2e9};
     p.bulk_modulus_s={37e9}; p.fluid_rho0={1200}; p.fluid_heat_capacity={4000};
     p.fluid_alpha={0}; p.hydraulic_perm={1e-12}; p.fluid_visc={1e-3};
-    p.permeability_tensor={2,1,1,0,.3,0};
     m->param.control.has_hydraulic_diffusion=true;
     m->param.control.has_fluid_thermal_advection=true;
     reset_material(*m);
@@ -2335,14 +2173,13 @@ static void test_fluid_heat_transport() {
             m->pressure[n]=1e5*x[0]+(2e4-1200*gravity)*x[NDIMS-1];
             m->temperature[n]=300+2*x[0]+3*x[NDIMS-1];
         }
-        double expected_q[NDIMS]={};
+        double expected_q[NDIMS];
         double gradient[NDIMS]={};gradient[0]=1e5;gradient[NDIMS-1]=2e4;
-        for(int d=0;d<NDIMS;++d) for(int k=0;k<NDIMS;++k)
-            expected_q[d]-=1e-9*m->var.mat->perm_tensor[d][k]*gradient[k];
+        for(int d=0;d<NDIMS;++d) expected_q[d]=-1e-9*gradient[d];
         for(int e=0;e<ne;++e) {
             double q[NDIMS];hydraulic_element_flux(m->param,m->var,e,q);
             for(int d=0;d<NDIMS;++d)
-                check("tensor pressure/gravity physical Darcy flux",q[d],expected_q[d]);
+                check("pressure/gravity physical Darcy flux",q[d],expected_q[d]);
         }
         const double_vec before=m->temperature;
         m->var.dt=.25;
@@ -2500,7 +2337,6 @@ int main(int argc, char** argv) {
         return 1;  // check.sh requires status 54 from update_stress
     }
     test_heat_remap();
-    test_fluid_state();
     test_point_sources();
     test_fluid_heat_transport();
     test_strain_pressure();

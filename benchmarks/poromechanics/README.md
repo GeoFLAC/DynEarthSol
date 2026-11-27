@@ -19,8 +19,6 @@ python3 tests/functional/hydromechanics/check_averaged_aquifer_reference.py -v
 python3 tests/functional/hydromechanics/check_unsaturated_reference.py -v
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol2d benchmarks/poromechanics/results/wells-2d
 python3 tests/functional/hydromechanics/check_wells.py ./dynearthsol3d benchmarks/poromechanics/results/wells-3d --ndims 3
-python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol2d benchmarks/poromechanics/results/poroperm-2d
-python3 tests/functional/hydromechanics/check_poroperm.py ./dynearthsol3d benchmarks/poromechanics/results/poroperm-3d
 python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechanics/results/baseline
 ```
 
@@ -35,11 +33,8 @@ python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechan
 Each study saves its configurations, logs, raw fields, metrics and provenance.
 
 The [implementation guide](https://geoflac.github.io/des3d/docs/developer/source-layout) describes physical-step
-ownership and restart boundaries. `check_poroperm.py`
-checks evolving properties and exact restart on fixed and remeshed domains.
-It does not qualify conservative fluid-content transfer across remeshing.
-`check_boundaries.py` verifies scheduled top/side flux and pressure, balance
-and checkpoint continuation. The [explicit formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics)
+ownership and restart boundaries. `check_boundaries.py` verifies scheduled
+top/side flux and pressure, balance and checkpoint continuation. The [explicit formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics)
 describes the component tests and diagnostic fields.
 
 The [multi-well qualification](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi)

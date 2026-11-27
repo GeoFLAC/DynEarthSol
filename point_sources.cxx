@@ -165,10 +165,13 @@ void place_sources(const Param &param, Variables &var, const SourcePositions *at
     assemble_well_source(param, var);
 }
 
-void deposit_point_sources(const Injection &injection, const PointSourceOwners &owners,
-                           const Variables &var, double start, double stop,
-                           PointSourceSink sink, void *context,
-                           const double_vec *scale, bool peak_rate)
+// Visit each current-mesh contribution once. The rate has volume/time units
+// for fluid sources and energy/time units for heat sources.
+using PointSourceSink = void (*)(int point, int node, double rate, void *context);
+static void deposit_point_sources(const Injection &injection, const PointSourceOwners &owners,
+                                  const Variables &var, double start, double stop,
+                                  PointSourceSink sink, void *context,
+                                  const double_vec *scale, bool peak_rate)
 {
     // The previous substep can still be reading this derived source array.
     // Finish device work before any host rewrite or current-mesh lookup.

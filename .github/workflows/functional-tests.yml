@@ -63,16 +63,6 @@ jobs:
     - name: test 3d monitor checkpoint validation
       run: python3 monitor_restart/check_state.py ../../dynearthsol3d monitor-state-3d
 
-    - name: test 3d power-law permeability and restart
-      run: >-
-        OMP_NUM_THREADS=1 python3 hydromechanics/check_poroperm.py
-        ../../dynearthsol3d power-law-3d --permeability-model 2
-
-    - name: test 3d plastic pore recovery
-      run: >-
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 hydromechanics/check_recovery.py
-        ../../dynearthsol3d pore-recovery-3d
-
     - name: test 3d linear Biot content through remeshing
       run: >-
         OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
@@ -112,16 +102,6 @@ jobs:
 
     - name: test 2d monitor checkpoint validation
       run: python3 monitor_restart/check_state.py ../../dynearthsol2d monitor-state-2d
-
-    - name: test 2d power-law permeability and restart
-      run: >-
-        OMP_NUM_THREADS=1 python3 hydromechanics/check_poroperm.py
-        ../../dynearthsol2d power-law-2d --permeability-model 2
-
-    - name: test 2d plastic pore recovery
-      run: >-
-        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3 hydromechanics/check_recovery.py
-        ../../dynearthsol2d pore-recovery-2d
 
     - name: test 2d linear Biot content through remeshing
       run: >-

@@ -8,7 +8,6 @@
 
 #include "options.hpp"
 #include "parameters.hpp"
-#include "fields.hpp"
 #include "matprops.hpp"
 #include "phasechanges.hpp"
 #include "utils.hpp"
@@ -619,8 +618,6 @@ static void declare_parameters(opt::Registry &cfg,
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
          "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
-        ("control.hydraulic_content_model", opt::value<int>(&p.control.hydraulic_content_model)->default_value(0),
-         "Fluid content: 0 linear Biot/retention, 1 finite-density saturated mass balance with evolving Biot porosity.")
 
         ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
@@ -1340,29 +1337,10 @@ static void declare_parameters(opt::Registry &cfg,
         ("mat.dilation_angle1", opt::list()->default_value("[0]"),
          "Dilation angle of the materials when weakening saturates '[d0, d1, d2, ...]' (in degree)")
 
-        ("mat.porosity_model", opt::value<int>(&p.mat.porosity_model)->default_value(0),
-         "Porosity: 0 fixed, 1 Eulerian Biot volume/grain-pressure evolution.")
-        ("mat.permeability_model", opt::value<int>(&p.mat.permeability_model)->default_value(0),
-         "Permeability: 0 fixed, 1 Kozeny-Carman, 2 power law from current porosity.")
-        ("mat.permeability_exponent", opt::list()->default_value("[3]"),
-         "Positive dimensionless exponent n in k=k0*(phi/phi0)^n for permeability_model=2. "
-         "Material exponents are averaged by marker count.")
-        ("mat.pore_healing_time", opt::list()->default_value("[0]"),
-         "Reference recovery time of plastic pore dilation (s); 0 disables recovery. Requires porosity_model=1.")
-        ("mat.pore_healing_temperature", opt::list()->default_value("[293]"),
-         "Reference absolute temperature for pore recovery (K).")
-        ("mat.pore_healing_energy", opt::list()->default_value("[0]"),
-         "Nonnegative activation energy for pore recovery (J/mol); tau=tau0*(T/T0)*exp(E/R*(1/T-1/T0)).")
         ("mat.porosity", opt::list()->default_value("[0.0]"),
          "Porosity of the materials '[d0, d1, d2, ...]' (no unit)")
         ("mat.hydraulic_perm", opt::list()->default_value("[1e-14]"),
          "Intrinsic permeability of the materials '[d0, d1, d2, ...]' (m^2)")
-        ("mat.matrix_storage", opt::list()->default_value("[0]"),
-         "Immobile matrix reservoir storage per bulk volume in 1/Pa.")
-        ("mat.matrix_exchange", opt::list()->default_value("[0]"),
-         "Explicit exchange coefficient between transport and matrix pressure in 1/(Pa s).")
-        ("mat.permeability_tensor", opt::list()->default_value("[1,1,1,0,0,0]"),
-         "Dimensionless SPD permeability tensor [xx,yy,zz,xy,xz,yz], multiplying hydraulic_perm.")
         ("mat.fluid_rho0", opt::list()->default_value("[1000]"),
          "Reference fluid density for Darcy gravity and saturated mixture weight '[d0, d1, d2, ...]' (kg/m^3)")
         ("mat.fluid_heat_capacity", opt::list()->default_value("[4180]"),
@@ -1615,12 +1593,9 @@ static void check_mpi_support(const Param& p)
             die(EXIT_CONFIG_VALUE);
         }
     }
-    // Saturated pore pressure, wells, fluid point sources, hydraulic boundaries,
-    // anisotropic permeability and matrix exchange run distributed. The
-    // coupled models below advance fields that only the serial kernels update.
-    const auto any_positive = [](const double_vec& v) {
-        return std::any_of(v.begin(), v.end(), [](double x) { return x > 0; });
-    };
+    // Saturated pore pressure, wells, fluid point sources and hydraulic
+    // boundaries run distributed. The coupled models below advance fields that
+    // only the serial kernels update.
     const auto any_nonzero = [](const int_vec& v) {
         return std::any_of(v.begin(), v.end(), [](int x) { return x != 0; });
     };
@@ -1628,15 +1603,11 @@ static void check_mpi_support(const Param& p)
                              p.bc.stress_bc_y1, p.bc.stress_bc_z0, p.bc.stress_bc_z1};
     struct Feature { const char* name; bool used; };
     const Feature features[] = {
-        {"control.hydraulic_content_model = 1", p.control.hydraulic_content_model != 0},
         {"control.has_thermal_pressurization", p.control.has_thermal_pressurization},
         {"control.has_shear_heating", p.control.has_shear_heating},
         {"control.has_fluid_thermal_advection", p.control.has_fluid_thermal_advection},
         {"heat point sources", p.heat_injection.enabled},
         {"fluid injected at a temperature", !p.injection.temperature.empty()},
-        {"mat.porosity_model", p.mat.porosity_model != 0},
-        {"mat.permeability_model", p.mat.permeability_model != 0},
-        {"mat.pore_healing_time", any_positive(p.mat.pore_healing_time)},
         {"mat.retention_model", any_nonzero(p.mat.retention_model)},
         {"bc.vbc_z1 = 8", p.bc.vbc_z1 == 8},
         {"bc.stress_bc_* = 4", std::find(std::begin(stress_bc), std::end(stress_bc), 4) != std::end(stress_bc)},
@@ -2535,41 +2506,6 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         // Hydraulic parameters
         get_numbers(vm, "mat.porosity", p.mat.porosity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.hydraulic_perm", p.mat.hydraulic_perm, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.permeability_exponent", p.mat.permeability_exponent, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.pore_healing_time", p.mat.pore_healing_time, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.pore_healing_temperature", p.mat.pore_healing_temperature, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.pore_healing_energy", p.mat.pore_healing_energy, p.mat.nmat, nmat_key, true);
-        for (int m = 0; m < p.mat.nmat; ++m) {
-            const double tau = p.mat.pore_healing_time[m], t0 = p.mat.pore_healing_temperature[m];
-            const double energy = p.mat.pore_healing_energy[m];
-            if (!(tau >= 0 && std::isfinite(tau) && t0 > 0 && std::isfinite(t0) &&
-                  energy >= 0 && std::isfinite(energy)))
-                die(EXIT_CONFIG_VALUE, "Pore recovery requires finite nonnegative time/activation energy and positive reference temperature.");
-            if (tau > 0 && (p.mat.porosity_model != 1 ||
-                            !(p.mat.rheol_type & MatProps::rh_plastic) ||
-                            !p.control.has_poroelastic_pressure_feedback))
-                die(EXIT_CONFIG_VALUE, "Pore recovery requires porosity_model=1, plastic rheology and coupled pressure feedback.");
-        }
-        for (double exponent : p.mat.permeability_exponent)
-            if (!(exponent > 0 && std::isfinite(exponent)))
-                die(EXIT_CONFIG_VALUE, "mat.permeability_exponent must be positive and finite.");
-        get_numbers(vm, "mat.matrix_storage", p.mat.matrix_storage, p.mat.nmat, nmat_key, true);
-        get_numbers(vm, "mat.matrix_exchange", p.mat.matrix_exchange, p.mat.nmat, nmat_key, true);
-        for (int m = 0; m < p.mat.nmat; ++m) {
-            const double c = p.mat.matrix_storage[m], h = p.mat.matrix_exchange[m];
-            if (!(std::isfinite(c) && c >= 0 && std::isfinite(h) && h >= 0) ||
-                (h > 0 && !(c > 0 && p.control.has_hydraulic_diffusion)))
-                die(EXIT_CONFIG_VALUE, "Matrix exchange requires positive storage and active hydraulic transport.");
-        }
-        get_numbers(vm, "mat.permeability_tensor", p.mat.permeability_tensor, 6, "six tensor components");
-        {
-            const double_vec &k = p.mat.permeability_tensor;
-            const double det = k[0]*k[1]*k[2] + 2*k[3]*k[4]*k[5]
-                             - k[0]*k[5]*k[5] - k[1]*k[4]*k[4] - k[2]*k[3]*k[3];
-            if (!std::all_of(k.begin(), k.end(), [](double x) { return std::isfinite(x); }) ||
-                !(k[0] > 0 && k[0]*k[1] > k[3]*k[3] && det > 0))
-                die(EXIT_CONFIG_VALUE, "mat.permeability_tensor must be symmetric positive definite.");
-        }
         get_numbers(vm, "mat.fluid_rho0", p.mat.fluid_rho0, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_heat_capacity", p.mat.fluid_heat_capacity, p.mat.nmat, nmat_key, true);
         get_numbers(vm, "mat.fluid_alpha", p.mat.fluid_alpha, p.mat.nmat, nmat_key, true);
@@ -2618,47 +2554,11 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
         if (p.control.has_thermal_pressurization &&
             !(p.control.has_hydraulic_diffusion && p.control.has_thermal_diffusion))
             die(EXIT_CONFIG_VALUE, "Thermal pressurization requires hydraulic and thermal diffusion.");
-        if (p.mat.porosity_model < 0 || p.mat.porosity_model > 1 ||
-            p.mat.permeability_model < 0 || p.mat.permeability_model > 2)
-            die(EXIT_CONFIG_VALUE, "mat.porosity_model must be 0 or 1; mat.permeability_model must be 0, 1 or 2.");
-        if (p.control.hydraulic_content_model < 0 || p.control.hydraulic_content_model > 1)
-            die(EXIT_CONFIG_VALUE,"control.hydraulic_content_model must be 0 or 1.");
-        if (p.control.hydraulic_content_model == 1) {
-            if (!(p.control.has_hydraulic_diffusion && p.control.has_poroelastic_pressure_feedback &&
-                  p.control.is_quasi_static && p.mat.porosity_model == 1 &&
-                  (p.mat.rheol_type & MatProps::rh_elastic)))
-                die(EXIT_CONFIG_VALUE,"Finite-density content requires coupled quasistatic hydraulics, porosity_model=1 and elastic bulk response.");
-            if (has_temperature_transport(p) &&
-                !(p.control.has_thermal_pressurization && p.control.has_fluid_thermal_advection))
-                die(EXIT_CONFIG_VALUE,"Finite-density heat transport requires thermal pressurization and fluid thermal advection.");
-            if (p.control.surface_process_option != 0 ||
-                (p.mat.nmat > 1 && p.mat.phase_change_option != 0) ||
-                std::any_of(p.mat.matrix_exchange.begin(),p.mat.matrix_exchange.end(),[](double h) { return h > 0; }))
-                die(EXIT_CONFIG_VALUE,"Finite-density content does not yet support surface processes, phase conversion or matrix exchange.");
-            for (int m = 0; m < p.mat.nmat; ++m) {
-                if (!(p.mat.rho0[m] > 0 && std::isfinite(p.mat.rho0[m]) &&
-                      p.mat.alpha[m] >= 0 && std::isfinite(p.mat.alpha[m]) &&
-                      p.mat.fluid_alpha[m] >= 0 && std::isfinite(p.mat.fluid_alpha[m]) &&
-                      p.mat.heat_capacity[m] >= 0 && std::isfinite(p.mat.heat_capacity[m]) &&
-                      p.mat.fluid_heat_capacity[m] > 0 && std::isfinite(p.mat.fluid_heat_capacity[m])))
-                    die(EXIT_CONFIG_VALUE,"Finite-density content requires positive solid density/fluid heat capacity and nonnegative solid heat capacity.");
-                if (p.mat.fluid_rho0[m] != p.mat.fluid_rho0[0] ||
-                    p.mat.fluid_bulk_modulus[m] != p.mat.fluid_bulk_modulus[0] ||
-                    p.mat.fluid_alpha[m] != p.mat.fluid_alpha[0] ||
-                    p.mat.fluid_heat_capacity[m] != p.mat.fluid_heat_capacity[0] ||
-                    p.mat.fluid_visc[m] != p.mat.fluid_visc[0])
-                    die(EXIT_CONFIG_VALUE,"Finite-density content requires one common fluid across solid materials.");
-            }
-        }
-        if ((p.mat.porosity_model || p.mat.permeability_model) && !p.control.has_hydraulic_diffusion)
-            die(EXIT_CONFIG_VALUE, "Evolving hydraulic properties require has_hydraulic_diffusion=true.");
         if (p.control.has_hydraulic_diffusion) {
             const auto positive = [](double x) { return x > 0 && std::isfinite(x); };
             for (int m = 0; m < p.mat.nmat; ++m) {
                 const double phi = p.mat.porosity[m];
                 const double alpha = p.mat.biot_coeff[m];
-                if ((p.mat.porosity_model || p.mat.permeability_model) && !(phi > 0 && phi < 1))
-                    die(EXIT_CONFIG_VALUE, "Evolving hydraulic properties require 0 < mat.porosity < 1.");
                 if (!(phi >= 0 && phi <= alpha && alpha <= 1) ||
                     !positive(p.mat.bulk_modulus[m]) ||
                     !(p.mat.shear_modulus[m] >= 0 && std::isfinite(p.mat.shear_modulus[m])) ||
@@ -2702,14 +2602,9 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             }
             if (active && !p.control.has_hydraulic_diffusion)
                 die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 requires has_hydraulic_diffusion=true.");
-            // Each of these changes the pore volume or exchanges fluid in ways the
-            // unsaturated content balance does not account for.
-            const bool exchange = std::any_of(p.mat.matrix_exchange.begin(), p.mat.matrix_exchange.end(),
-                                              [](double h) { return h > 0; });
-            if (active && (p.mat.porosity_model || p.mat.permeability_model ||
-                           p.control.has_thermal_pressurization || p.control.has_fluid_thermal_advection || exchange))
-                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 does not yet support evolving "
-                    "porosity/permeability, thermal coupling or matrix exchange.");
+            // The unsaturated content balance does not account for thermal coupling.
+            if (active && (p.control.has_thermal_pressurization || p.control.has_fluid_thermal_advection))
+                die(EXIT_CONFIG_VALUE, "mat.retention_model > 0 does not yet support thermal coupling.");
         }
         // Rate-and-state friction parameters
         get_numbers(vm, "mat.direct_a", p.mat.direct_a, p.mat.nmat, nmat_key, true);

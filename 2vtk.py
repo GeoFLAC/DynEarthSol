@@ -94,13 +94,9 @@ from numpy.linalg  import eigh
 from fractions import Fraction
 from Dynearthsol import Dynearthsol
 
-# Fields that a frame holds only under some fluid-flow, heat-coupling or shear-heating options.
-OPTIONAL_NODE_FIELDS = ('fluid mass', 'hydraulic split buffer', 'solid mass',
-                        'solid heat capacity', 'pending temperature increment')
-OPTIONAL_ELEM_FIELDS = ('porosity', 'permeability', 'matrix pressure', 'saturation',
-                        'pore dilation', 'plastic volume increment',
-                        'effective saturation', 'relative permeability', 'bulk density',
-                        'shear heating', 'pending shear heat')
+# Fields that a frame holds only under some fluid-flow or shear-heating options.
+OPTIONAL_ELEM_FIELDS = ('saturation', 'effective saturation', 'relative permeability',
+                        'bulk density', 'shear heating', 'pending shear heat')
 
 # Save in ASCII or encoded binary.
 # Some old VTK programs cannot read binary VTK files.
@@ -374,7 +370,6 @@ def process_single_frame(args):
         #convert_field(des, frame, 'tmass', fvtu)
         #convert_field(des, frame, 'volume_n', fvtu)
         convert_field(des, frame, 'pore pressure', fvtu)
-        convert_optional_fields(des, frame, OPTIONAL_NODE_FIELDS, fvtu)
 
         # node number for debugging
         vtk_dataarray(fvtu, np.arange(nnode, dtype=np.int32), 'node number')

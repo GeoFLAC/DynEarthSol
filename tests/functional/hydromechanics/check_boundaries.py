@@ -143,7 +143,6 @@ def main():
                          hbc_schedule_ratio='[1,1,-0.5,0]')
         if mode == 'flux-side':
             cfg['bc'].update(hbc_z1='0', hbc_x0='3', hbc_flux='[-1e-7,0,0,0,0,0]')
-        cfg['mat']['permeability_tensor'] = '[2,1,1,0,0.3,0]'
         case = output / mode
         restart_check(exe, cfg, case, 4, 1)
         model = Dynearthsol(str(case/'fresh'))

@@ -9,9 +9,6 @@
 
 namespace {
 
-    // Gas constant (J mol^-1 K^-1) of the Chen & Morgan creep law and of pore healing.
-    constexpr double gas_constant = 8.3144;
-
     #pragma acc routine seq
     inline double rsf_slip_rate_eff(double slip_rate)
     {
@@ -188,7 +185,6 @@ double ref_pressure(const Param& param, double z)
 MatProps::MatProps(const Param& p, const Variables& var) :
   rheol_type(p.mat.rheol_type),
   nmat(p.mat.nmat),
-  permeability_model(p.mat.permeability_model),
   fluid_thermal_advection(p.control.has_fluid_thermal_advection),
   has_retention(std::any_of(p.mat.retention_model.begin(), p.mat.retention_model.end(),
                             [](int m) { return m != retention_saturated; })),
@@ -206,8 +202,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   elemmarkers(*var.elemmarkers),
   log_table(*var.log_table),
   tan_table(*var.tan_table),
-  sin_table(*var.sin_table),
-  pore_strain(var.pore_strain)
+  sin_table(*var.sin_table)
 {
     rho0 = p.mat.rho0;
     alpha = p.mat.alpha;
@@ -242,26 +237,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
 
     // Hydraulic parameters
     porosity = p.mat.porosity;
-    matrix_storage = p.mat.matrix_storage;
-    matrix_exchange = p.mat.matrix_exchange;
     hydraulic_perm = p.mat.hydraulic_perm;
-    permeability_exponent = p.mat.permeability_exponent;
-    pore_healing_time = p.mat.pore_healing_time;
-    pore_healing_temperature = p.mat.pore_healing_temperature;
-    pore_healing_energy = p.mat.pore_healing_energy;
-    const double_vec &t = p.mat.permeability_tensor;
-    const int slot[3][3] = {{0,3,4},{3,1,5},{4,5,2}};
-    perm_bound = 0;
-    for (int i = 0; i < NDIMS; ++i) {
-        double row = 0;
-        for (int j = 0; j < NDIMS; ++j) {
-            const int a = (NDIMS == 2 && i == 1) ? 2 : i;
-            const int b = (NDIMS == 2 && j == 1) ? 2 : j;
-            perm_tensor[i][j] = t.empty() ? double(i == j) : t[slot[a][b]];
-            row += std::abs(perm_tensor[i][j]);
-        }
-        perm_bound = std::max(perm_bound, row);
-    }
     fluid_rho0 = p.mat.fluid_rho0;
     fluid_alpha = p.mat.fluid_alpha;
     fluid_bulk_modulus = p.mat.fluid_bulk_modulus;
@@ -284,6 +260,8 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
     // under -ffast-math and on openacc=1 (device -> host libm).
     {
+        // J mol^-1 K^-1, as the Chen & Morgan creep law uses it.
+        const double gas_constant = 8.3144;
         const int nm = nmat;   // == visc_exponent.size(); nmat is the bound visc() loops to
         visc_pow_edot.resize(nm);
         visc_coef_term.resize(nm);
@@ -359,8 +337,6 @@ MatProps::~MatProps()
 
     // Deleting hydraulic properties
     #pragma acc exit data delete(porosity,hydraulic_perm,fluid_rho0,fluid_alpha,fluid_bulk_modulus,fluid_visc,biot_coeff,bulk_modulus_s)
-    #pragma acc exit data delete(permeability_exponent)
-    #pragma acc exit data delete(pore_healing_time,pore_healing_temperature,pore_healing_energy)
     // Deleting rate-and-state friction properties
     #pragma acc exit data delete(direct_a,evolution_b,characteristic_velocity,characteristic_distance)
     // #pragma acc exit data delete(static_friction_coefficient)
@@ -863,50 +839,12 @@ double MatProps::k(int e) const
 // hydraulic parameters
 double MatProps::phi(int e) const
 {
-    return pore_strain ? biot_porosity(phi0(e), alpha_biot(e), (*pore_strain)[e]) : phi0(e);
-}
-
-double MatProps::phi0(int e) const
-{
     return cache_props[std::size_t(e) * MP_STRIDE + MPC_PHI];
 }
 
 double MatProps::perm(int e) const
 {
-    const double k0 = harmonic_mean(hydraulic_perm, elemmarkers[e]);
-    if (permeability_model == 2) {
-        if (k0 == 0) return k0;
-        return k0 * std::pow(phi(e) / phi0(e), arithmetic_mean(permeability_exponent, elemmarkers[e]));
-    }
-    return permeability_model == 1 ? kozeny_carman(k0, phi0(e), phi(e)) : k0;
-}
-
-double MatProps::pore_healing_rate(int e) const
-{
-    double t = 0, rate = 0;
-    int count = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j)
-        t += temperature[connectivity[e][j]]/NODES_PER_ELEM;
-    if (!(t > 0 && std::isfinite(t))) return std::numeric_limits<double>::quiet_NaN();
-    for (int m = 0; m < nmat; ++m) {
-        const int markers = elemmarkers[e][m];
-        count += markers;
-        if (markers == 0 || pore_healing_time[m] == 0) continue;
-        const double t0 = pore_healing_temperature[m];
-        rate += markers*(t0/t)/pore_healing_time[m] *
-                std::exp(-pore_healing_energy[m]/gas_constant*(1/t-1/t0));
-    }
-    return rate/count;
-}
-
-double MatProps::matrix_capacity(int e) const
-{
-    return matrix_storage.empty() ? 0 : arithmetic_mean(matrix_storage, elemmarkers[e]);
-}
-
-double MatProps::exchange(int e) const
-{
-    return matrix_exchange.empty() ? 0 : arithmetic_mean(matrix_exchange, elemmarkers[e]);
+    return harmonic_mean(hydraulic_perm, elemmarkers[e]);
 }
 
 double MatProps::alpha_solid(int e) const

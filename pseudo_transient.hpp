@@ -13,7 +13,6 @@ struct MechanicalState {
     double_vec stressyy, dpressure, viscosity;
     double_vec plstrain, delta_plstrain, dyn_fric_coeff, state_variable;
     double_vec shear_heat;
-    double_vec pore_plastic_increment;
     explicit MechanicalState(int nelem) : stress(nelem), strain(nelem),
           stressyy(nelem), dpressure(nelem), viscosity(nelem),
           plstrain(nelem), delta_plstrain(nelem), dyn_fric_coeff(nelem), state_variable(nelem) {}

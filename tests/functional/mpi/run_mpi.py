@@ -249,12 +249,11 @@ def main():
                 cfg["mat"]["hydraulic_perm"]="[1e-20]"
             if name=="hydraulic-sources":
                 # A well screen and a point source inside the mesh, so that they
-                # cross rank boundaries, with side flux, rotated permeability and
-                # matrix exchange: everything the distributed pressure step assembles.
+                # cross rank boundaries, with side flux: everything the
+                # distributed pressure step assembles.
                 x, z = float(cfg["mesh"]["xlength"]), float(cfg["mesh"]["zlength"])
                 y = float(cfg["mesh"].get("ylength", "0"))
-                cfg["mat"].update(hydraulic_perm="[1e-16]", permeability_tensor="[2, 1, 1.5, 0.2, 0.3, 0.1]",
-                                  matrix_storage="[1e-10]", matrix_exchange="[1e-17]")
+                cfg["mat"].update(hydraulic_perm="[1e-16]")
                 cfg["bc"].update(num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",
                                  well_z_top=f"[{-0.3*z}]", well_z_bottom=f"[{-0.7*z}]",
                                  well_rate="[1e-6]" if ndims==2 else "[1e-3]",

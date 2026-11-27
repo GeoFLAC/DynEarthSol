@@ -4791,11 +4791,6 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // Where the sources sit in the material, to place them again on the new mesh.
     const SourcePositions sources = source_positions(var);
 
-    if (var.fluid_pressure_consumed) {
-        #pragma acc wait
-        std::fill(var.dppressure->begin(),var.dppressure->end(),0.0);
-        var.fluid_pressure_consumed = false;
-    }
     ContentRemap fluid_remap(param,var);
 
     std::cout << "  Remeshing starts (#" << var.nremesh_prior + var.nremesh + 1
@@ -5113,10 +5108,9 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     // dt -- enough for an explicit CFL runaway to invert elements (then the step-10
     // compute_dt hits negative volumes and dies with "dt <= 0"). compute_mass below
     // consumes var.dt, so the refresh must come first.
-    if (var.fluid_split) fluid_remap.restore(param,var);
     var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
-    if (!var.fluid_split) fluid_remap.restore(param,var);
+    fluid_remap.restore(param,var);
 
 
     #pragma acc wait

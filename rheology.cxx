@@ -2164,7 +2164,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // is needed by Bishop increments and the effective-stress strength criterion.
         double dpp = 0.0;
         double pore_strength_pressure = 0;
-        const bool increment = has_hydraulic_diffusion && !var.fluid_pressure_consumed;
+        const bool increment = has_hydraulic_diffusion;
         const bool strength = param.control.has_hydraulic_diffusion &&
                               (var.mat->rheol_type & MatProps::rh_plastic);
         if (increment || strength) {
@@ -2213,8 +2213,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 
         double heat_start[NSTR];
         const double heat_syy_start = syy;
-        const double pore_start_trace = var.pore_plastic_increment ?
-            trace(s)+(var.mat->is_plane_strain ? syy : 0) : 0;
         if (shear_heating)
             for (int d = 0; d < NSTR; ++d) heat_start[d] = s[d];
         bool heat_maxwell = param.mat.rheol_type == MatProps::rh_maxwell;
@@ -2259,7 +2257,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
         // mesh by the nearest-neighbour remap at each remesh, growing a spurious nonzero halo
         // that diffuses out of the yielding zones. Resetting to 0 makes it a true per-step rate.
         delta_plstrain[e] = 0.;
-        if (var.pore_plastic_increment) (*var.pore_plastic_increment)[e] = 0;
 
         switch (param.mat.rheol_type) {
         case MatProps::rh_elastic:
@@ -2504,14 +2501,6 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
 //            std::cerr << "Error: unknown rheology type: " << rheol_type << "\n";
 //            std::exit(1);
             break;
-        }
-        if (var.pore_plastic_increment && !initial_equilibrium && !heat_maxwell) {
-            // The signed plastic volume is total strain minus the elastic
-            // bulk response. Plane strain includes the hidden normal stress.
-            const int dim = var.mat->is_plane_strain ? 3 : NDIMS;
-            const double final_trace = trace(s)+(var.mat->is_plane_strain ? syy : 0);
-            const double bulk = dim*(var.mat->bulkm(e)-2*var.mat->shearm(e)/3)+2*var.mat->shearm(e);
-            (*var.pore_plastic_increment)[e] = trace(de)-(final_trace-pore_start_trace-dim*dpp)/bulk;
         }
         if (shear_heating) {
             double heat = 0;

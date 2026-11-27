@@ -1,18 +1,9 @@
 #ifndef DYNEARTHSOL3D_HYDRAULICS_HPP
 #define DYNEARTHSOL3D_HYDRAULICS_HPP
 
-#include <cmath>
-
 #include "parameters.hpp"
 #include "matprops.hpp"
 #include "fields.hpp"
-
-// Constant-compressibility fluid density; rho0 is referenced to p=0 and T0.
-#pragma acc routine seq
-inline double fluid_density(const MatProps &mat, int e, double p, double t, double t0)
-{
-    return mat.rho_fluid_reference(e)*std::exp(mat.beta_fluid(e)*p-mat.alpha_fluid(e)*(t-t0));
-}
 
 // phi*fluid + (alpha - phi)*solid: a fluid and a grain property weighted by
 // the pore fraction and the rest of the Biot coefficient.
@@ -20,29 +11,6 @@ inline double fluid_density(const MatProps &mat, int e, double p, double t, doub
 inline double pore_weighted(double phi, double alpha, double fluid, double solid)
 {
     return phi*fluid+(alpha-phi)*solid;
-}
-
-struct FluidState {
-    double porosity, density;
-    double pressure_slope, temperature_slope; // derivatives of mass per bulk volume
-};
-
-// The saved element porosity anchors pressure/temperature at their element
-// means. Nodal storage samples this same law at each quadrature pressure/T.
-#pragma acc routine seq
-inline FluidState fluid_state(const MatProps &mat, int e, double p, double t, double t0,
-                              double phi, double reference_p, double reference_t,
-                              double volume_strain = 0, double recovery = 0)
-{
-    const double alpha = mat.alpha_biot(e);
-    const double beta_s = mat.beta_mineral(e), beta_f = mat.beta_fluid(e);
-    const double alpha_s = mat.alpha_solid(e), alpha_f = mat.alpha_fluid(e);
-    const double increment = -volume_strain-beta_s*(p-reference_p)+
-                             alpha_s*(t-reference_t)+recovery;
-    const double next = phi-(alpha-phi)*std::expm1(increment);
-    const double density = fluid_density(mat,e,p,t,t0);
-    return {next,density,density*pore_weighted(next,alpha,beta_f,beta_s),
-                        -density*pore_weighted(next,alpha,alpha_f,alpha_s)};
 }
 
 // Compliance for the recorded mean total stress: in-plane mean in 2D,
@@ -66,12 +34,11 @@ inline double hydraulic_inverse_biot_modulus(const MatProps &mat, int e)
 #pragma acc routine seq
 inline double hydraulic_temperature_change(const Variables &var, int e)
 {
-    if (!var.old_temperature && !var.pending_temperature) return 0;
+    if (!var.old_temperature) return 0;
     double change = 0;
     for (int i = 0; i < NODES_PER_ELEM; ++i) {
         const int n = (*var.connectivity)[e][i];
-        change += (var.pending_temperature ? (*var.pending_temperature)[n] :
-                   (*var.temperature)[n]-(*var.old_temperature)[n])/NODES_PER_ELEM;
+        change += ((*var.temperature)[n]-(*var.old_temperature)[n])/NODES_PER_ELEM;
     }
     return change;
 }
@@ -131,7 +98,7 @@ inline double hydraulic_storage(const MatProps &mat, int e)
 // stress, including when the mechanical mass is scaled. PT and the reduced
 // quasistatic flow model use the fixed-stress split and pending increment.
 #pragma acc routine seq
-inline bool hydraulic_explicit_coupling(const Param &param)
+inline bool hydraulic_strain_form(const Param &param)
 {
     return param.control.has_hydraulic_diffusion && !param.control.has_PT &&
            (!param.control.is_quasi_static ||
@@ -139,62 +106,16 @@ inline bool hydraulic_explicit_coupling(const Param &param)
 }
 
 #pragma acc routine seq
-inline bool hydraulic_strain_form(const Param &param)
-{
-    return param.control.hydraulic_content_model == 0 && hydraulic_explicit_coupling(param);
-}
-
-#pragma acc routine seq
 inline double hydraulic_storage(const Param &param, const MatProps &mat, int e)
 {
-    return hydraulic_explicit_coupling(param) ? hydraulic_inverse_biot_modulus(mat, e) :
+    return hydraulic_strain_form(param) ? hydraulic_inverse_biot_modulus(mat, e) :
                                        hydraulic_storage(mat, e);
-}
-
-// Element means of the nodal pore pressure and temperature, the state at which
-// an element's fluid properties are evaluated.
-#pragma acc routine seq
-inline void fluid_means(const Variables &var, int e, double &p, double &t)
-{
-    p = t = 0;
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = (*var.connectivity)[e][j];
-        p += (*var.ppressure)[n]/NODES_PER_ELEM;
-        t += (*var.temperature)[n]/NODES_PER_ELEM;
-    }
-}
-
-// fluid_state of element e at node n's pressure and temperature, about the
-// element means p, t (fluid_means) and the saved porosity.
-#pragma acc routine seq
-inline FluidState nodal_fluid_state(const Variables &var, int e, int n, double p, double t)
-{
-    return fluid_state(*var.mat,e,(*var.ppressure)[n],(*var.temperature)[n],
-                       var.fluid_reference_temperature,var.mat->phi(e),p,t);
-}
-
-// Minimum nodal tangent bounds the local undrained modulus. Density cancels
-// from the mass equation; the wave storage has units of inverse pressure.
-#pragma acc routine seq
-inline double hydraulic_wave_storage(const Variables &var, int e)
-{
-    if (!var.fluid_split || !(var.fluid_reference_temperature > 0))
-        return hydraulic_inverse_biot_modulus(*var.mat,e);
-    const auto conn = (*var.connectivity)[e];
-    double p, t;
-    fluid_means(var, e, p, t);
-    double storage = hydraulic_inverse_biot_modulus(*var.mat,e);
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const auto state = nodal_fluid_state(var,e,conn[j],p,t);
-        storage = std::min(storage,state.pressure_slope/state.density);
-    }
-    return storage;
 }
 
 #pragma acc routine seq
 inline double hydraulic_diffusivity(const Param &param, const MatProps &mat, int e)
 {
-    return mat.perm_bound * mat.perm(e) / mat.mu_fluid(e) / hydraulic_storage(param, mat, e);
+    return mat.perm(e) / mat.mu_fluid(e) / hydraulic_storage(param, mat, e);
 }
 
 // Bulk density with the pores filled to saturation sat. Gravity passes the
@@ -204,26 +125,6 @@ inline double hydraulic_bulk_density(const MatProps &mat, int e, double sat = 1)
 {
     const double phi = mat.phi(e);
     return mat.rho(e) * (1 - phi) + mat.rho_fluid_reference(e) * phi * sat;
-}
-
-// Owned nodal solid mass and actual fluid content determine physical weight.
-// volume_n is the sum of patch volumes (without simplex lumping).
-#pragma acc routine seq
-inline double hydraulic_bulk_density(const Param &param, const Variables &var, int e, double sat = 1)
-{
-    if (!var.fluid_split) return hydraulic_bulk_density(*var.mat,e,sat);
-    double p, t, strain = 0, density = 0;
-    for (int d = 0; d < NDIMS; ++d) strain += (*var.strain)[e][d];
-    const double ratio = param.control.has_moving_mesh ? 1 : std::exp(strain);
-    const auto conn = (*var.connectivity)[e];
-    fluid_means(var, e, p, t);
-    for (int j = 0; j < NODES_PER_ELEM; ++j) {
-        const int n = conn[j];
-        const auto state = nodal_fluid_state(var,e,n,p,t);
-        density += (*var.solid_mass)[n]/(*var.volume_n)[n]+
-                   ratio*state.density*state.porosity/NODES_PER_ELEM;
-    }
-    return density;
 }
 
 // Marker-weighted relative permeability of an element's materials at pressure p.
@@ -336,7 +237,7 @@ void reset_hydraulic_assembly(const Param &param, Variables &var);
 // Seed the transport timestep before the first step and after material/remesh
 // changes. The pressure update also refreshes this bound from current properties.
 void refresh_hydraulic_diffusivity(const Param &param, const Variables &var);
-// Physical Darcy volume flux (m/s); tensor, retention and gravity conventions
+// Physical Darcy volume flux (m/s); retention and gravity conventions
 // match pressure assembly. Reuse caller-owned gradients when supplied.
 #pragma acc routine seq
 void hydraulic_element_flux(const Param &param, const Variables &var, int e, double *q,
@@ -350,41 +251,9 @@ void well_screen_positions(const Variables &var, double_vec &ends);
 // rate integrated exactly against the linear shape functions along its pieces.
 // The pieces move with the mesh, so it changes only when they are placed.
 void assemble_well_source(const Param &param, const Variables &var);
-// Advance only accepted physical strain and pressure increments; etmp is scratch.
-void update_porosity(const Variables &var);
-void prepare_pore_recovery(const Variables &var);
-double nodal_fluid_mass(const Param &param, const Variables &var, int n);
-void initialize_fluid_content(const Param &param, Variables &var);
-double_vec hydraulic_reference(const Param &param);
-
-// Reused physical-step workspace. The generating dt is captured before mesh
-// motion can select the following step's dt; PT trials never advance it.
-class HydraulicStep {
-public:
-    void begin(const Param &param, const Variables &var);
-    void advance(const Param &param, Variables &var);
-    void correct_mechanics(const Param &param, Variables &var) const;
-private:
-    double interval = 0, start_time = 0;
-    elem_cache reference, transport, heat_transport;
-    double_vec pressure, temperature, initial_mass, initial_split;
-    double_vec mass, target, lag, rate, row, outgoing, boundary_rate, source_rate;
-    double_vec candidate, candidate_mass;
-    double_vec energy, initial_energy, energy_rate, heat_row, heat_source, source_heat, boundary_heat;
-    double_vec candidate_temperature, candidate_energy, pending_energy;
-    array_t initial_velocity;
-    double_vec initial_inertia;
-    double content(const Param &param, const Variables &var, int n, double p, double t,
-                   double fraction, double &slope, double *thermal_slope = nullptr) const;
-    double invert(const Param &param, const Variables &var, int n, double fraction,
-                  double value, double guess, double t) const;
-    bool equilibrate(const Param &param, const Variables &var, int n, double fraction,
-                     double mass_target, double energy_target, double &p, double &t) const;
-};
 
 // One exact-overlap transfer for fluid inventories and pending shear energy.
-// The linear model applies a storage-weighted correction; finite-density
-// mass and sensible energy use global constraints and explicit boundary flows.
+// The linear model applies a storage-weighted correction.
 class ContentRemap {
 public:
     ContentRemap(const Param &param, const Variables &var);
@@ -392,18 +261,14 @@ public:
                   const conn_t &old_connectivity);
     void restore(const Param &param, Variables &var) const;
 private:
-    bool linear, nonlinear, active;
+    bool linear, active;
     elem_cache old_content;
     shapefn outside;
-    double total[3] = {};
-    double magnitude[3] = {};
-    double mapped[3] = {};
-    Array2D<double,6*NODES_PER_ELEM> inventory;
-    Array2D<double,6> projected;
-    double physical_total[6] = {}, physical_mapped[6] = {};
+    double total[2] = {};
+    double magnitude[2] = {};
+    double mapped[2] = {};
     double_vec heat_density, mapped_heat;
     double heat_total = 0;
-    void restore_inventory(const Param &param, Variables &var) const;
 };
 
 // Hydraulic state changes belong to initialization or accepted physical steps;

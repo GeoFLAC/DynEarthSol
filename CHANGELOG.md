@@ -51,20 +51,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   using shared-node connectivity and a communication volume objective; meshes with
   no more elements than ranks use recursive coordinate bisection, and a one-rank
   GPU run keeps every element on its rank.
-- `control.hydraulic_content_model=1` enables saturated finite-density water
-  inventory and retained sensible heat with evolving Biot porosity. Output
-  separates physical water mass from the numerical fixed-stress buffer;
-  remeshing and restart carry water, solid mass and heat capacity explicitly.
-  The default linear model remains unchanged.
-
-- `mat.pore_healing_time` enables recovery of accepted plastic pore dilation,
-  with temperature dependence from `pore_healing_temperature` and
-  `pore_healing_energy`. Recovery changes porosity, permeability and the fluid
-  source; elastic changes and permanent compaction are excluded.
-
-- `mat.permeability_model=2` uses `k=k0*(phi/phi0)^n`, with positive material
-  exponents from `mat.permeability_exponent` (default `[3]`).
-
 - `control.has_shear_heating` integrates the nonelastic heating proposed in
   [#88](https://github.com/GeoFLAC/DynEarthSol/pull/88), including plastic
   earthquake deformation and EP-RSF. Accepted energy survives timestep
@@ -111,20 +97,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   heat capacity, with prescribed thermal boundaries and stable substeps even
   for a fixed outer timestep. A schematic and analytical Ogata–Banks comparison
   document its constant-capacity transport scope.
-- Explicit hydraulic transport supports a rotated SPD permeability tensor,
-  scheduled pressure/flux boundaries and a checkpointed fluid-balance diagnostic.
+- Explicit hydraulic transport supports scheduled pressure/flux boundaries and
+  a checkpointed fluid-balance diagnostic.
   Large fixed timesteps use stable hydraulic substeps.
 - Explicit unsaturated (Richards) transport, selected per material by
   `mat.retention_model` (van Genuchten-Mualem, Brooks-Corey-Burdine or Gardner),
   and an initial hydrostatic water table, `ic.water_table_z`. Saturated
   materials and the default inputs give unchanged results.
 - Optional thermal pressurization couples fluid/solid expansion to accepted
-  physical steps. Optional immobile matrix reservoirs exchange fluid with
-  transport pressure and retain their pressure through checkpoints/remeshing.
-
-- Optional Biot porosity evolution (`mat.porosity_model=1`) and Kozeny-Carman
-  permeability (`mat.permeability_model=1`) follow accepted physical steps,
-  continue through checkpoints/remeshing, and expose current properties in output.
+  physical steps.
 
 - Vertical rate-controlled wells (`bc.num_wells`, `bc.well_*`) pump or inject
   through a screen with a shared rate schedule. Each step applies the exact
@@ -391,9 +372,9 @@ For a release, the full auto-generated list of merged pull requests is in its
   Mohr-Coulomb return with exit 54, or wrong eigenvalues as success.
 
 - Fixed-property saturated remeshing preserves global linear Biot excess
-  content, its pending pressure buffer and immobile storage separately.
-  Geometric domain transfer and prescribed-pressure reactions have their
-  own report; evolving/retentive mass and thermal energy remain separate work.
+  content and its pending pressure buffer separately. Geometric domain
+  transfer and prescribed-pressure reactions have their own report;
+  retentive mass and thermal energy remain separate work.
 
 - Explicit and GVS restarts execute a quality/remesh stage pending at the
   checkpoint, preserving continuation when that stage changes the mesh.

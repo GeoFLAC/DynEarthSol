@@ -1815,10 +1815,10 @@ double compute_dt(const Param& param, Variables& var,
                 dt_thermal_advection = std::min(dt_thermal_advection, 0.5*minh/speed);
         }
 
-        if (hydraulic_explicit_coupling(param)) {
+        if (hydraulic_strain_form(param)) {
             const double alpha = var.mat->alpha_biot(e);
             const double modulus = var.mat->bulkm(e) + 4.0/3.0*var.mat->shearm(e) +
-                alpha*alpha / hydraulic_wave_storage(var, e);
+                alpha*alpha / hydraulic_inverse_biot_modulus(*var.mat, e);
             if (!param.control.is_quasi_static) {
                 const double speed = std::sqrt(modulus / hydraulic_bulk_density(*var.mat, e));
                 dt_hydro_wave = std::min(dt_hydro_wave, minh / (5*speed));
@@ -1891,7 +1891,7 @@ double compute_dt(const Param& param, Variables& var,
     var.max_global_vel_mag = global_max_vem;
     var.global_dt_min = global_dt_min;
 
-    if (hydraulic_explicit_coupling(param) && param.control.is_quasi_static) {
+    if (hydraulic_strain_form(param) && param.control.is_quasi_static) {
         const double scale = param.control.inertial_scaling *
             (param.control.use_global_velocity_scaling ? global_max_vem : max_vbc_val);
         dt_hydro_wave = hydro_wave_length/scale;

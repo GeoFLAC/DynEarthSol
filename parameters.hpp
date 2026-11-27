@@ -262,7 +262,6 @@ struct Control {
     bool has_thermal_diffusion;
     bool has_fluid_thermal_advection;
     bool has_hydraulic_diffusion;
-    int hydraulic_content_model = 0;
     bool has_poroelastic_pressure_feedback = true;
     bool has_thermal_pressurization;
     bool has_shear_heating = false;
@@ -543,14 +542,8 @@ struct Mat {
     double_vec dilation_angle0, dilation_angle1;
 
     // hydraulic parameters
-    int porosity_model;
-    int permeability_model;
-    double_vec permeability_exponent;
-    double_vec pore_healing_time, pore_healing_temperature, pore_healing_energy;
     double_vec porosity;
     double_vec hydraulic_perm;
-    double_vec matrix_storage, matrix_exchange; // immobile reservoir capacity (1/Pa), exchange (1/Pa/s)
-    double_vec permeability_tensor; // common dimensionless symmetric tensor: xx yy zz xy xz yz
     double_vec fluid_rho0;  // pore fluid density
     double_vec fluid_heat_capacity;
     double_vec fluid_alpha; // pore fluid thermal expansivity
@@ -1018,21 +1011,9 @@ struct Variables {
     // For hydraulic processes
     double_vec *ppressure = nullptr; // pore pressure
     double_vec *dppressure = nullptr; // delta pore pressure
-    double_vec *matrix_pressure = nullptr; // immobile reservoir pressure per element
     double_vec *old_temperature = nullptr; // physical-step baseline, never a PT history
     double_vec *shear_heat = nullptr; // accepted nonelastic power density (W/m^3)
     double_vec *pending_heat = nullptr; // undeposited physical energy per element (J; J/m in 2D)
-    double_vec *pore_strain = nullptr; // porosity history; physical steps only
-    double_vec *pore_dilation = nullptr; // remaining recoverable plastic volume strain
-    double_vec *pore_plastic_increment = nullptr; // constitutive trial, signed volume strain
-    double_vec *pore_recovery = nullptr; // frozen closure strain for this physical step
-    double_vec *fluid_split = nullptr; // extensive numerical fixed-stress buffer, never water
-    bool fluid_pressure_consumed = false; // raw pressure increment already applied to stress
-    double_vec *solid_mass = nullptr; // material mass carried by nodes (kg; kg/m in 2D)
-    double_vec *solid_capacity = nullptr; // material heat capacity carried by nodes (J/K; J/m/K)
-    double_vec *pending_temperature = nullptr; // accepted increment awaiting mechanical consumption
-    double_vec *energy_balance = nullptr; // sensible energy change, sources, carried heat, boundary reactions, error
-    double fluid_reference_temperature = 0; // EOS reference, preserved when temperature boundaries change
     double_vec *fluid_source = nullptr; // nodal well extraction rate at schedule ratio 1 (m^3/s; m^2/s in 2D)
     PointSourceOwners fluid_points, heat_points; // [injection] and [heat_injection]
     WellPieces well_pieces;

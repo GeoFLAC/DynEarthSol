@@ -39,32 +39,12 @@ void allocate_variables(const Param &param, Variables& var)
     var.edvoldt = new double_vec(e);
 
     allocate_hydraulic_state(var);
-    if (param.control.hydraulic_content_model == 1) {
-        var.fluid_reference_temperature = param.bc.surface_temperature;
-        var.fluid_split = new double_vec(n,0);
-        var.solid_mass = new double_vec(n,0);
-        var.solid_capacity = new double_vec(n,0);
-        var.pending_temperature = new double_vec(n,0);
-        if (has_temperature_transport(param)) var.energy_balance = new double_vec(6,0);
-        var.fluid_balance->assign(6,0);
-    }
     allocate_source_fields(param, var);
-    if (std::any_of(param.mat.matrix_exchange.begin(), param.mat.matrix_exchange.end(),
-                    [](double h) { return h > 0; }))
-        var.matrix_pressure = new double_vec(e, 0);
     if (param.control.has_thermal_pressurization)
         var.old_temperature = new double_vec(var.nnode);
     if (param.control.has_shear_heating) {
         var.shear_heat = new double_vec(e, 0);
         var.pending_heat = new double_vec(e, 0);
-    }
-    if (param.mat.porosity_model)
-        var.pore_strain = new double_vec(e, 0);
-    if (std::any_of(param.mat.pore_healing_time.begin(), param.mat.pore_healing_time.end(),
-                    [](double t) { return t > 0; })) {
-        var.pore_dilation = new double_vec(e,0);
-        var.pore_plastic_increment = new double_vec(e,0);
-        var.pore_recovery = new double_vec(e,0);
     }
 
     {
@@ -126,13 +106,6 @@ void reallocate_variables(const Param& param, Variables& var)
     const int n = var.nnode;
     const int e = var.nelem;
 
-    if (var.fluid_split) {
-        var.fluid_split->resize(n);
-        var.solid_mass->resize(n);
-        var.solid_capacity->resize(n);
-        var.pending_temperature->resize(n);
-    }
-
     delete var.volume;
     delete var.volume_n;
     var.volume = new double_vec(e);
@@ -150,7 +123,6 @@ void reallocate_variables(const Param& param, Variables& var)
   
     delete var.edvoldt;
     var.edvoldt = new double_vec(e);
-    if (var.pore_recovery) var.pore_recovery->assign(e, 0.0);
 
 
     delete var.dpressure;
@@ -780,7 +752,7 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
                     sat = element_mean_saturation(*var.mat, (*var.elemmarkers)[e],
                                                   (*var.connectivity)[e], *var.ppressure);
                 const double density = param.control.has_hydraulic_diffusion
-                    ? hydraulic_bulk_density(param,var,e,sat) : var.mat->rho(e);
+                    ? hydraulic_bulk_density(*var.mat,e,sat) : var.mat->rho(e);
                 buoy = density * param.control.gravity / NODES_PER_ELEM;
             }
 

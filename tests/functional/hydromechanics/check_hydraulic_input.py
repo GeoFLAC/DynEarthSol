@@ -25,23 +25,6 @@ def main():
             ('ic', {'water_table_z': 'nan'}),
             ('ic', {'water_table_z': 'inf'}),
             ('ic', {'water_table_z': '-inf'}),
-            ('mat', {'permeability_tensor': '[1,1,1,2,0,0]'}),
-            ('mat', {'permeability_model': '3'}),
-            ('mat', {'permeability_exponent': '[0]'}),
-            ('mat', {'permeability_exponent': '[-1]'}),
-            ('mat', {'permeability_exponent': '[nan]'}),
-            ('mat', {'permeability_exponent': '[inf]'}),
-            ('mat', {'pore_healing_time': '[-1]'}),
-            ('mat', {'pore_healing_time': '[nan]'}),
-            ('mat', {'pore_healing_time': '[inf]'}),
-            ('mat', {'pore_healing_temperature': '[0]'}),
-            ('mat', {'pore_healing_temperature': '[nan]'}),
-            ('mat', {'pore_healing_energy': '[-1]'}),
-            ('mat', {'pore_healing_energy': '[inf]'}),
-            ('mat', {'pore_healing_time': '[1]', 'porosity_model': '0'}),
-            ('mat', {'pore_healing_time': '[1]', 'porosity_model': '1'}),
-            ('mat', {'matrix_exchange': '[1]', 'matrix_storage': '[0]'}),
-            ('mat', {'matrix_exchange': '[-1]'}),
             ('bc', {'hbc_z1': '4'}),
             ('bc', {'num_hbc_schedule': '2', 'hbc_schedule_time_in_yr': '[1,0]',
                     'hbc_schedule_ratio': '[1,1]'}),
@@ -52,9 +35,6 @@ def main():
             ('mat', {'retention_model': '[2]', 'retention_n': '[0]'}),
             ('mat', {'retention_model': '[3]', 'residual_saturation': '[1]'}),
             ('mat', {'retention_model': '[1]', 'porosity': '[0]'}),
-            # Valid laws in combinations whose content balance is not implemented.
-            ('mat', {'retention_model': '[1]', 'retention_n': '[1.6]', 'porosity_model': '1'}),
-            ('mat', {'retention_model': '[3]', 'matrix_storage': '[1e-9]', 'matrix_exchange': '[1e-6]'}),
         ]
         for section, updates in extra:
             cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')

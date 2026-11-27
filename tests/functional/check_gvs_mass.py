@@ -24,7 +24,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable',type=Path)
     parser.add_argument('output',type=Path)
-    parser.add_argument('--content-model',type=int,choices=(0,1),default=0)
     parser.add_argument('--moving-mesh',action='store_true')
     args = parser.parse_args()
     executable, output = args.executable.resolve(), args.output.resolve()
@@ -49,14 +48,7 @@ def main():
         cfg['ic']['has_body_force_adjustment'] = 'false'
         cfg['mat'].update(bulk_modulus='[2e7]', shear_modulus='[1e7]', alpha='[0]')
         cfg['control']['has_moving_mesh'] = str(args.moving_mesh)
-        if args.content_model:
-            cfg['control'].update(has_hydraulic_diffusion='true',has_poroelastic_pressure_feedback='true',
-                                  hydraulic_content_model='1')
-            cfg['mat'].update(porosity_model='1',hydraulic_perm='[0]',retention_model='[0]',
-                              fluid_bulk_modulus='[1e6]')
-            cfg['bc'].update(hbc_x1='0',stress_val_z1='-10000')
-        timeout = 900 if args.content_model else 60
-        run_des(executable, folder, 'input', cfg, timeout)
+        run_des(executable, folder, 'input', cfg, 60)
         model = Dynearthsol(str(folder / 'fresh'))
         rows = scan_frames(str(folder / 'fresh'))
         times = {r['frame']: r['time'] for r in rows}
@@ -94,15 +86,13 @@ def main():
         assert scale_max / scale_min > 100, 'GVS did not change its scale enough to exercise mass updates'
         cfg['sim'].update(modelname='resumed', is_restarting='true',
                           restarting_from_modelname='fresh', restarting_from_frame='16')
-        run_des(executable, folder, 'restart', cfg, timeout)
+        run_des(executable, folder, 'restart', cfg, 60)
         resumed = Dynearthsol(str(folder / 'resumed'))
         fresh_steps = {r['steps']: r for r in rows}
         for row in scan_frames(str(folder / 'resumed')):
             fresh = fresh_steps[row['steps']]
             assert row['time'] == fresh['time']
-            names = ('coordinate','velocity','stress','strain','temperature')
-            if args.content_model: names += ('pore pressure','fluid mass','hydraulic split buffer')
-            for field in names:
+            for field in ('coordinate','velocity','stress','strain','temperature'):
                 np.testing.assert_array_equal(model.read_field(fresh['frame'], field),
                                               resumed.read_field(row['frame'], field))
         summary[ceiling] = dict(dimension=int(dim), frames=len(model.frames),
@@ -111,7 +101,7 @@ def main():
                                 exact_restart=True)
     assert digest(executable) == executable_hash
     (output / 'summary.json').write_text(json.dumps(dict(executable_sha256=executable_hash,
-                                                        content_model=args.content_model,moving_mesh=args.moving_mesh,
+                                                        moving_mesh=args.moving_mesh,
                                                         cases=summary), indent=2) + '\n')
     print(json.dumps(summary))
 

@@ -30,7 +30,6 @@ def analyze(config, until=None):
     assert cfg.getboolean('control', 'has_poroelastic_pressure_feedback', fallback=False)
     assert not cfg.getboolean('control', 'has_moving_mesh', fallback=False)
     assert not cfg.getboolean('control', 'has_thermal_pressurization', fallback=False)
-    assert cfg.getint('mat', 'porosity_model', fallback=0) == 0
     assert not any(json.loads(cfg.get('mat', 'retention_model', fallback='[0]')))
 
     def prop(name):

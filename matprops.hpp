@@ -1,24 +1,8 @@
 #ifndef DYNEARTHSOL3D_MATPROPS_HPP
 #define DYNEARTHSOL3D_MATPROPS_HPP
 
-#include <cmath>
 #include "parameters.hpp"
 #include "unsaturated.hpp"
-
-// Eulerian Biot porosity: eps is the accumulated volume/grain-pressure strain.
-#pragma acc routine seq
-inline double biot_porosity(double phi0, double alpha, double eps)
-{
-    return alpha == phi0 ? phi0 : phi0 - (alpha - phi0) * std::expm1(-eps);
-}
-
-#pragma acc routine seq
-inline double kozeny_carman(double k0, double phi0, double phi)
-{
-    const double pore = phi / phi0;
-    const double solid = (1 - phi0) / (1 - phi);
-    return k0 * pore * pore * pore * solid * solid;
-}
 
 #pragma acc routine seq
 double ref_pressure(const Param& param, double z);
@@ -32,10 +16,7 @@ public:
 
     const int rheol_type;
     const int nmat;
-    const int permeability_model;
     const bool fluid_thermal_advection;
-    double perm_tensor[NDIMS][NDIMS]; // constant shape; material magnitude is perm(e)
-    double perm_bound; // upper bound on the largest tensor eigenvalue
     double hydro_step_limit = 0; // rebuilt after storage/mesh changes, not checkpointed
     double thermal_step_limit = 0; // rebuilt after capacity/mesh changes, not checkpointed
 
@@ -61,19 +42,11 @@ public:
     #pragma acc routine seq
     double phi(int e) const;
     #pragma acc routine seq
-    double phi0(int e) const;
-    #pragma acc routine seq
     double perm(int e) const;
     #pragma acc routine seq
     double alpha_fluid(int e) const;
     #pragma acc routine seq
     double alpha_solid(int e) const;
-    #pragma acc routine seq
-    double matrix_capacity(int e) const;
-    #pragma acc routine seq
-    double exchange(int e) const;
-    #pragma acc routine seq
-    double pore_healing_rate(int e) const;
     #pragma acc routine seq
     double beta_fluid(int e) const;
     // Constant material reference density for Darcy gravity and mixture weight.
@@ -249,11 +222,7 @@ private:
     const double_vec &tan_table;
     const double_vec &sin_table;
 
-    double_vec matrix_storage, matrix_exchange;
     double_vec porosity, hydraulic_perm, fluid_rho0;
-    double_vec permeability_exponent;
-    double_vec pore_healing_time, pore_healing_temperature, pore_healing_energy;
-    const double_vec *pore_strain;
     double_vec fluid_alpha, fluid_bulk_modulus, fluid_visc;
     double_vec biot_coeff, bulk_modulus_s;
     std::vector<Retention> retention_laws;
