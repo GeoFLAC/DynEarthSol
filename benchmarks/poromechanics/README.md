@@ -2,9 +2,10 @@
 
 Inputs, analytical references and study runners live here. The complete theory,
 benchmark comparisons, application figures and figure scripts live in the
-[DES manual](https://geoflac.github.io/des3d/). Set `DES_DIR` to this checkout when using its
+[DES manual](https://geoflac.github.io/DynEarthSol/). Set `DES_DIR` to this checkout when using its
 `docs/benchmarks/poromechanics/img/_src/` figure scripts.
-The [implementation notes](https://geoflac.github.io/des3d/docs/theory/poromechanics) describe the solver.
+The [poromechanics theory](https://geoflac.github.io/DynEarthSol/docs/theory/poromechanics)
+describes the formulation and diagnostic fields.
 Generated study results are ignored by Git. Run and check them on a compute host.
 
 Build both CPU executables from the repository root, then run:
@@ -30,12 +31,11 @@ python3 benchmarks/poromechanics/consolidation.py --output benchmarks/poromechan
 
 Each study saves its configurations, logs, raw fields, metrics and provenance.
 
-The [implementation guide](https://geoflac.github.io/des3d/docs/developer/source-layout) describes physical-step
+The [implementation guide](https://geoflac.github.io/DynEarthSol/docs/developer/source-layout) describes physical-step
 ownership and restart boundaries. `check_boundaries.py` verifies scheduled
-top/side flux and pressure, balance and checkpoint continuation. The [explicit formulation](https://geoflac.github.io/des3d/docs/theory/poromechanics)
-describes the component tests and diagnostic fields.
+top/side flux and pressure, balance and checkpoint continuation.
 
-The [multi-well qualification](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/terzaghi)
+The [multi-well Theis benchmark](https://geoflac.github.io/DynEarthSol/docs/benchmarks/poromechanics/groundwater-flow/theis-wells)
 records the small-strain superposition limits, acceptance budgets and
 measured results. Run the cases sequentially:
 
@@ -101,4 +101,4 @@ python3 tests/functional/hydromechanics/check_reference_density.py ./dynearthsol
 - `averaged_aquifer_reference.py`: a thickness-averaged Biot pumping reference
   for an infinite aquifer or finite annulus, with numerical Laplace inversion
   for the finite case. Bear-Corapcioglu is a limiting case. See the
-  [derivation and storage convention](https://geoflac.github.io/des3d/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer).
+  [derivation and storage convention](https://geoflac.github.io/DynEarthSol/docs/benchmarks/poromechanics/poroelastic-consolidation/aquifer).
