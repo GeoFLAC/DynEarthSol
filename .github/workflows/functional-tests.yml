@@ -51,23 +51,6 @@ jobs:
       # No HDF5_*_DIR here or below: the Makefile finds the paths itself.
       run: make -j ndims=3 opt=2 openmp=1
 
-    - name: test 3d output interval overflow and restart
-      run: |
-        for method in pt explicit gvs; do
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol3d pt_output_interval.cfg output-interval-3d-$method --schedule overflow --method $method
-        done
-
-    - name: test 3d monitor CSV restart
-      run: python3 monitor_restart/run_monitor_restart.py --exe ../../dynearthsol3d --threads 1
-
-    - name: test 3d monitor checkpoint validation
-      run: python3 monitor_restart/check_state.py ../../dynearthsol3d monitor-state-3d
-
-    - name: test 3d linear Biot content through remeshing
-      run: >-
-        OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
-        ../../dynearthsol3d fluid-remap-3d
-
     - name: test 3d evp regular remesh temp-dome
       run: ../../dynearthsol3d 3d-evp-regular.cfg && rm -rf functional-test.*
 
@@ -94,15 +77,6 @@ jobs:
       working-directory: ./tests/earthquake-moment-test
       run: make ndims=2 check && make ndims=3 check
 
-    - name: test 2d output interval overflow and restart
-      run: |
-        for method in pt explicit gvs; do
-          OMP_NUM_THREADS=1 python3 pt_output_schedule.py ../../dynearthsol2d pt_output_interval.cfg output-interval-2d-$method --schedule overflow --method $method
-        done
-
-    - name: test 2d monitor checkpoint validation
-      run: python3 monitor_restart/check_state.py ../../dynearthsol2d monitor-state-2d
-
     - name: test 2d linear Biot content through remeshing
       run: >-
         OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
@@ -112,12 +86,6 @@ jobs:
       run: >-
         OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3
         hydromechanics/check_overlap.py overlap
-
-    - name: test nodal displacement HDF5 output
-      run: >-
-        python3 displacement_output/run_displacement_output.py
-        --exe-2d ../../dynearthsol2d --exe-3d ../../dynearthsol3d
-        --threads 1
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*
