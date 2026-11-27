@@ -36,10 +36,11 @@ def stress_coupling(executable, output, dim, method, rheology):
     cfg['ic'].update(has_body_force_adjustment='false', weakzone_option='0',
                      initial_stress_option='1', initial_stress=json.dumps(initial),
                      pore_pressure_option='2', pore_pressure_value='0')
-    reset_boundaries(cfg['bc'], vbc='3', vbc_val='0', stress_bc='0', hbc='2')
-    cfg['bc'].update(hbc_pressure=json.dumps([pressure]*6), num_hbc_schedule='2',
-                     hbc_schedule_time_in_yr=json.dumps([0., 2*dt/YEAR2SEC]),
-                     hbc_schedule_ratio='[0,1]')
+    reset_boundaries(cfg['bc'], vbc='3', vbc_val='0', stress_bc='0', hbc='2', hbc_val=repr(pressure))
+    times = json.dumps([0., 2*dt/YEAR2SEC])
+    for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
+        cfg['bc'].update({f'num_hbc_period_{side}': '2', f'hbc_period_{side}_time_in_yr': times,
+                          f'hbc_period_{side}_ratio': '[0,1]'})
     cfg['mat'].update(rheology_type=rheology, is_plane_strain=str(dim == 2),
                       min_viscosity=repr(viscosity), max_viscosity=repr(viscosity),
                       biot_coeff=f'[{biot}]', hydraulic_perm='[0]',

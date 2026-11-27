@@ -62,9 +62,9 @@ def config(h):
     bc.update(stress_bc_z1='0', stress_val_z1='0')
     cfg['fluid_source'] = dict(num_wells='1', well_x='[0.0]', well_y='[0.0]',
                                well_screen_top='[0]', well_screen_bottom=f'[{-B}]',
-                               well_rate=f'[{-Q/4!r}]', num_well_schedule='3',
-                               well_schedule_time_in_yr='['+', '.join(repr(x/YEAR2SEC) for x in t)+']',
-                               well_schedule_ratio='[1, 1, 0]')
+                               well_rate=f'[{-Q/4!r}]', num_well_period='3',
+                               well_period_time_in_yr='['+', '.join(repr(x/YEAR2SEC) for x in t)+']',
+                               well_period_ratio='[1, 1, 0]')
     cfg['ic'].update(has_body_force_adjustment='false')
     cfg['mat'].update(material_options(dict(MAT, permeability=PERM)))
     return cfg

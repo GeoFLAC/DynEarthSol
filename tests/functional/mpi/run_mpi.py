@@ -249,12 +249,15 @@ def main():
                 cfg["mat"]["hydraulic_perm"]="[1e-20]"
             if name=="hydraulic-sources":
                 # A well screen and a point source inside the mesh, so that they
-                # cross rank boundaries, with side flux: everything the
+                # cross rank boundaries, with timed flux on two faces: everything the
                 # distributed pressure step assembles.
                 x, z = float(cfg["mesh"]["xlength"]), float(cfg["mesh"]["zlength"])
                 y = float(cfg["mesh"].get("ylength", "0"))
                 cfg["mat"].update(hydraulic_perm="[1e-16]")
-                cfg["bc"].update(hbc_x0="3", hbc_flux="[1e-12, 0, 0, 0, 0, 0]")
+                cfg["bc"].update(hbc_x0="3", hbc_val_x0="1e-12", num_hbc_period_x0="2",
+                                 hbc_period_x0_time_in_yr="[0,1e-5]", hbc_period_x0_ratio="[1,2]",
+                                 hbc_z1="3", hbc_val_z1="-1e-12", num_hbc_period_z1="2",
+                                 hbc_period_z1_time_in_yr="[0,1e-5]", hbc_period_z1_ratio="[1,0]")
                 rate = "[-1e-6]" if ndims==2 else "[-1e-3]"
                 cfg["fluid_source"] = dict(
                     num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",

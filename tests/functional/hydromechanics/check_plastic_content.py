@@ -31,11 +31,11 @@ from des_case import digest, file_hashes, hydraulic_substeps, mean_stress_modulu
 from des_test_utils import compare_continuation, simplex_gradients, simplex_volumes
 
 def configuration(method, psi, elastic=False, flowing=False):
-    cfg = water.configuration(.5, DT, DURATION, method, 1e5, water.INFLOW)
+    cfg = water.configuration(.5, DT, DURATION, method, 1e5, inflow=0.)
     cfg['sim'].update(max_steps='100', max_time_in_yr='1e9')
     cfg['control']['fixed_dt'] = repr(DT)
     reset_boundaries(cfg['bc'], vbc='1', hbc='0')
-    cfg['bc'].update(hbc_flux='[0,0,0,0,0,0]', vbc_val_z1=repr(-SPEED), stress_bc_z1='0')
+    cfg['bc'].update(vbc_val_z1=repr(-SPEED), stress_bc_z1='0')
     cfg['mat'].update(rheology_type='elastic' if elastic else 'elasto-plastic', is_plane_strain='true',
                       biot_coeff=f'[{ALPHA}]', porosity=f'[{PHI}]', bulk_modulus=f'[{BULK}]',
                       shear_modulus=f'[{SHEAR}]', fluid_bulk_modulus=f'[{FLUID}]', bulk_modulus_s=f'[{GRAIN}]',

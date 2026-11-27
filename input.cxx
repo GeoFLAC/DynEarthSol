@@ -81,11 +81,11 @@ static void declare_parameters(opt::Registry &cfg,
         ("fluid_source.well_rate", opt::list()->default_value("[]"),
          "Fluid volume supplied by each well at schedule ratio 1, spread uniformly over the "
          "screen: m^3/s in 3D, m^2/s per unit out-of-plane length in 2D. Negative extracts.")
-        ("fluid_source.num_well_schedule", opt::value<int>(&p.bc.num_well_schedule)->default_value(1),
+        ("fluid_source.num_well_period", opt::value<int>(&p.bc.num_well_period)->default_value(1),
          "Number of points in the rate schedule shared by all wells.")
-        ("fluid_source.well_schedule_time_in_yr", opt::list()->default_value("[0]"),
+        ("fluid_source.well_period_time_in_yr", opt::list()->default_value("[0]"),
          "Non-decreasing times of the shared well schedule (in yr). Repeated times are steps.")
-        ("fluid_source.well_schedule_ratio", opt::list()->default_value("[1]"),
+        ("fluid_source.well_period_ratio", opt::list()->default_value("[1]"),
          "Multiplier applied to every well rate, linear between the schedule times and held "
          "outside them. Each hydraulic substep uses its exact time average.")
         ;
@@ -703,31 +703,27 @@ static void declare_parameters(opt::Registry &cfg,
         ;
 
     // pore pressure boundary condition
-    const char *hydraulic_boundary_help = "Hydraulic boundary type. 0: no normal flow; 1: hold the initial nodal pressure; 2: "
-         "prescribed bc.hbc_pressure entry (Pa), multiplied by the boundary schedule; 3: "
-         "prescribed bc.hbc_flux entry (m/s, positive outward), multiplied by the boundary "
-         "schedule. Lists use x0 x1 y0 y1 z0 z1 order; y sides apply only in 3D.";
+    const char *hydraulic_boundary_help = "Hydraulic boundary type. 0: no normal flow; "
+         "1: hold the initial nodal pressure; 2: prescribed pressure; 3: prescribed Darcy flux. "
+         "Types 2 and 3 use the face's value and period table. Y faces apply only in 3D.";
     int *const hbc[6] = {&p.bc.hbc_x0, &p.bc.hbc_x1, &p.bc.hbc_y0,
                          &p.bc.hbc_y1, &p.bc.hbc_z0, &p.bc.hbc_z1};
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < nbdrytypes_hydro; ++i) {
         const std::string side = side_name[i];
         cfg.add_options()
             (("bc.hbc_" + side).c_str(), opt::value<int>(hbc[i])->default_value(0),
              hydraulic_boundary_help)
+            (("bc.hbc_val_" + side).c_str(), opt::value<double>(&p.bc.hbc_val[i])->default_value(0),
+             "Face value at ratio 1: pressure in Pa for type 2 or outward Darcy flux in m/s for type 3.")
+            (("bc.num_hbc_period_" + side).c_str(), opt::value<int>(&p.bc.num_hbc_period[i])->default_value(1),
+             "Number of entries in the face's period table.")
+            (("bc.hbc_period_" + side + "_time_in_yr").c_str(), opt::list()->default_value("[0]"),
+             "Non-decreasing times in years. Repeated times give a step.")
+            (("bc.hbc_period_" + side + "_ratio").c_str(), opt::list()->default_value("[1]"),
+             "Multipliers of the face value, linear between times and held outside them. "
+             "Pressure uses the end of each substep and flux uses the exact time average.")
             ;
     }
-    cfg.add_options()
-        ("bc.hbc_pressure", opt::list()->default_value("[0,0,0,0,0,0]"),
-         "Pressure in Pa for hbc=2, ordered x0 x1 y0 y1 z0 z1.")
-        ("bc.hbc_flux", opt::list()->default_value("[0,0,0,0,0,0]"),
-         "Outward Darcy flux in m/s for hbc=3, ordered x0 x1 y0 y1 z0 z1.")
-        ("bc.num_hbc_schedule", opt::value<int>(&p.bc.num_hbc_schedule)->default_value(1),
-         "Number of shared boundary schedule points.")
-        ("bc.hbc_schedule_time_in_yr", opt::list()->default_value("[0]"),
-         "Boundary schedule times in years, nondecreasing; repeated times are steps.")
-        ("bc.hbc_schedule_ratio", opt::list()->default_value("[1]"),
-         "Ratios multiplying prescribed pressure and flux.")
-        ;
 
     // General stress (Neumann) boundary conditions
     const char *stress_boundary_help = "Stress boundary type. 0: no added traction; 1: x normal-stress component; 2: y "
@@ -1475,21 +1471,20 @@ static double points_to_metres(const std::string &unit, int n,
 }
 
 
-// Read a schedule of count (>= 1) points from the lists times_name (in yr) and
-// ratios_name. Times must be non-decreasing; otherwise stop with unsorted_msg.
-static void parse_schedule(const opt::Registry &vm, int count, const char *count_name,
-                           const char *times_name, double_vec &times,
-                           const char *ratios_name, double_vec &ratios,
-                           const char *unsorted_msg)
+static void parse_period(const opt::Registry &vm, int count, const std::string &count_name,
+                         const std::string &name, double_vec &times, double_vec &ratios)
 {
     if (count < 1) {
-        const std::string msg = std::string(count_name) + " must be positive.";
+        const std::string msg = count_name + " must be positive.";
         die(EXIT_CONFIG_VALUE, msg.c_str());
     }
-    get_numbers(vm, times_name, times, count, count_name);
-    get_numbers(vm, ratios_name, ratios, count, count_name);
-    if (! std::is_sorted(times.begin(), times.end()))
-        die(EXIT_CONFIG_VALUE, unsorted_msg);
+    const std::string time_name = name + "_time_in_yr";
+    get_numbers(vm, time_name.c_str(), times, count, count_name.c_str());
+    get_numbers(vm, (name + "_ratio").c_str(), ratios, count, count_name.c_str());
+    if (!std::is_sorted(times.begin(), times.end())) {
+        const std::string msg = time_name + " must be non-decreasing.";
+        die(EXIT_CONFIG_VALUE, msg.c_str());
+    }
 }
 
 
@@ -2265,37 +2260,18 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             std::cerr << "Warning: mat.num_materials is 1, using simplest markers.replenishment_option.\n";
         }
 
-        // Each period table lists exactly num_vbc_period_* (>= 1) points in non-decreasing time:
-        // interp1 reads t[0] and ratio[i+1] for each time but the last; a repeated time is a step.
-        if (std::min({p.bc.num_vbc_period_x0, p.bc.num_vbc_period_x1,
-                      p.bc.num_vbc_period_y0, p.bc.num_vbc_period_y1}) < 1) {
-            die(EXIT_CONFIG_VALUE, "bc.num_vbc_period_* must be positive.");
-        }
-        get_numbers(vm, "bc.vbc_period_x0_time_in_yr", p.bc.vbc_period_x0_time_in_yr, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
-        get_numbers(vm, "bc.vbc_period_x1_time_in_yr", p.bc.vbc_period_x1_time_in_yr, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
-        get_numbers(vm, "bc.vbc_period_y0_time_in_yr", p.bc.vbc_period_y0_time_in_yr, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
-        get_numbers(vm, "bc.vbc_period_y1_time_in_yr", p.bc.vbc_period_y1_time_in_yr, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
-        get_numbers(vm, "bc.vbc_period_x0_ratio", p.bc.vbc_period_x0_ratio, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0");
-        get_numbers(vm, "bc.vbc_period_x1_ratio", p.bc.vbc_period_x1_ratio, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1");
-        get_numbers(vm, "bc.vbc_period_y0_ratio", p.bc.vbc_period_y0_ratio, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0");
-        get_numbers(vm, "bc.vbc_period_y1_ratio", p.bc.vbc_period_y1_ratio, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1");
-        const std::pair<const char*, const double_vec*> period_times[] = {
-            {"vbc_period_x0_time_in_yr", &p.bc.vbc_period_x0_time_in_yr},
-            {"vbc_period_x1_time_in_yr", &p.bc.vbc_period_x1_time_in_yr},
-            {"vbc_period_y0_time_in_yr", &p.bc.vbc_period_y0_time_in_yr},
-            {"vbc_period_y1_time_in_yr", &p.bc.vbc_period_y1_time_in_yr},
-        };
-        for (const auto& t : period_times) {
-            if (! std::is_sorted(t.second->begin(), t.second->end())) {
-                std::cerr << "Error: bc." << t.first << " must be non-decreasing.\n";
-                die(EXIT_CONFIG_VALUE);
-            }
-        }
+        parse_period(vm, p.bc.num_vbc_period_x0, "bc.num_vbc_period_x0", "bc.vbc_period_x0",
+                     p.bc.vbc_period_x0_time_in_yr, p.bc.vbc_period_x0_ratio);
+        parse_period(vm, p.bc.num_vbc_period_x1, "bc.num_vbc_period_x1", "bc.vbc_period_x1",
+                     p.bc.vbc_period_x1_time_in_yr, p.bc.vbc_period_x1_ratio);
+        parse_period(vm, p.bc.num_vbc_period_y0, "bc.num_vbc_period_y0", "bc.vbc_period_y0",
+                     p.bc.vbc_period_y0_time_in_yr, p.bc.vbc_period_y0_ratio);
+        parse_period(vm, p.bc.num_vbc_period_y1, "bc.num_vbc_period_y1", "bc.vbc_period_y1",
+                     p.bc.vbc_period_y1_time_in_yr, p.bc.vbc_period_y1_ratio);
 
         if (p.bc.num_wells < 0) {
             die(EXIT_CONFIG_VALUE, "fluid_source.num_wells must be >= 0.");
         }
-        get_numbers(vm, "bc.hbc_pressure", p.bc.hbc_pressure, 6, "six boundaries");
         {
             if (p.ic.pore_pressure_option < 0 || p.ic.pore_pressure_option > 2 ||
                 !std::isfinite(p.ic.pore_pressure_value))
@@ -2304,18 +2280,18 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                 !(p.bc.hbc_x0 == 2 && p.bc.hbc_x1 == 2 && p.mesh.xlength > 0))
                 die(EXIT_CONFIG_VALUE, "Linear initial pressure needs prescribed pressures on x0 and x1.");
         }
-        get_numbers(vm, "bc.hbc_flux", p.bc.hbc_flux, 6, "six boundaries");
-        parse_schedule(vm, p.bc.num_hbc_schedule, "bc.num_hbc_schedule",
-                       "bc.hbc_schedule_time_in_yr", p.bc.hbc_schedule_time_in_yr,
-                       "bc.hbc_schedule_ratio", p.bc.hbc_schedule_ratio,
-                       "Boundary schedule times must be nondecreasing.");
         const int hbc[] = {p.bc.hbc_x0,p.bc.hbc_x1,p.bc.hbc_y0,p.bc.hbc_y1,p.bc.hbc_z0,p.bc.hbc_z1};
-        for (int i = 0; i < 6; ++i)
+        for (int i = 0; i < nbdrytypes_hydro; ++i) {
             if (hbc[i] < 0 || hbc[i] > 3)
                 die(EXIT_CONFIG_VALUE, "Hydraulic boundary types must be 0, 1, 2 or 3.");
-        require_finite({&p.bc.hbc_pressure, &p.bc.hbc_flux,
-                        &p.bc.hbc_schedule_time_in_yr, &p.bc.hbc_schedule_ratio},
-                       "Hydraulic boundary data must be finite.");
+            const std::string side = side_name[i];
+            parse_period(vm, p.bc.num_hbc_period[i], "bc.num_hbc_period_" + side,
+                         "bc.hbc_period_" + side, p.bc.hbc_period_time_in_yr[i], p.bc.hbc_period_ratio[i]);
+            if (!std::isfinite(p.bc.hbc_val[i]))
+                die(EXIT_CONFIG_VALUE, "Hydraulic face values must be finite.");
+            require_finite({&p.bc.hbc_period_time_in_yr[i], &p.bc.hbc_period_ratio[i]},
+                           "Hydraulic period data must be finite.");
+        }
         if (p.bc.num_wells > 0) {
             if (! p.control.has_hydraulic_diffusion) {
                 die(EXIT_CONFIG_VALUE, "fluid_source.num_wells > 0 requires control.has_hydraulic_diffusion.");
@@ -2336,13 +2312,11 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                     die(EXIT_CONFIG_VALUE);
                 }
             }
-            parse_schedule(vm, p.bc.num_well_schedule, "fluid_source.num_well_schedule",
-                           "fluid_source.well_schedule_time_in_yr", p.bc.well_schedule_time_in_yr,
-                           "fluid_source.well_schedule_ratio", p.bc.well_schedule_ratio,
-                           "fluid_source.well_schedule_time_in_yr must be non-decreasing.");
+            parse_period(vm, p.bc.num_well_period, "fluid_source.num_well_period",
+                         "fluid_source.well_period", p.bc.well_period_time_in_yr, p.bc.well_period_ratio);
             require_finite({&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
                             &p.bc.well_z_bottom, &p.bc.well_rate,
-                            &p.bc.well_schedule_time_in_yr, &p.bc.well_schedule_ratio},
+                            &p.bc.well_period_time_in_yr, &p.bc.well_period_ratio},
                            "Well coordinates, rates and schedules must be finite.");
         }
 

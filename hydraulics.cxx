@@ -49,28 +49,37 @@ inline int pressure_boundary(const int n, const Variables &var)
     return fixed;
 }
 
-// Pressure of a prescribed-pressure (type 2) side at schedule ratio; false for
-// a free node (side -1) or a type-1 side.
+// Type 2 sets a pressure value. Type 1 holds the node's pressure.
 #pragma acc routine seq
-inline bool prescribed_pressure(const Param &param, const Variables &var, int side, double ratio,
+inline bool prescribed_pressure(const Variables &var, int side, const double *boundary_value,
                                 double &value)
 {
     if (side < 0 || var.hbc_types[side] != 2) return false;
-    value = param.bc.hbc_pressure[side] * ratio;
+    value = boundary_value[side];
     return true;
 }
 
-// Exact mean of the well rate ratio over [t0, t1] (in s). The ratio is linear
-// between schedule times, a repeated time being a step, and held outside them.
-double schedule_mean(const double_vec &t, const double_vec &r, double t0, double t1)
+// Evaluate at a time in years. A repeated time takes the last value there,
+// with the first value giving the left limit used for boundary consistency.
+double period_value(const double_vec &t, const double_vec &r, double time, bool left_limit = false)
 {
+    if (t.empty()) return 1.0;
+    const auto next = left_limit ? std::lower_bound(t.begin(), t.end(), time)
+                                 : std::upper_bound(t.begin(), t.end(), time);
+    if (next == t.begin()) return r.front();
+    if (next == t.end()) return r.back();
+    const auto i = next - t.begin() - 1;
+    if (left_limit && *next == time) return r[i+1];
+    return r[i] + (r[i+1]-r[i])*(time-t[i])/(t[i+1]-t[i]);
+}
+
+// Exact mean of the piecewise-linear multiplier over [t0, t1] in seconds.
+double period_mean(const double_vec &t, const double_vec &r, double t0, double t1)
+{
+    if (t.empty()) return 1.0;
     const double a = t0 / YEAR2SEC, b = t1 / YEAR2SEC;
     const int n = static_cast<int>(t.size());
-    if (a == b) {
-        if (a < t.front()) return r.front();
-        const int i = int(std::upper_bound(t.begin(), t.end(), a) - t.begin()) - 1;
-        return i + 1 == n ? r.back() : r[i] + (r[i+1]-r[i])*(a-t[i])/(t[i+1]-t[i]);
-    }
+    if (a == b) return period_value(t, r, a);
     // Integral of y0 + slope*(s - s0) over the part of [s0, s1] inside [a, b].
     auto part = [a, b](double s0, double s1, double y0, double slope) {
         const double lo = std::max(a, s0), hi = std::min(b, s1);
@@ -84,18 +93,37 @@ double schedule_mean(const double_vec &t, const double_vec &r, double t0, double
     return sum / (b - a);
 }
 
-// Well and flux-boundary ratios over [start, stop] and the prescribed-pressure
-// ratio at stop.
-void schedule_ratios(const BC &bc, double start, double stop,
-                     double &well, double &boundary, double &pressure)
+double well_period_mean(const BC &bc, double start, double stop)
 {
-    const bool scheduled = !bc.hbc_schedule_ratio.empty();
-    well = bc.num_wells > 0 ?
-        schedule_mean(bc.well_schedule_time_in_yr, bc.well_schedule_ratio, start, stop) : 0.0;
-    boundary = scheduled ?
-        schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, start, stop) : 1.0;
-    pressure = scheduled ?
-        schedule_mean(bc.hbc_schedule_time_in_yr, bc.hbc_schedule_ratio, stop, stop) : 1.0;
+    return bc.num_wells > 0 ?
+        period_mean(bc.well_period_time_in_yr, bc.well_period_ratio, start, stop) : 0.0;
+}
+
+// Evaluate each face once: pressure at the endpoint and flux over the interval.
+void hydraulic_boundary_values(const BC &bc, const Variables &var, double start, double stop,
+                               double *values)
+{
+    for (int side = 0; side < nbdrytypes_hydro; ++side) {
+        const int type = var.hbc_types[side];
+        if (type < 2) continue;
+        values[side] = bc.hbc_val[side] * period_mean(bc.hbc_period_time_in_yr[side],
+            bc.hbc_period_ratio[side], type == 2 ? stop : start, stop);
+    }
+}
+
+bool same_prescribed_pressure(const BC &bc, int i, int j)
+{
+    const auto &ti = bc.hbc_period_time_in_yr[i], &tj = bc.hbc_period_time_in_yr[j];
+    const auto &ri = bc.hbc_period_ratio[i], &rj = bc.hbc_period_ratio[j];
+    const double pi = bc.hbc_val[i], pj = bc.hbc_val[j];
+    if (ti.empty() && tj.empty()) return pi == pj;
+    if (pi == pj && ti == tj && ri == rj) return true;
+    // Equality at both sides of every knot also covers each linear interval.
+    const auto agrees = [&](double time) {
+        return pi*period_value(ti,ri,time,true) == pj*period_value(tj,rj,time,true) &&
+               pi*period_value(ti,ri,time) == pj*period_value(tj,rj,time);
+    };
+    return std::all_of(ti.begin(), ti.end(), agrees) && std::all_of(tj.begin(), tj.end(), agrees);
 }
 
 // Fixed-stress lag L = alpha^2*compliance, in 1/Pa.
@@ -407,14 +435,16 @@ void validate_hydraulic_boundaries(const Param &param, const Variables &var)
     // Imported boundary tags need not be box faces. Only actual shared nodes
     // constrain two prescribed values; type 2 takes precedence over type 1.
     const uint tags[nbdrytypes_hydro] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
+    const char *const names[nbdrytypes_hydro] = {"x0", "x1", "y0", "y1", "z0", "z1"};
     for (int i = 0; i < nbdrytypes_hydro; ++i) {
         if (var.hbc_types[i] != 2) continue;
         for (int j = 0; j < i; ++j) {
-            if (var.hbc_types[j] != 2 || param.bc.hbc_pressure[i] == param.bc.hbc_pressure[j]) continue;
+            if (var.hbc_types[j] != 2 || same_prescribed_pressure(param.bc, i, j)) continue;
             const uint both = tags[i] | tags[j];
             for (int n = 0; n < var.nnode; ++n) {
                 if (((*var.bcflag)[n] & both) != both) continue;
-                std::cerr << "Node " << n << ": bc.hbc_pressure[" << j << "] and [" << i << "] disagree.\n";
+                std::cerr << "Node " << n << ": prescribed pressures on " << names[j]
+                          << " and " << names[i] << " disagree over their period tables.\n";
                 die(EXIT_CONFIG_VALUE, "Intersecting prescribed-pressure tags must agree at their shared nodes.");
             }
         }
@@ -425,23 +455,20 @@ void validate_hydraulic_boundaries(const Param &param, const Variables &var)
 void initial_hydrostatic_state(const Param &param, const Variables &var,
                                double_vec &ppressure, double_vec &dppressure)
 {
-    // Prescribed pressures at the start, scaled by their schedule as the pressure
-    // step scales them; the linear profile runs between the scaled end values.
-    const double ratio = param.bc.hbc_schedule_ratio.empty() ? 1 :
-        schedule_mean(param.bc.hbc_schedule_time_in_yr, param.bc.hbc_schedule_ratio,
-                      var.time, var.time);
+    double boundary_value[nbdrytypes_hydro] = {};
+    hydraulic_boundary_values(param.bc, var, var.time, var.time, boundary_value);
     if (param.ic.pore_pressure_option != 0) {
-        const double a = param.bc.hbc_pressure[0] * ratio, b = param.bc.hbc_pressure[1] * ratio;
+        const double a = boundary_value[0], b = boundary_value[1];
         for (int n = 0; n < var.nnode; ++n) {
             double p = param.ic.pore_pressure_option == 1 ?
                 a + (b-a)*(*var.coord)[n][0]/param.mesh.xlength : param.ic.pore_pressure_value;
-            prescribed_pressure(param, var, pressure_boundary(n, var), ratio, p);
+            prescribed_pressure(var, pressure_boundary(n, var), boundary_value, p);
             ppressure[n] = p; dppressure[n] = 0;
         }
         return;
     }
     for (int n = 0; n < var.nnode; ++n)
-        if (prescribed_pressure(param, var, pressure_boundary(n, var), ratio, ppressure[n]))
+        if (prescribed_pressure(var, pressure_boundary(n, var), boundary_value, ppressure[n]))
             dppressure[n] = 0;
     if (param.control.gravity == 0) return;
 
@@ -562,12 +589,13 @@ static void pressure_step(const Param &param, const Variables &var,
     const bool has_points = param.injection.enabled;
     if (has_points)
         assemble_point_sources(param.injection,var.fluid_points,var,time-dt,time,*var.fluid_point_source);
-    double well_ratio, boundary_ratio, pressure_ratio;
-    schedule_ratios(param.bc, time - dt, time, well_ratio, boundary_ratio, pressure_ratio);
+    const double well_ratio = well_period_mean(param.bc, time - dt, time);
+    double boundary_value[nbdrytypes_hydro] = {};
+    hydraulic_boundary_values(param.bc, var, time - dt, time, boundary_value);
     #pragma acc wait
     double prescribed_flux = 0;
     flux_facets(var,[&](int side, int e, int f, double area) {
-        const double q = boundary_ratio * param.bc.hbc_flux[side] * area;
+        const double q = boundary_value[side] * area;
         if (e < mpi_ee) prescribed_flux += q * dt;
         for (int k = 0; k < NODES_PER_FACET; ++k)
             tmp_result[e][NODE_OF_FACET[f][k]] += q / NODES_PER_FACET;
@@ -577,10 +605,11 @@ static void pressure_step(const Param &param, const Variables &var,
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) \
-        firstprivate(has_wells, has_points, well_ratio, pressure_ratio, dt, mpi_ne) \
+        firstprivate(has_wells, has_points, well_ratio, boundary_value, dt, mpi_ne) \
         reduction(+:stored, wells, boundary) reduction(|:bad_point_storage)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:stored, wells, boundary) reduction(|:bad_point_storage) firstprivate(has_points, mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector copyin(boundary_value[0:nbdrytypes_hydro]) \
+        reduction(+:stored, wells, boundary) reduction(|:bad_point_storage) firstprivate(has_points, mpi_ne)
     for (int n = 0; n < mpi_ne; n++) {
         tdot[n] = 0.0;
         {
@@ -602,7 +631,7 @@ static void pressure_step(const Param &param, const Variables &var,
         if (side < 0 && mass > 0)
             increment = tdot[n] * dt / mass;
         else if (side >= 0 && var.hbc_types[side] == 2)
-            increment = p0 - param.bc.hbc_pressure[side] * pressure_ratio;
+            increment = p0 - boundary_value[side];
         const double change = -mass * increment;
         ppressure[n] = p0 - increment;
         dppressure[n] += increment;

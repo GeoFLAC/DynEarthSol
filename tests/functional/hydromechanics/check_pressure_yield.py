@@ -59,8 +59,9 @@ def config(ndims, h, steps, mode='pt', scaling=1e5, pt_option=None):
     bc = cfg['bc']
     for side in ('x0', 'x1', 'y0', 'y1', 'z0'):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
-    bc.update(stress_bc_z1='3', stress_val_z1=repr(-Q), hbc_z1='2', hbc_pressure=f'[0,0,0,0,0,{DP!r}]', num_hbc_schedule='2',
-              hbc_schedule_time_in_yr=f'[0, {DURATION/YEAR2SEC!r}]', hbc_schedule_ratio='[0, 1]')
+    bc.update(stress_bc_z1='3', stress_val_z1=repr(-Q), hbc_z1='2', hbc_val_z1=repr(DP),
+              num_hbc_period_z1='2', hbc_period_z1_time_in_yr=f'[0, {DURATION/YEAR2SEC!r}]',
+              hbc_period_z1_ratio='[0, 1]')
     cfg['ic'].update(pore_pressure_option='0', weakzone_option='0')
     m = MAT
     cfg['mat'].update(rheology_type='elasto-plastic', rho0=f"[{m['rho_solid']!r}]", bulk_modulus=f"[{m['bulk']!r}]",

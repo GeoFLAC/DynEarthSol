@@ -49,7 +49,7 @@ def config(spacing, dt, wells):
                      well_rate=str([-q for _, _, q in wells]),
                      well_screen_top=str([0.]*len(wells)),
                      well_screen_bottom=str([-ct.B]*len(wells)),
-                     well_schedule_time_in_yr=str([0., PUMP/ct.YEAR2SEC, PUMP/ct.YEAR2SEC]))
+                     well_period_time_in_yr=str([0., PUMP/ct.YEAR2SEC, PUMP/ct.YEAR2SEC]))
     return cfg
 
 

@@ -44,7 +44,7 @@ def config(ndims, rheology, confinement, pressure, biot):
     bc = cfg['bc']
     reset_boundaries(bc, vbc='1', vbc_val='0', hbc='0')
     bc.update(vbc_val_x1=repr(STRAIN/STEPS), vbc_val_z1=repr(-STRAIN/STEPS),
-              stress_bc_z1='0', hbc_pressure='[0,0,0,0,0,0]')
+              stress_bc_z1='0')
     nstr = ndims*(ndims+1)//2
     initial = [-confinement]*ndims + [0.]*(nstr-ndims)
     cfg['ic'].update(weakzone_option='0', initial_stress_option='1', initial_stress=json.dumps(initial),

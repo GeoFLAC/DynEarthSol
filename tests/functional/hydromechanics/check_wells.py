@@ -50,9 +50,9 @@ def config(dim, edge):
                                well_x=f'[{0.0 if edge else L / 2}]',
                                well_y=f'[{0.0 if edge else L / 2}]',
                                well_screen_top='[0]', well_screen_bottom=f'[{-H}]',
-                               well_rate=f'[{-Q}]', num_well_schedule='5',
-                               well_schedule_time_in_yr='[' + ', '.join(repr(x / YEAR2SEC) for x in t) + ']',
-                               well_schedule_ratio='[1, 1, 0, 0, -0.5]')
+                               well_rate=f'[{-Q}]', num_well_period='5',
+                               well_period_time_in_yr='[' + ', '.join(repr(x / YEAR2SEC) for x in t) + ']',
+                               well_period_ratio='[1, 1, 0, 0, -0.5]')
     cfg['mat'].update(material_options(MAT))
     return cfg, Q
 

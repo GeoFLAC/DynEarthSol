@@ -97,8 +97,7 @@ def configuration(h, dt, duration, method, scaling, inflow):
     for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
         cfg['bc'].update({f'vbc_{side}': '0' if side == 'z1' else '1',
                           f'vbc_val_{side}': '0', f'hbc_{side}': '0'})
-    cfg['bc'].update(hbc_z1='2', hbc_z0='3', hbc_pressure='[0,0,0,0,0,0]',
-                     hbc_flux=f'[0,0,0,0,{-inflow!r},0]', stress_val_z1='0')
+    cfg['bc'].update(hbc_z1='2', hbc_z0='3', hbc_val_z0=repr(-inflow), stress_val_z1='0')
     cfg['ic'].update(weakzone_option='0', has_body_force_adjustment='false',
                      pore_pressure_option='2', pore_pressure_value='0')
     cfg['mat'].update(material_options(PROPS), rho0='[2650]', fluid_rho0='[1000]', fluid_alpha='[0]', alpha='[0]')
@@ -114,7 +113,8 @@ def checkpoint_field(model, frame, name):
 
 def analyze(folder, method):
     cfg = read_config(folder/'input.cfg')
-    inflow = -json.loads(cfg['bc']['hbc_flux'])[4]
+    bc = cfg['bc']
+    inflow = -(bc.getfloat('hbc_val_z0') if 'hbc_val_z0' in bc else json.loads(bc['hbc_flux'])[4])
     pressure_scale = inflow*REF.height/MOBILITY
     model = Dynearthsol(str(folder/'column')); dim = int(model.ndims)
     rows = scan_frames(str(folder/'column'))

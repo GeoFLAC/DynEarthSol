@@ -51,7 +51,7 @@ def config(h, steps, duration):
                           has_moving_mesh='false', fixed_dt=repr(duration/steps), has_thermal_diffusion='false')
     bc = cfg['bc']
     bc.update(vbc_x0='1', vbc_val_x0='0', vbc_x1='0', vbc_z0='1', vbc_val_z0='0', vbc_z1='8',
-              hbc_x0='0', hbc_x1='2', hbc_z0='0', hbc_z1='0', hbc_pressure='[0,0,0,0,0,0]',
+              hbc_x0='0', hbc_x1='2', hbc_z0='0', hbc_z1='0',
               stress_bc_z1='3', stress_val_z1=repr(-P))
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
     cfg['mat'].update(material_options(MAT))

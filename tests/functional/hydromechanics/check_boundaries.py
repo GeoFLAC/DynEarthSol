@@ -25,7 +25,9 @@ def mesh_tags(exe, output):
             ('disjoint', 1, 32, (1, 5), (0, 1000, 0, 0, 0, 0), 0),
             ('shared', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 0), 11),
             ('shared-axis', 1, 1, (0, 1), (0, 1000, 0, 0, 0, 0), 11),
-            ('equal-shared', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 0)):
+            ('equal-shared', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 0),
+            ('equal-scaled', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 2000), 0),
+            ('shared-period', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 11)):
         folder = output/name; folder.mkdir()
         poly = folder/'boundary.poly'
         poly.write_text(f'''4 2 0 0
@@ -54,8 +56,15 @@ def mesh_tags(exe, output):
                               inertial_scaling='1e5', characteristic_speed='1e-5')
         for i, side in enumerate(('x0', 'x1', 'y0', 'y1', 'z0', 'z1')):
             cfg['bc'].update({f'hbc_{side}': '2' if i in active else '0',
+                              f'hbc_val_{side}': str(values[i]),
                               f'vbc_{side}': '3', f'vbc_val_{side}': '0'})
-        cfg['bc'].update(hbc_pressure=json.dumps(values), stress_bc_z1='0')
+        cfg['bc']['stress_bc_z1'] = '0'
+        if name == 'equal-scaled':
+            cfg['bc']['hbc_period_z1_ratio'] = '[0.5]'
+        if name == 'shared-period':
+            switch = .015/YEAR2SEC
+            cfg['bc'].update(num_hbc_period_z1='3', hbc_period_z1_time_in_yr=f'[0, {switch}, {switch}]',
+                             hbc_period_z1_ratio='[1, 1, 2]')
         cfg['ic'].update(pore_pressure_option='2', pore_pressure_value='0',
                          has_body_force_adjustment='false', weakzone_option='0')
         done = run_des(exe, folder, 'input', cfg, timeout=60, check=False)
@@ -65,13 +74,13 @@ def mesh_tags(exe, output):
             assert model.ndims == 2
             for frame in model.frames:
                 p = model.read_field(frame, 'pore pressure')
-                if name in ('disjoint', 'equal-shared'):
-                    np.testing.assert_array_equal(p[np.isclose(x[:, 0], 0)], 1000)
-                    np.testing.assert_array_equal(p[np.isclose(x[:, 0], 1)], values[5])
+                expected_right = 0 if name == 'disjoint' else 1000
+                np.testing.assert_array_equal(p[np.isclose(x[:, 0], 0)], 1000)
+                np.testing.assert_array_equal(p[np.isclose(x[:, 0], 1)], expected_right)
         elif done.returncode == 11:
             result[name]['actual_node_diagnostic'] = 'Node ' in done.stdout
     # A changed condition on restart must be checked against the saved mesh.
-    cfg.read(output/'disjoint/input.cfg')
+    cfg = read_config(output/'disjoint/input.cfg')
     cfg['sim'].update(modelname='bad-restart', is_restarting='yes',
                       restarting_from_modelname=str(output/'disjoint/tags'), restarting_from_frame='1', max_steps='3')
     cfg['bc']['hbc_x0'] = '2'
@@ -85,9 +94,7 @@ def mesh_tags(exe, output):
 
 
 def initial_schedule(exe, output):
-    """Every pore_pressure_option starts from the scheduled prescribed pressures:
-    x0 = 0 and x1 = 1000 Pa at a constant ratio 0.5 give x1 = 500 Pa in frames 0
-    and 1, and option 1 starts from the steady profile between the scaled ends."""
+    """Apply independent face ratios before initializing the end pressures."""
     output.mkdir(parents=True, exist_ok=False)
     result = {}
     for option in (0, 1, 2):
@@ -99,8 +106,8 @@ def initial_schedule(exe, output):
                               has_poroelastic_pressure_feedback='false')
         for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
             cfg['bc'].update({f'vbc_{side}': '3', f'hbc_{side}': '2' if side[0] == 'x' else '0'})
-        cfg['bc'].update(hbc_pressure='[0,1000,0,0,0,0]', num_hbc_schedule='1',
-                         hbc_schedule_time_in_yr='[0]', hbc_schedule_ratio='[0.5]',
+        cfg['bc'].update(hbc_val_x0='100', hbc_period_x0_ratio='[0.25]',
+                         hbc_val_x1='1000', hbc_period_x1_ratio='[0.5]',
                          stress_bc_z1='0')
         cfg['ic'].update(pore_pressure_option=str(option), pore_pressure_value='100',
                          weakzone_option='0', has_body_force_adjustment='false')
@@ -111,13 +118,13 @@ def initial_schedule(exe, output):
             x = model.read_field(frame, 'coordinate')[:, 0]
             p = model.read_field(frame, 'pore pressure')
             np.testing.assert_array_equal(p[np.isclose(x, length)], 500)
-            np.testing.assert_array_equal(p[np.isclose(x, 0)], 0)
+            np.testing.assert_array_equal(p[np.isclose(x, 0)], 25)
             if option == 1:
-                np.testing.assert_allclose(p, 500*x/length, rtol=1e-12, atol=1e-9)
+                np.testing.assert_allclose(p, 25+475*x/length, rtol=1e-12, atol=1e-9)
             if option == 2 and frame == 0:
                 inside = ~np.isclose(x, 0) & ~np.isclose(x, length)
                 np.testing.assert_array_equal(p[inside], 100)
-        result[f'option-{option}'] = dict(frames=[0, 1], x1_pressure_Pa=500)
+        result[f'option-{option}'] = dict(frames=[0, 1], x0_pressure_Pa=25, x1_pressure_Pa=500)
     return result
 
 
@@ -132,17 +139,20 @@ def main():
         return
     output.mkdir(parents=True, exist_ok=False)
     result = {}
-    for mode in ('flux', 'flux-side', 'pressure'):
+    for mode in ('flux', 'flux-side', 'flux-two-faces', 'pressure'):
         cfg = read_config(ROOT / 'tests/functional/pt_remesh_restart.cfg')
         cfg['control'].update(gravity='0', has_moving_mesh='false', fixed_dt='0.01',
                               PT_absolute_tolerance='1e-8')
-        cfg['bc'].update(stress_val_z1='0', hbc_z1='2' if mode == 'pressure' else '3',
-                         hbc_flux='[0,0,0,0,0,-1e-7]', hbc_pressure='[0,0,0,0,0,1000]',
-                         num_hbc_schedule='4',
-                         hbc_schedule_time_in_yr='[0, 3e-10, 3e-10, 6e-10]',
-                         hbc_schedule_ratio='[1,1,-0.5,0]')
-        if mode == 'flux-side':
-            cfg['bc'].update(hbc_z1='0', hbc_x0='3', hbc_flux='[-1e-7,0,0,0,0,0]')
+        side = 'x0' if mode == 'flux-side' else 'z1'
+        cfg['bc'].update(stress_val_z1='0', hbc_z1='0')
+        cfg['bc'].update({f'hbc_{side}': '2' if mode == 'pressure' else '3',
+                          f'hbc_val_{side}': '1000' if mode == 'pressure' else '-1e-7',
+                          f'num_hbc_period_{side}': '4',
+                          f'hbc_period_{side}_time_in_yr': '[0, 3e-10, 3e-10, 6e-10]',
+                          f'hbc_period_{side}_ratio': '[1,1,-0.5,0]'})
+        if mode == 'flux-two-faces':
+            cfg['bc'].update(hbc_x0='3', hbc_val_x0='2e-8', num_hbc_period_x0='3',
+                             hbc_period_x0_time_in_yr='[0, 5e-10, 5e-10]', hbc_period_x0_ratio='[0,1,0]')
         case = output / mode
         restart_check(exe, cfg, case, 4, 1)
         model = Dynearthsol(str(case/'fresh'))
@@ -161,6 +171,10 @@ def main():
                     return min(t,a) - 0.5*u + 0.25*u*u/(stop-a)
                 area = 10 if mode == 'flux-side' else 1
                 imposed = 1e-7*area*(integral(times[frame])-integral(previous))
+                if mode == 'flux-two-faces':
+                    end = 5e-10*YEAR2SEC
+                    current, prior = min(times[frame], end), min(previous, end)
+                    imposed -= 2e-8*10*(current**2-prior**2)/(2*end)
                 np.testing.assert_allclose(b[3], imposed, rtol=1e-12, atol=1e-20)
                 np.testing.assert_allclose(b[0]+b[1], imposed, rtol=1e-9, atol=1e-20)
             else:

@@ -55,7 +55,7 @@ def config(h, steps):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
     for side in ('x1', 'y1', 'z0'):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '2'
-    bc.update(hbc_pressure='[0,0,0,0,0,0]', stress_bc_z1='0', stress_val_z1='0')
+    bc.update(stress_bc_z1='0', stress_val_z1='0')
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
     cfg['fluid_source'] = dict(num_points='1', point_x='[0]', point_y='[0]', point_z='[0]',
                                point_unit='m', point_rate_model='constant_rate', point_rate=f'[{Q/8!r}]',

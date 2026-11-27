@@ -98,8 +98,8 @@ def config(h, steps):
     bc = cfg['bc']
     reset_boundaries(bc, vbc='0', vbc_val='0', stress_bc='0', stress_val='0', hbc='0')
     bc.update(vbc_x0='1', vbc_z0='1', stress_bc_x1='4', stress_val_x1=repr(-PW), hbc_x1='2',
-              hbc_pressure=f'[0,{PW!r},0,0,0,0]', num_hbc_schedule='2',
-              hbc_schedule_time_in_yr=f'[0, {RAMP/YEAR2SEC!r}]', hbc_schedule_ratio='[0, 1]')
+              hbc_val_x1=repr(PW), num_hbc_period_x1='2',
+              hbc_period_x1_time_in_yr=f'[0, {RAMP/YEAR2SEC!r}]', hbc_period_x1_ratio='[0, 1]')
     cfg['ic'].update(pore_pressure_option='0', has_body_force_adjustment='false', weakzone_option='0')
     cfg['mat'].update(material_options(MAT), rheology_type='elastic',
                       is_plane_strain='true', alpha='[0]', fluid_alpha='[0]')

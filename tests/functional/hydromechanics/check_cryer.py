@@ -85,7 +85,7 @@ def config(h, steps, duration):
         bc[f'vbc_{side}'], bc[f'vbc_val_{side}'], bc[f'hbc_{side}'] = '1', '0', '0'
     for side in ('x1', 'y1', 'z1'):
         bc[f'vbc_{side}'], bc[f'hbc_{side}'] = '0', '0'
-    bc.update(hbc_z1='2', hbc_pressure='[0,0,0,0,0,0]', stress_bc_z1='4', stress_val_z1=repr(-P))
+    bc.update(hbc_z1='2', stress_bc_z1='4', stress_val_z1=repr(-P))
     cfg['ic'].update(has_body_force_adjustment='false', pore_pressure_option='0')
     cfg['mat'].update(material_options(MAT))
     return cfg

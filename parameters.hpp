@@ -370,20 +370,20 @@ struct BC {
     int hbc_z0;
     int hbc_z1;
 
-    double_vec hbc_pressure, hbc_flux;
-    int num_hbc_schedule;
-    double_vec hbc_schedule_time_in_yr, hbc_schedule_ratio;
+    double hbc_val[nbdrytypes_hydro] = {};
+    int num_hbc_period[nbdrytypes_hydro];
+    double_vec hbc_period_time_in_yr[nbdrytypes_hydro], hbc_period_ratio[nbdrytypes_hydro];
 
     // Vertical rate-controlled wells sharing one rate schedule
     int num_wells;
-    int num_well_schedule;
+    int num_well_period;
     double_vec well_x;
     double_vec well_y;
     double_vec well_z_top;
     double_vec well_z_bottom;
     double_vec well_rate;
-    double_vec well_schedule_time_in_yr;
-    double_vec well_schedule_ratio;
+    double_vec well_period_time_in_yr;
+    double_vec well_period_ratio;
 
     double stress_val_x0;
     double stress_val_x1;

@@ -65,8 +65,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   rates inject and negative rates extract. Point sources support signed
   rates or total amounts and exact partial-step schedules. Contributions at
   prescribed-pressure nodes enter the boundary reaction.
-- Explicit hydraulic transport supports scheduled pressure/flux boundaries and
-  a checkpointed fluid-balance diagnostic.
+- Explicit hydraulic transport supports independent face values and period
+  tables for prescribed pressure or flux, and a checkpointed fluid balance.
   Large fixed timesteps use stable hydraulic substeps.
 
 - Vertical rate-controlled wells in `[fluid_source]` share one schedule

@@ -35,7 +35,7 @@ def run(executable, folder, spacing):
     cfg['mesh'].update(xlength=str(L), ylength=str(WIDTH), zlength=str(WIDTH))
     cfg['control']['fixed_dt'] = str(DT)
     del cfg['fluid_source']
-    cfg['bc'].update(hbc_x0='2', hbc_x1='2', hbc_pressure='[0,0,0,0,0,0]')
+    cfg['bc'].update(hbc_x0='2', hbc_x1='2')
     run_des(executable, folder, 'seed', cfg, timeout=600)
     seed = ct.Dynearthsol(str(folder/'seed'))
     assert seed.ndims == 3

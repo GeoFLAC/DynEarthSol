@@ -218,7 +218,7 @@ def main():
     cfg=config()
     if dim==2:del cfg['fluid_source']['point_y']
     cfg['fluid_source']['point_x']='[0,0]'
-    cfg['bc'].update(hbc_x0='2',hbc_pressure='[0,0,0,0,0,0]')
+    cfg['bc'].update(hbc_x0='2')
     folder=out/'injection-fixed-node'
     run(exe,folder,cfg)
     model=Dynearthsol(str(folder/'fresh'))

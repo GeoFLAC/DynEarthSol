@@ -22,14 +22,14 @@ def main():
             expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10,
                         message='Invalid hydraulic properties for material 0')
         extra = [
-            ('bc', {'hbc_z1': '4'}),
-            ('bc', {'num_hbc_schedule': '2', 'hbc_schedule_time_in_yr': '[1,0]',
-                    'hbc_schedule_ratio': '[1,1]'}),
+            ({'hbc_z1': '4'}, 'Hydraulic boundary types must be 0, 1, 2 or 3'),
+            ({'num_hbc_period_z1': '2', 'hbc_period_z1_time_in_yr': '[1,0]',
+              'hbc_period_z1_ratio': '[1,1]'}, 'bc.hbc_period_z1_time_in_yr must be non-decreasing'),
         ]
-        for section, updates in extra:
+        for updates, message in extra:
             cfg = read_config(root / 'tests/functional/pt_hydrostatic_equilibrium.cfg')
-            cfg[section].update(updates)
-            expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10)
+            cfg['bc'].update(updates)
+            expect_exit(exe, tmp, 'invalid', cfg, 11, timeout=10, message=message)
     print(f'PASS: {len(cases)+len(extra)} invalid hydraulic inputs rejected before initialization')
 
 
