@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sealed Biot water budget through yielding, subcycling and a changed step.
+"""Biot water budget through viscous relaxation, yielding and subcycling.
 
 An imposed top velocity compresses a laterally confined unit column. A
 mesh-volume integral of strain and pressure, plus the PT pending increment,
@@ -45,7 +45,7 @@ def configuration(method, psi, elastic=False, flowing=False):
     return cfg
 
 
-def analyze(folder, method, yielding, continuation=None, open_boundary=False):
+def analyze(folder, method, continuation=None, open_boundary=False):
     model = Dynearthsol(str(folder/'column'))
     dim = int(model.ndims)
     records = [(model, row) for row in scan_frames(str(folder/'column'))]
@@ -101,7 +101,7 @@ def analyze(folder, method, yielding, continuation=None, open_boundary=False):
         np.testing.assert_array_equal(p[top], 0)
     else:
         assert cumulative_boundary == 0, cumulative_boundary
-    if yielding:
+    if 'plastic' in cfg['mat']['rheology_type']:
         assert values[:, 7].max() > 1e-5, 'the budget must be checked after a plastic return'
     else:
         np.testing.assert_array_equal(values[:, 7], 0)
@@ -145,7 +145,7 @@ def rsf_check(exe, folder, ndims, replay=False):
                       characteristic_velocity=f'[{speed0}]', state_var_model='1')
     model = Dynearthsol(str(folder/'column')) if replay else run_model(exe, folder, cfg, 'column')
     assert int(model.ndims) == ndims and len(model.read_field(0, 'coordinate')) == 2**ndims
-    report = analyze(folder, 'pt', True)
+    report = analyze(folder, 'pt')
     x, conn = (model.read_field(0, key) for key in ('coordinate', 'connectivity'))
     gradient = simplex_gradients(x, conn)
     width = 1/np.linalg.norm(gradient, axis=2).max(axis=1)
@@ -210,11 +210,11 @@ def main():
                 current = rsf_check(exe, folder, dim, replay=True)
             else:
                 method = 'pt' if name.startswith('pt-') else 'explicit'
-                current = dict(case=name, **analyze(folder, method, 'elastic' not in name,
+                current = dict(case=name, **analyze(folder, method,
                                                    open_boundary=name.endswith('-drained')))
                 if isinstance(previous['changed_step'], dict):
                     resumed = Dynearthsol(str(folder/'changed/column'))
-                    current['changed_step'] = analyze(folder, method, True, (resumed, 20))
+                    current['changed_step'] = analyze(folder, method, (resumed, 20))
                     same = Dynearthsol(str(folder/'restart/resumed'))
                     current['exact_restart_payloads'] = compare_continuation(folder/'restart', str(folder/'column'), same)
             assert current == previous, (name, current, previous)
@@ -227,16 +227,23 @@ def main():
         return
     output.mkdir(parents=True, exist_ok=False)
     report = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__), cases=[])
-    for method, psi, elastic, flowing in [('pt', 0, True, False), ('pt', 0, False, False),
-                                         ('pt', 10, False, False), ('pt', -10, False, False),
-                                         ('explicit', 10, False, False), ('pt', 10, False, True),
-                                         ('explicit', 10, False, True)]:
-        name = f'{method}-psi{psi}'+('-elastic' if elastic else '')+('-flow' if flowing else '')
-        folder = output/name; folder.mkdir()
+    for method, psi, rheology, flowing in [('pt', 0, 'elastic', False), ('pt', 0, 'elasto-plastic', False),
+                                          ('pt', 10, 'elasto-plastic', False), ('pt', -10, 'elasto-plastic', False),
+                                          ('explicit', 10, 'elasto-plastic', False), ('pt', 10, 'elasto-plastic', True),
+                                          ('explicit', 10, 'elasto-plastic', True),
+                                          ('pt', 0, 'maxwell', False), ('pt', 0, 'viscous', False)]:
+        elastic = rheology == 'elastic'
         cfg = configuration(method, psi, elastic, flowing)
+        if rheology in ('maxwell', 'viscous'):
+            name = f'{method}-{rheology}'
+            cfg['mat'].update(rheology_type=rheology, is_plane_strain='false',
+                              min_viscosity='1e5', max_viscosity='1e5')
+        else:
+            name = f'{method}-psi{psi}'+('-elastic' if elastic else '')+('-flow' if flowing else '')
+        folder = output/name; folder.mkdir()
         model = run_model(exe, folder, cfg, 'column')
         assert int(model.ndims) == args.ndims
-        item = dict(case=name, **analyze(folder, method, not elastic))
+        item = dict(case=name, **analyze(folder, method))
         if method == 'pt' and psi == 10 and not flowing:
             same = folder/'restart'; same.mkdir()
             item['exact_restart_payloads'] = exact_continuation(exe, same, cfg, folder/'column')
@@ -246,7 +253,7 @@ def main():
             switched['sim'].update(is_restarting='true', restarting_from_modelname=str(folder/'column'),
                                     restarting_from_frame='20', max_steps='60')
             resumed = run_model(exe, changed, switched, 'column')
-            item['changed_step'] = analyze(folder, method, True, (resumed, 20))
+            item['changed_step'] = analyze(folder, method, (resumed, 20))
         report['cases'].append(item)
         write_json(output/'summary.json', report)
         print(json.dumps(item), flush=True)
@@ -258,7 +265,7 @@ def main():
         cfg = configuration(method, 10, flowing=True)
         cfg['bc']['hbc_z1'] = '2'
         run_model(exe, drained, cfg, 'column')
-        report['cases'].append(dict(case=drained.name, **analyze(drained, method, True, open_boundary=True)))
+        report['cases'].append(dict(case=drained.name, **analyze(drained, method, open_boundary=True)))
         print(json.dumps(report['cases'][-1]), flush=True)
     assert digest(exe) == report['executable_sha256']
     report['artifacts_sha256'] = file_hashes((p for p in output.rglob('*') if p.name != 'summary.json'), output)

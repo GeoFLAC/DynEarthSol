@@ -137,13 +137,12 @@ inline double hydraulic_fixed_stress_lag(const MatProps &mat, int e)
 // Mean p - p_old of the previous physical step, after the nodal residual slots.
 const int pressure_d_slot = NODES_PER_ELEM;
 
-// A plastic return breaks the elastic relation between mean stress and
-// volume change. The source then reads the accepted projected strain and keeps
-// the fixed-stress pressure buffer with its pending raw increment.
-inline bool has_plastic_source(const Param &param)
+// Only elastic increments give the volumetric strain from the mean stress
+// change and the elastic compliance.
+inline bool fixed_stress_strain_source(const Param &param)
 {
     return param.control.has_poroelastic_pressure_feedback &&
-           !hydraulic_strain_form(param) && (param.mat.rheol_type & MatProps::rh_plastic);
+           !hydraulic_strain_form(param) && param.mat.rheol_type != MatProps::rh_elastic;
 }
 
 void pressure_increments(const Variables &var, const double_vec &ppressure, const double_vec &dppressure,
@@ -530,23 +529,18 @@ static void pressure_step(const Param &param, const Variables &var,
 #endif
 
     double source = 0;
-    const bool plastic_source = has_plastic_source(param);
-    const bool strain_source = hydraulic_strain_form(param) || plastic_source;
+    const bool fixed_stress_strain = fixed_stress_strain_source(param);
+    const bool strain_source = hydraulic_strain_form(param) || fixed_stress_strain;
     const int mpi_ee = mpi_element_end(var), mpi_ne = mpi_node_end(var);
 
 #ifndef ACC
     #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(+:source)
+        firstprivate(dt, fixed_stress_strain, strain_source, mpi_ee) reduction(+:source)
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, plastic_source, strain_source, mpi_ee) reduction(+:source) async
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(dt, fixed_stress_strain, strain_source, mpi_ee) reduction(+:source) async
     for (int e = 0; e < mpi_ee; e++) {
         ElemCacheAccessor tr = tmp_result[e];
-        double current_mean_stress = trace(stress[e])/NDIMS;
-        double mean_stress_change = current_mean_stress - old_mean_stress[e];
-
-        double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
-        double bulk_comp = hydraulic_mean_stress_compliance(*var.mat, e);
-
+        const double alpha_b = var.mat->alpha_biot(e);
 
         // Darcy mobility k/mu in pressure form, well-defined when gravity is zero;
         // it is algebraically equivalent to the head form
@@ -558,11 +552,13 @@ static void pressure_step(const Param &param, const Variables &var,
         if (param.control.has_poroelastic_pressure_feedback && strain_source)
             // Match the volumetric rate used by the anti-locking constitutive update.
             pe = alpha_b * (*var.edvoldt)[e] * (*var.volume)[e] / NODES_PER_ELEM;
-        else if (param.control.has_poroelastic_pressure_feedback)
+        else if (param.control.has_poroelastic_pressure_feedback) {
+            const double mean_stress_change = trace(stress[e])/NDIMS - old_mean_stress[e];
+            const double bulk_comp = hydraulic_mean_stress_compliance(*var.mat, e);
             pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM / var.dt;
-        if (plastic_source) {
-            // The strain source already includes the plastic volume change;
-            // only the previous raw pressure increment belongs to the buffer.
+        }
+        if (fixed_stress_strain) {
+            // Carry the previous pressure increment in the fixed-stress buffer.
             pe -= hydraulic_fixed_stress_lag(*var.mat, e) * tr[pressure_d_slot] * (*var.volume)[e] /
                   (NODES_PER_ELEM * var.dt);
         }
@@ -702,7 +698,7 @@ void update_pore_pressure(const Param &param, const Variables &var,
     if (var.mat->hydro_step_limit == 0)
         var.mat->hydro_step_limit = pressure_step_limit(var, work);
     // Before the pending increment is cleared below.
-    if (has_plastic_source(param))
+    if (fixed_stress_strain_source(param))
         pressure_increments(var, p, dp, work);
     const double limit = var.mat->hydro_step_limit;
     #pragma acc wait
