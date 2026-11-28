@@ -127,7 +127,7 @@ void reset_hydraulic_assembly(const Param &param, Variables &var);
 // positions of their ends (2*NDIMS per piece, see well_screen_positions).
 void place_well_screens(const Param &param, Variables &var, const double_vec *ends = nullptr);
 void well_screen_positions(const Variables &var, double_vec &ends);
-// Nodal well supply at schedule ratio 1, var.fluid_source: each screen's
+// Nodal well supply at period ratio 1, var.fluid_source: each screen's
 // rate integrated exactly against the linear shape functions along its pieces.
 // The pieces move with the mesh, so it changes only when they are placed.
 void assemble_well_source(const Param &param, const Variables &var);

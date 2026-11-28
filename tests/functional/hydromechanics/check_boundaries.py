@@ -27,6 +27,7 @@ def mesh_tags(exe, output):
             ('shared-axis', 1, 1, (0, 1), (0, 1000, 0, 0, 0, 0), 11),
             ('equal-shared', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 0),
             ('equal-scaled', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 2000), 0),
+            ('shared-left-limit', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 11),
             ('shared-period', 32, 32, (1, 5), (0, 1000, 0, 0, 0, 1000), 11)):
         folder = output/name; folder.mkdir()
         poly = folder/'boundary.poly'
@@ -61,6 +62,9 @@ def mesh_tags(exe, output):
         cfg['bc']['stress_bc_z1'] = '0'
         if name == 'equal-scaled':
             cfg['bc']['hbc_period_z1_ratio'] = '[0.5]'
+        if name == 'shared-left-limit':
+            cfg['bc'].update(num_hbc_period_z1='2', hbc_period_z1_time_in_yr='[0, 0]',
+                             hbc_period_z1_ratio='[0.5, 1]')
         if name == 'shared-period':
             switch = .015/YEAR2SEC
             cfg['bc'].update(num_hbc_period_z1='3', hbc_period_z1_time_in_yr=f'[0, {switch}, {switch}]',
@@ -107,7 +111,8 @@ def initial_schedule(exe, output):
         for side in ('x0', 'x1', 'y0', 'y1', 'z0', 'z1'):
             cfg['bc'].update({f'vbc_{side}': '3', f'hbc_{side}': '2' if side[0] == 'x' else '0'})
         cfg['bc'].update(hbc_val_x0='100', hbc_period_x0_ratio='[0.25]',
-                         hbc_val_x1='1000', hbc_period_x1_ratio='[0.5]',
+                         hbc_val_x1='1000', num_hbc_period_x1='2',
+                         hbc_period_x1_time_in_yr='[0, 0]', hbc_period_x1_ratio='[0.25, 0.5]',
                          stress_bc_z1='0')
         cfg['ic'].update(pore_pressure_option=str(option), pore_pressure_value='100',
                          weakzone_option='0', has_body_force_adjustment='false')

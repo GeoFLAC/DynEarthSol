@@ -79,14 +79,14 @@ static void declare_parameters(opt::Registry &cfg,
         ("fluid_source.well_screen_bottom", opt::list()->default_value("[]"),
          "Bottom of each well screen (in m), below its top.")
         ("fluid_source.well_rate", opt::list()->default_value("[]"),
-         "Fluid volume supplied by each well at schedule ratio 1, spread uniformly over the "
-         "screen: m^3/s in 3D, m^2/s per unit out-of-plane length in 2D. Negative extracts.")
+         "Supply rate of each well at period ratio 1, distributed over the screen "
+         "(m^3/s in 3D, m^2/s per unit out-of-plane length in 2D). Positive injects, negative extracts.")
         ("fluid_source.num_well_period", opt::value<int>(&p.bc.num_well_period)->default_value(1),
-         "Number of points in the rate schedule shared by all wells.")
+         "Number of entries in the period table shared by all wells.")
         ("fluid_source.well_period_time_in_yr", opt::list()->default_value("[0]"),
-         "Non-decreasing times of the shared well schedule (in yr). Repeated times are steps.")
+         "Non-decreasing times of the shared well period table (in yr). Repeated times are steps.")
         ("fluid_source.well_period_ratio", opt::list()->default_value("[1]"),
-         "Multiplier applied to every well rate, linear between the schedule times and held "
+         "Multiplier applied to every well rate, linear between the period times and held "
          "outside them. Each hydraulic substep uses its exact time average.")
         ;
     declare_point_source(cfg, "fluid_source", p.injection);
@@ -2317,7 +2317,7 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
             require_finite({&p.bc.well_x, &p.bc.well_y, &p.bc.well_z_top,
                             &p.bc.well_z_bottom, &p.bc.well_rate,
                             &p.bc.well_period_time_in_yr, &p.bc.well_period_ratio},
-                           "Well coordinates, rates and schedules must be finite.");
+                           "Well coordinates, rates and period table entries must be finite.");
         }
 
         if (p.ic.nhlayer < 0) {

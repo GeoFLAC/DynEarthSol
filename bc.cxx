@@ -297,7 +297,7 @@ double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
                                : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
     const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
                                 : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
-    return v * interp1(time, ratio, time_in_yr);
+    return v * period_value<true>(time, ratio, time_in_yr);
 }
 } // anonymous namespace
 

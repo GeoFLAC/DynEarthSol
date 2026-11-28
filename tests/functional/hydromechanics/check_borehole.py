@@ -4,16 +4,13 @@
 This refinement study reports numerical errors against the analytical solution.
 
 A quarter annulus a = 1 m, R = 20 m, refined out to 5 m, is unstressed
-at p = 0. At t = 0+ the wall takes fluid at p_w: pore
-pressure p_w (a 1 ms ramp of the scheduled boundary pressure) and normal
-traction -p_w. The outer arc is sealed and traction-free (DES's input
-check allows prescribed pressures on only one of two intersecting box
-faces, which the annulus maps to x1 and z1); the symmetry cuts are
-rollers and sealed. Gravity and heat are off; pressure feedback
-is on. Compared with benchmarks/poromechanics/borehole_reference.py,
-which includes the finite-annulus coupling: nodal pressure and element
-radial/hoop total stress for 1.05 a <= r <= 4 a at four times, relative to
-p_w.
+at p = 0. The inner wall carries normal traction -p_w. Its prescribed
+pressure ramps to p_w over 1 ms. The outer arc is sealed and traction-free,
+and the symmetry cuts are sealed rollers. Pressure feedback is on with
+gravity and heat disabled. The finite-annulus reference in
+benchmarks/poromechanics/borehole_reference.py gives nodal pressure and
+radial and hoop total stress over 1.05 a <= r <= 4 a at four times. Errors
+are normalized by p_w.
 
     check_borehole.py EXECUTABLE OUTPUT [--spacings 0.2 0.1 0.05] [--steps 144]
 """

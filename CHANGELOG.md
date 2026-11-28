@@ -69,8 +69,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   tables for prescribed pressure or flux, and a checkpointed fluid balance.
   Large fixed timesteps use stable hydraulic substeps.
 
-- Vertical rate-controlled wells in `[fluid_source]` share one schedule
-  multiplier applied to every rate. Screens and point sources move with the
+- Vertical rate-controlled wells in `[fluid_source]` share one period table
+  that scales every rate. Screens and point sources move with the
   material and restart from their saved locations. After a remesh cuts a
   screen, the log reports the retained fraction and the in-domain length
   carries the prescribed total rate. A screen with no in-domain length

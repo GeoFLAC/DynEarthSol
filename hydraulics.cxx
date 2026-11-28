@@ -50,27 +50,12 @@ inline int pressure_boundary(const int n, const Variables &var)
 }
 
 // Type 2 sets a pressure value. Type 1 holds the node's pressure.
-#pragma acc routine seq
 inline bool prescribed_pressure(const Variables &var, int side, const double *boundary_value,
                                 double &value)
 {
     if (side < 0 || var.hbc_types[side] != 2) return false;
     value = boundary_value[side];
     return true;
-}
-
-// Evaluate at a time in years. A repeated time takes the last value there,
-// with the first value giving the left limit used for boundary consistency.
-double period_value(const double_vec &t, const double_vec &r, double time, bool left_limit = false)
-{
-    if (t.empty()) return 1.0;
-    const auto next = left_limit ? std::lower_bound(t.begin(), t.end(), time)
-                                 : std::upper_bound(t.begin(), t.end(), time);
-    if (next == t.begin()) return r.front();
-    if (next == t.end()) return r.back();
-    const auto i = next - t.begin() - 1;
-    if (left_limit && *next == time) return r[i+1];
-    return r[i] + (r[i+1]-r[i])*(time-t[i])/(t[i+1]-t[i]);
 }
 
 // Exact mean of the piecewise-linear multiplier over [t0, t1] in seconds.

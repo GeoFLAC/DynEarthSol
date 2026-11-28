@@ -46,7 +46,11 @@ top/side flux and pressure, balance and checkpoint continuation.
 
 The [multi-well Theis benchmark](https://geoflac.github.io/DynEarthSol/docs/benchmarks/poromechanics/groundwater-flow/theis-wells)
 records the small-strain superposition limits, acceptance budgets and
-measured results. Run the cases sequentially:
+measured results. In `fluid balance`, the third entry is net extraction
+by wells and point sources. Positive values count fluid removed. Input
+rates in `[fluid_source]` are positive for injection.
+
+Run the cases sequentially:
 
 ```sh
 (

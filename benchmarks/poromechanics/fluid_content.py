@@ -111,10 +111,7 @@ def checkpoint_field(model, frame, name):
         return stream[name][:]
 
 
-def analyze(folder, method):
-    cfg = read_config(folder/'input.cfg')
-    bc = cfg['bc']
-    inflow = -(bc.getfloat('hbc_val_z0') if 'hbc_val_z0' in bc else json.loads(bc['hbc_flux'])[4])
+def analyze(folder, method, inflow):
     pressure_scale = inflow*REF.height/MOBILITY
     model = Dynearthsol(str(folder/'column')); dim = int(model.ndims)
     rows = scan_frames(str(folder/'column'))
@@ -234,14 +231,15 @@ def main():
             manifest['cases'].append(case.name)
             manifest['artifacts_sha256'] = file_hashes(out.glob('h*/*'), out)
             write_json(out/'manifest.json', manifest)
-            reports.append(analyze(case, args.method))
+            reports.append(analyze(case, args.method, args.inflow))
             assert reports[-1]['dimension'] == args.ndims, 'executable and requested dimension differ'
             print(json.dumps(reports[-1]), flush=True)
         manifest['artifacts_sha256'] = file_hashes((p for p in out.glob('h*/*')
                                                     if p.name not in ('analysis.json', 'history.csv')), out)
         write_json(out/'manifest.json', manifest)
     summary = dict(reference_checks=reference_checks(), cases=reports or
-                   [analyze(out/name, manifest['method']) for name in manifest['cases']])
+                   [analyze(out/name, manifest['method'], manifest['settings']['inflow'])
+                    for name in manifest['cases']])
     write_json(out/'summary.json', summary)
 
 

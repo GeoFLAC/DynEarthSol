@@ -227,16 +227,19 @@ def main():
         return
     output.mkdir(parents=True, exist_ok=False)
     report = dict(executable=str(exe), executable_sha256=digest(exe), runner_sha256=digest(__file__), cases=[])
-    for method, psi, rheology, flowing in [('pt', 0, 'elastic', False), ('pt', 0, 'elasto-plastic', False),
-                                          ('pt', 10, 'elasto-plastic', False), ('pt', -10, 'elasto-plastic', False),
-                                          ('explicit', 10, 'elasto-plastic', False), ('pt', 10, 'elasto-plastic', True),
-                                          ('explicit', 10, 'elasto-plastic', True),
-                                          ('pt', 0, 'maxwell', False), ('pt', 0, 'viscous', False)]:
+    cases = [('pt', 0, 'elastic', False, True), ('pt', 0, 'elasto-plastic', False, True),
+             ('pt', 10, 'elasto-plastic', False, True), ('pt', -10, 'elasto-plastic', False, True),
+             ('explicit', 10, 'elasto-plastic', False, True), ('pt', 10, 'elasto-plastic', True, True),
+             ('explicit', 10, 'elasto-plastic', True, True)]
+    plane_strains = (False, True) if args.ndims == 2 else (False,)
+    cases.extend(('pt', 0, rheology, False, plane_strain)
+                 for rheology in ('maxwell', 'viscous') for plane_strain in plane_strains)
+    for method, psi, rheology, flowing, plane_strain in cases:
         elastic = rheology == 'elastic'
         cfg = configuration(method, psi, elastic, flowing)
         if rheology in ('maxwell', 'viscous'):
-            name = f'{method}-{rheology}'
-            cfg['mat'].update(rheology_type=rheology, is_plane_strain='false',
+            name = f'{method}-{rheology}' + ('-plane-strain' if plane_strain else '')
+            cfg['mat'].update(rheology_type=rheology, is_plane_strain=str(plane_strain).lower(),
                               min_viscosity='1e5', max_viscosity='1e5')
         else:
             name = f'{method}-psi{psi}'+('-elastic' if elastic else '')+('-flow' if flowing else '')
