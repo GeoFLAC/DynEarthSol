@@ -122,7 +122,7 @@ def main():
     mat_E = [5.30E+05, 3.56E+05, 2.23E+05]
     mat_V = [13.0, 0.0, 0.0] # cm^3/mol
 
-    hr = 20e3  # Heat production decay length (m).
+    hr = 20e3 # Heat production decay length (m).
     is_hr_from_layer_top = True
 
     mat_k = np.array(mat_k)
@@ -139,10 +139,9 @@ def main():
     T0 = 273
     Tm = 1300 + 273
 
-    # Layer boundary depths in metres.
-    Zulb = 22e3
-    Zmoho = 33e3
-    Zbot = 90e3
+    Zulb = 22e3 # m
+    Zmoho = 33e3 # m
+    Zbot = 90e3 # m
     edot = 1e-15 # 1/s
     
     phase_arr = [2, 1, 0]

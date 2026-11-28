@@ -329,6 +329,37 @@ def process_single_frame(args):
         for name, (data, comps) in point_data.items():
             vtk_dataarray(fvtu, data, name, comps)
 
+        '''
+        # find nearest neighbour marker of nodes
+        markersetname = 'markerset'
+        marker_data = des.read_markers(frame, markersetname)
+        nmarkers = marker_data['size']
+        if nmarkers <= 0:
+            raise MarkerSizeError()
+        marker_coord = marker_data[markersetname + '.coord']
+        marker_mattype = marker_data[markersetname + '.mattype']
+        kdtree = spatial.KDTree(marker_coord)
+        nn = kdtree.query(coord,1)
+        nnmattype = np.zeros((nnode), dtype=marker_mattype.dtype)
+
+        try:
+            marker_time = marker_data[markersetname + '.time']
+            nnchron = np.zeros((nnode), dtype=marker_time.dtype)
+            nnchron[:] = marker_time[nn[1]]
+        except:
+            pass
+
+        # abjust horizon of sediment node
+        # Note: horizon is now calculated in calculate_derived_data, but we need to read it back if we want to modify it?
+        # The original code here was modifying 'horizon' variable.
+        # But since the sediment adjustment block is commented out, I will ignore it.
+        
+        try:
+            vtk_dataarray(fvtu, nnchron, 'chron', 1)
+        except:
+            pass
+        '''
+
         convert_field(des, frame, 'temperature', fvtu)
         convert_field(des, frame, 'bcflag', fvtu)
         #convert_field(des, frame, 'mass', fvtu)

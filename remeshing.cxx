@@ -1333,7 +1333,7 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 // R5 rule_size_recovery, R6 detect_flatten_broken and mark_quiet_required,
 // then R7 in mark_quiet_required on the collapse path.
 // mmg_adapt_quality_gated checks the result. Initial refinement in mesh.cxx
-// uses the same gate. See doc/mmg-remeshing.md for the alternatives evaluated.
+// uses the same gate.
 // ============================================================================
 
 

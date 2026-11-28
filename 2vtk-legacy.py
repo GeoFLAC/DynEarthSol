@@ -5,34 +5,34 @@
 # it is: new features go to 2vtk.py.
 '''Convert the binary output of DynEarthSol to VTK files.
 
-usage: 2vtk-legacy.py [options] modelname [start [end [delta]]]
+usage: 2vtk.py [options] modelname [start [end [delta]]]
 
 A model that was not restarted: its .save frames become .vtu/.vtp files beside
 them, or with -c in the current directory.
-    2vtk-legacy.py model            every frame
-    2vtk-legacy.py model 10 20 2    frames 10, 12, ..., 20 (positions, see below)
-    2vtk-legacy.py model -1         resume after the last .vtu converted
+    2vtk.py model               every frame
+    2vtk.py model 10 20 2       frames 10, 12, ..., 20 (positions, see below)
+    2vtk.py model -1            resume after the last .vtu converted
 
 A restarted model: it holds its frames from its restart frame on, and its
 .manifest names the run it restarted from, its parent, which holds the earlier
 frames (and may be restarted itself).
-    2vtk-legacy.py model            this model's own frames only
-    2vtk-legacy.py -g model         the whole series: the parents' frames are
-                                    converted beside their own frames (-c: in the
-                                    current directory) and linked under this
-                                    model's name
-    2vtk-legacy.py -g -copy model   the whole series, the parents' frames written
-                                    under this model's name instead of linked
+    2vtk.py model               this model's own frames only
+    2vtk.py -g model            the whole series: the parents' frames are
+                                converted beside their own frames (-c: in the
+                                current directory) and linked under this
+                                model's name
+    2vtk.py -g -copy model      the whole series, the parents' frames written
+                                under this model's name instead of linked
 
 .vtkhdf frames (an HDF5 build): ParaView reads them as they are. Instead of
 writing .vtu files, -u or -hdf adds the calculated fields (requires h5py).
-    2vtk-legacy.py -u model         into the frames themselves, listed in
-                                    model.save.vtkhdf.series for ParaView
-    2vtk-legacy.py -hdf model       into copies, model.NNNNNN.vtkhdf, listed in
-                                    model.vtkhdf.series; the frames are unchanged
-    2vtk-legacy.py -u -g model      a restarted model's whole series, the parents'
-    2vtk-legacy.py -hdf -g model    frames linked under this model's name
-                                    (-hdf -g -copy: copies under it instead)
+    2vtk.py -u model            into the frames themselves, listed in
+                                model.save.vtkhdf.series for ParaView
+    2vtk.py -hdf model          into copies, model.NNNNNN.vtkhdf, listed in
+                                model.vtkhdf.series; the frames are unchanged
+    2vtk.py -u -g model         a restarted model's whole series, the parents'
+    2vtk.py -hdf -g model       frames linked under this model's name
+                                (-hdf -g -copy: copies under it instead)
 
 options:
     -a          save data in ASCII format (default: binary)
@@ -331,6 +331,37 @@ def process_single_frame(args):
         # Write Point Data
         for name, (data, comps) in point_data.items():
             vtk_dataarray(fvtu, data, name, comps)
+
+        '''
+        # find nearest neighbour marker of nodes
+        markersetname = 'markerset'
+        marker_data = des.read_markers(frame, markersetname)
+        nmarkers = marker_data['size']
+        if nmarkers <= 0:
+            raise MarkerSizeError()
+        marker_coord = marker_data[markersetname + '.coord']
+        marker_mattype = marker_data[markersetname + '.mattype']
+        kdtree = spatial.KDTree(marker_coord)
+        nn = kdtree.query(coord,1)
+        nnmattype = np.zeros((nnode), dtype=marker_mattype.dtype)
+
+        try:
+            marker_time = marker_data[markersetname + '.time']
+            nnchron = np.zeros((nnode), dtype=marker_time.dtype)
+            nnchron[:] = marker_time[nn[1]]
+        except:
+            pass
+
+        # abjust horizon of sediment node
+        # Note: horizon is now calculated in calculate_derived_data, but we need to read it back if we want to modify it?
+        # The original code here was modifying 'horizon' variable.
+        # But since the sediment adjustment block is commented out, I will ignore it.
+        
+        try:
+            vtk_dataarray(fvtu, nnchron, 'chron', 1)
+        except:
+            pass
+        '''
 
         convert_field(des, frame, 'temperature', fvtu)
         convert_field(des, frame, 'bcflag', fvtu)

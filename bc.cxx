@@ -820,13 +820,13 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                         rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
                         // 1000.0 is the fluid density (e.g., water, in kg/m³)
                         // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure -
+                        p = var.compensation_pressure - 
                             (rho_effective + param.bc.winkler_delta_rho) *
                             param.control.gravity * (zcenter + param.mesh.zlength);
                     }
                     else
                     {
-                        p = var.compensation_pressure -
+                        p = var.compensation_pressure - 
                             (rho_effective + param.bc.winkler_delta_rho) *
                             param.control.gravity * (zcenter + param.mesh.zlength);
                     }

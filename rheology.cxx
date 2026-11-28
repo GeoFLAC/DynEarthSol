@@ -2080,8 +2080,7 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             //double div2 = ((*var.volume)[e] / (*var.volume_old)[e] - 1) / var.dt;
             #pragma acc loop seq
             for (int i=0; i<NDIMS; ++i) {
-                // The active normal components must sum to edvoldt.
-                edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;
+                edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;  // Active normal components must sum to edvoldt.
             }
         }
 

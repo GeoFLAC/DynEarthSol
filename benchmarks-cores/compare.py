@@ -15,11 +15,8 @@ Usage
 
 Exit codes
 ----------
-0  all compared fields meet the tolerance
-1  a field's maximum difference plus its standard deviation exceeds 1e-8,
-   a difference is non-finite, or a field size differs
-
-Differences are scaled by the peak absolute reference value when it is nonzero.
+0  no serious differences (bit-exact or round-off only)
+1  at least one field has relative difference >= 1e-8, or a NaN/Inf was found
 
 Restart troubleshooting
 -----------------------
@@ -33,9 +30,9 @@ copy the ``.old`` file to the expected name in a separate directory, then::
 
     python compare.py <dir-with-original>/result result <restart-frame>
 
-``Status: BIT-EXACT`` means the compared fields have zero numerical
-difference at that frame. The first field with a large difference is a
-starting point for debugging.
+A ``Status: BIT-EXACT`` result rules out restart divergence as the cause;
+the first field with a large relative difference is the starting point for
+debugging.
 """
 
 from __future__ import print_function
@@ -118,10 +115,9 @@ def reldiff(oldf, newf):
 def show_msg(kind, max, sigma):
     """Print one field comparison line; return (fail, nonzero).
 
-    For finite differences:
     fail=1  if max+sigma > 1e-8  (serious divergence)
     nonzero=1 if max+sigma > 0   (any difference, even round-off)
-    Both zero means the field has zero numerical difference.
+    Both zero means the field is bit-identical.
     """
     if not np.isfinite(max) or not np.isfinite(sigma):
         print('  %s:\t\t%s %s (NaN/Inf — field corrupt)' % (kind, max, sigma))
@@ -147,7 +143,12 @@ def reldiff_and_show_msg(oldf, newf, kind):
 
 
 def compare(old, new):
-    """Count failed and nonzero field comparisons using show_msg()."""
+    """Compare all fields; return (n_fail, n_nonzero).
+
+    n_fail    — fields with relative diff >= 1e-8 (serious)
+    n_nonzero — fields with any nonzero diff (round-off or worse)
+    Caller uses these to distinguish: bit-exact / round-off / seriously wrong.
+    """
     n_fail = n_nonzero = 0
     for a, b, kind in [
             (old.T,      new.T,      'Temperature'),
