@@ -315,11 +315,6 @@ For a release, the full auto-generated list of merged pull requests is in its
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
   ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
-- `sim.seismic_moment_calculate_output`: the event moment is now the sum of
-  2 G V times each element's plastic-strain increment, in N m, with no fault
-  geometry. It was the shear modulus times volume times node speed, which had
-  the wrong units and counted rigid motion. In 2D it is per unit length out of
-  the plane and no Mw is written.
 - The principal stresses of a tensor whose first row is tiny, or whose
   entries are all tiny, are finite and correct. The 3x3 eigen solver
   (`dsytrd3`) builds its first Householder reflection from that row scaled
@@ -330,31 +325,14 @@ For a release, the full auto-generated list of merged pull requests is in its
   content and its pending pressure buffer separately. Geometric domain
   transfer and prescribed-pressure reactions have their own report.
 
-- Explicit and GVS restarts execute a quality/remesh stage pending at the
-  checkpoint, preserving continuation when that stage changes the mesh.
-
-- Monitor CSV histories survive restart: matching checkpoint rows are kept
-  once and stale later rows are replaced. Inconsistent point histories fail
-  validation before any existing CSV is changed.
-
-- Large step-output intervals no longer overflow the frame-index product
-  and trigger extra GVS writes. Time-based output keeps its requested cadence
-  through fresh runs and restart.
-
 - Solver help documents hydraulic pressure/flux boundary types, stress
   signs, fluid-viscosity units and the actual simplex mesh layouts and
   region/depth conventions used by the manual examples. Option names,
   defaults and numerical behavior are unchanged.
 
-- Fixed-stress flow in plastic rheologies now uses accepted volumetric
-  strain for the mechanical source. Plastic stress relaxation no longer
-  creates a spurious fluid-content change; the pending-pressure buffer
-  remains consistent across hydraulic substeps and changed timesteps.
-
-- Restarting with changed timestep controls reselects the timestep and
-  matching mass before the next physical step. Unchanged PT and explicit
-  controls retain exact continuation; older PT checkpoints can switch to
-  explicit mechanics without carrying an oversized PT interval.
+- PT flow with plastic or viscous rheologies uses accepted volumetric strain
+  for the mechanical source and retains the fixed-stress pressure buffer
+  across hydraulic substeps and restarts with a changed timestep.
 
 - Imported meshes may prescribe unequal pressures on disjoint tagged
   boundaries. Conflicting pressures at actual shared nodes are rejected
@@ -369,8 +347,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 - The first timestep on a remeshed grid uses its current hydraulic
   diffusivities. Conservative overlap groups remap donors by size. In 3D,
   the clipped faces and their cap use the same tolerance-offset plane.
-
-- Fixed-mesh GVS updates its velocity-dependent mass together with its timestep.
 
 - Hydrostatic initialization, Darcy gravity, saturated mixture weight, dynamic
   mass and foundation loads honor `mat.fluid_rho0` instead of assuming
@@ -393,10 +369,6 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 - PT step-based output keeps a finite checkpoint clock when the time-output
   interval is omitted, including fresh and resumed runs with either scheduler.
-
-- Explicit and GVS checkpoints retain the regular output schedule, avoiding
-  extra frames after restart. All methods save the configured cadence; an
-  interval changed on restart begins a new schedule at that step and time.
 
 - PT logs distinguish the selected starting residual (`initial`) from the
   first warm trial (`warm_initial`) used for convergence scaling, and report
