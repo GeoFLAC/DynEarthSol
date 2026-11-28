@@ -1341,9 +1341,10 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //  Freedom masks + rules R1-R5 (the OLD-mesh part of the policy)
 // ----------------------------------------------------------------------------
 
-// FREE permits splits, collapses and swaps. SPLIT permits splits and swaps
-// and leaves node grades to other rules. Edges shared with a required element
-// stay intact.
+// FREE permits splits, collapses and swaps. SPLIT permits refinement and
+// retains the node grades set by other rules. MMG may collapse an edge of a
+// SPLIT element if the node it would remove is movable.
+// Edges shared with a required element stay intact.
 // FROZEN elements become required when all their nodes are pinned.
 enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
