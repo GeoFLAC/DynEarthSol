@@ -971,10 +971,10 @@ void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only
         }
         const double det = (px[1]-px[0])*(py[2]-py[0]) - (px[2]-px[0])*(py[1]-py[0]);
         if (std::abs(det) < 1e-12 * dxg * dyg) continue;    // degenerate in xy projection
-        int i0 = (int)std::ceil ((std::min(px[0], std::min(px[1], px[2])) - x0g) / dxg - 1e-9);
-        int i1 = (int)std::floor((std::max(px[0], std::max(px[1], px[2])) - x0g) / dxg + 1e-9);
-        int j0 = (int)std::ceil ((std::min(py[0], std::min(py[1], py[2])) - y0g) / dyg - 1e-9);
-        int j1 = (int)std::floor((std::max(py[0], std::max(py[1], py[2])) - y0g) / dyg + 1e-9);
+        int i0 = (int)std::ceil ((std::min({px[0], px[1], px[2]}) - x0g) / dxg - 1e-9);
+        int i1 = (int)std::floor((std::max({px[0], px[1], px[2]}) - x0g) / dxg + 1e-9);
+        int j0 = (int)std::ceil ((std::min({py[0], py[1], py[2]}) - y0g) / dyg - 1e-9);
+        int j1 = (int)std::floor((std::max({py[0], py[1], py[2]}) - y0g) / dyg + 1e-9);
         i0 = std::max(i0, 0); i1 = std::min(i1, M - 1);
         j0 = std::max(j0, 0); j1 = std::min(j1, M - 1);
         const double inv_det = 1.0 / det;

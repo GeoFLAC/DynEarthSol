@@ -649,7 +649,7 @@ double ru_maxrss_gib()
 double sample_rss_gib(double& peak_rss_gib)
 {
     const double rss_gib = host_mem_rss_gib();
-    peak_rss_gib = std::max(peak_rss_gib, std::max(ru_maxrss_gib(), rss_gib));
+    peak_rss_gib = std::max({peak_rss_gib, ru_maxrss_gib(), rss_gib});
     return rss_gib;
 }
 

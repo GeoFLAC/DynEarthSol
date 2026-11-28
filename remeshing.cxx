@@ -4178,8 +4178,8 @@ bool side_profile_facet_depths_at(const SideProfile &p, int f, double s,
         const double r0 = (sa == sb) ? ra : ra + (s - sa) / (sb - sa) * (rb - ra);
         const double r1 = (sa == sb) ? rb : r0;
         if (!hit) { rmin = r0; rmax = r0; hit = true; }
-        rmin = std::min(rmin, std::min(r0, r1));
-        rmax = std::max(rmax, std::max(r0, r1));
+        rmin = std::min({rmin, r0, r1});
+        rmax = std::max({rmax, r0, r1});
     }
     return hit;
 }
