@@ -250,6 +250,16 @@ For a release, the full auto-generated list of merged pull requests is in its
 - GPU runs with averaged output (the default) are faster: the averaging no
   longer moves fields off the device every step (3D 7.9 to 1.6 ms/step on an
   RTX A5000) ([#114]).
+- A case-blind search of a run log or a `.manifest` for NaN no longer matches
+  a clean run. The remesh lines no longer name the neighbour-search structure
+  ("nano-kdtree"); the `[runtime][device]` line and the manifest's
+  `runtime.device` section name it once, as `knn=kdtree` or `knn=lbvh`. The
+  manifest's submodule key `nanoflann` is now `knn-kdtree` ([#152]).
+- The g++ and clang builds stop on a variable-length array (`-Werror=vla`)
+  ([#152]).
+- **Breaking.** A config with `mat.min_viscosity` above `mat.max_viscosity`
+  is rejected (exit code 11). Such a run gave every element `max_viscosity`
+  without a message; set both keys to that value to keep it ([#152]).
 
 - **Breaking.** The Docker images no longer set `OMP_NUM_THREADS=8`; OpenMP
   uses every CPU the container has, and `omp N` sets it ([#119]).
@@ -415,6 +425,21 @@ For a release, the full auto-generated list of merged pull requests is in its
   or dilation weakens: on one thread the 2D accretionary-wedge example runs
   about 6% longer than before with the default and about 13% longer with 1.
   Both give the same result when only cohesion weakens ([#136]).
+- Terrigenous sedimentation no longer reads one element past the surface
+  arrays when a basin found from the left stays below sea level to the right
+  edge of the model. Such a basin now gets "No accommodation space" ([#152]).
+- `2vtk.py -p` and `2vtk-legacy.py -p` give the principal axes of a 2D
+  stress. With a nonzero shear stress, `s1` and `s3` were the mirror image of
+  the axes about x ([#152]).
+- A frame with an empty marker set, such as a hydration run before the first
+  hydrous marker, is written without HDF5 errors, and its empty block is a
+  valid one. The marker blocks are numbered in file order, so the second has
+  the VTK index 2 ([#152]).
+- OpenACC builds by nvc++ 26.5: a pseudo-transient run no longer stops with
+  CUDA error 700, and the GPU MPI build compiles with CUDA 13 ([#152]).
+- A build with the system HDF5 of Fedora or RHEL no longer records `/usr/lib64`
+  as an rpath, so an MPI that ships its own libraries links against them
+  ([#152]).
 
 ## [2.0.2] - 2026-09-17
 
@@ -599,3 +624,4 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
 [#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
 [#150]: https://github.com/GeoFLAC/DynEarthSol/pull/150
+[#152]: https://github.com/GeoFLAC/DynEarthSol/pull/152
