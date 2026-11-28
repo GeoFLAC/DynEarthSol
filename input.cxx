@@ -500,7 +500,7 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.surface_process_option", opt::value<int>(&p.control.surface_process_option)->default_value(0),
          "What kind of surface processes? 0: no surface processes. "
          "1: using simple diffusion to modify surface topography. "
-         "2: using simple deposition. "
+         "2: fill up: raise every top node below control.surf_base_level back to it, depositing sediment. "
          "11: using GoSPL landscape evolution model. "
          "101: custom function. "
          "102: using simple deposition and diffusion.")
@@ -514,6 +514,9 @@ static void declare_parameters(opt::Registry &cfg,
          "Sedimentation rate of universal suspended deposite (in m/s).")
         ("control.surf_base_level",opt::value<double>(&p.control.surf_base_level)->default_value(0.e0),
          "Base level of surface processes.")
+        ("control.sediment_layer_interval_in_yr", opt::value<double>(&p.control.sediment_layer_interval_in_yr)->default_value(1e6),
+         "Duration of one sediment layer (in yr) when mat.mattype_sediment_alternate is set: deposits alternate "
+         "between mat.mattype_sediment and mat.mattype_sediment_alternate every this many years.")
         ("control.surface_process_gospl_config_file", opt::value<std::string>(&p.control.surface_process_gospl_config_file)->default_value(""),
          "Configuration file path for GoSPL surface processes (used with surface_process_option = 11).")
         ("control.gospl_coupling_frequency", opt::value<int>(&p.control.gospl_coupling_frequency)->default_value(1),
@@ -1088,6 +1091,11 @@ static void declare_parameters(opt::Registry &cfg,
          "With mat.phase_change_option 3: wet crust for the serpentinization grid (with mat.has_serpentinization) "
          "and the source of the sediment chain (with mat.has_sediment_metamorphism); with either it must be "
          "set in the cfg.")
+        ("mat.mattype_sediment_alternate", opt::value<int>(&p.mat.mattype_sediment_alternate)->default_value(-1),
+         "Index of a second sediment material. When set, surface deposits are mattype_sediment and this in "
+         "alternating control.sediment_layer_interval_in_yr intervals, so that sediments of identical properties "
+         "show as layers. Only mattype_sediment carries the deposit time and the phase changes of sediment. "
+         "Default -1 (unset).")
         ("mat.mattype_mor_extrusion", opt::value<int>(&p.mat.mattype_mor_extrusion)->default_value(0),
          "Index of mid-ocean-ridge extrusion material. Unused: no phase change reads it.")
         ("mat.mattype_asthenosphere", opt::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
@@ -2010,6 +2018,14 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
                           << ") must be within [0, mat.num_materials-1] = [0, "
                           << p.mat.nmat - 1 << "].\n";
                 die(EXIT_CONFIG_VALUE);
+            }
+        }
+        if (p.mat.mattype_sediment_alternate != -1) {
+            if (p.mat.mattype_sediment_alternate < 0 || p.mat.mattype_sediment_alternate >= p.mat.nmat) {
+                die(EXIT_CONFIG_VALUE, "mat.mattype_sediment_alternate must be -1 (unset) or in [0, mat.num_materials).");
+            }
+            if (p.control.sediment_layer_interval_in_yr <= 0) {
+                die(EXIT_CONFIG_VALUE, "control.sediment_layer_interval_in_yr must be positive.");
             }
         }
         // The continental geotherm indexes rho0 and therm_cond with it.

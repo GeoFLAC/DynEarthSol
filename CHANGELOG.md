@@ -17,6 +17,12 @@ For a release, the full auto-generated list of merged pull requests is in its
 
 ### Added
 
+- `surface_process_option = 2` fills the surface up to `surf_base_level`: every
+  top node below it is raised back to it and the space becomes sediment.
+  `mattype_sediment_alternate` and `sediment_layer_interval_in_yr` make the
+  deposits alternate between two material ids, so that sediments with identical
+  properties appear layered.
+
 - Material-following monitor points use `monitor.point_type` (`particle` or
   `grid`), retain their exact checkpoint location, and preserve CSV histories
   through restart. `monitor.remesh_output` selects before/both remesh rows;

@@ -1821,6 +1821,21 @@ void correct_surface_element(const Variables& var, double_vec& volume, double_ve
 #endif
 }
 
+// Raise every top node below surf_base_level back up to it.
+static void fill_to_base_level(const Variables& var, const array_t& coord)
+{
+    const double base_level = var.surfinfo.base_level;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, coord, base_level)
+#endif
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async
+    for (int i=0;i<var.surfinfo.ntop;i++) {
+        const double z = coord[(*var.surfinfo.top_nodes)[i]][NDIMS-1];
+        if (z < base_level)
+            (*var.surfinfo.dh)[i] = base_level - z;
+    }
+}
+
 void compute_surface_dh(const Param& param, const Variables& var, array_t& coord)
 {
 #ifndef ACC
@@ -1836,6 +1851,9 @@ void compute_surface_dh(const Param& param, const Variables& var, array_t& coord
         break;
     case 1:
         simple_diffusion(var);
+        break;
+    case 2:
+        fill_to_base_level(var, coord);
         break;
 #ifdef HAS_GOSPL_CPP_INTERFACE
     case 11:
@@ -1972,8 +1990,12 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
             for (int i=0;i<var.surfinfo.ntop;i++)
                 (*var.surfinfo.dhacc)[(*var.surfinfo.top_nodes)[i]] = 0.;
 
-            // set marker of sediment.
-            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, param.mat.mattype_sediment, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
+            // set marker of sediment: mattype_sediment_alternate in every other layer interval
+            int mattype = param.mat.mattype_sediment;
+            if (param.mat.mattype_sediment_alternate >= 0 &&
+                static_cast<long>(var.time / (param.control.sediment_layer_interval_in_yr * YEAR2SEC)) % 2 == 1)
+                mattype = param.mat.mattype_sediment_alternate;
+            markersets[0]->set_surface_marker(param, var, param.mesh.smallest_size, mattype, *var.surfinfo.edvacc_surf, elemmarkers, markers_in_elem);
         }
     }
 

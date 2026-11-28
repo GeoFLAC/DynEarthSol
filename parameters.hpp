@@ -238,6 +238,7 @@ struct Control {
     double surf_diff_ratio_marine;
     double surf_depo_universal;
     double surf_base_level;
+    double sediment_layer_interval_in_yr;
     std::string surface_process_gospl_config_file;
     int    gospl_coupling_frequency;  // Run GoSPL every N steps (default: 1)
     double gospl_coupling_interval_in_yr;   // Run GoSPL every T years (default: 1000)
@@ -460,6 +461,7 @@ struct Mat {
     int mattype_partial_melting_mantle;
     int mattype_continental_crust;
     int mattype_sediment;
+    int mattype_sediment_alternate;
     int mattype_oceanic_crust;
     int mattype_serpentinite;
     int mattype_eclogite;
