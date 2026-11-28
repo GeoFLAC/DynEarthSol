@@ -341,13 +341,8 @@ void MarkerSet::set_surface_marker(const Param& param,const Variables& var, cons
         double dv_apply = (*var.volume)[e] / nmarkers;
         double edh = dv_apply / base;
 
-        // Guard against a DEGENERATE (near-zero-area) surface facet -- e.g. a collapsed "cliff" at a
-        // convergent trench. There dv_apply/base blows up, so the marker (placed edh below the
-        // surface) lands absurdly far down (observed z ~ -2.5e13 m for a 1.5e5 m-deep domain), where
-        // it cannot be located in any element -- the old code then aborted the whole run (exit 168).
-        // A well-formed deposit sits a small fraction of an element below the surface (edh << element
-        // size); only a degenerate facet drives edh past the element's own scale. Skip deposition on
-        // such a facet and KEEP edvacc, so it deposits once the next remesh regularises the surface.
+        // A near-zero facet area can put the marker outside the mesh. Leave
+        // edvacc pending when the deposit is too thick for its element.
         double char_size = std::sqrt((*var.volume)[e]);
 #ifdef THREED
         char_size = std::cbrt((*var.volume)[e]);
@@ -948,7 +943,7 @@ void MarkerSet::write_save_file(const Variables &var, T &bin) const
 
 
 void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double &Z, double &P, double &T) const {
-        // Get depth and temperature at the marker
+        // Interpolate the vertical coordinate and temperature at the marker.
         Z = T = 0;
         ConstShapefnAccessor eta = (*_eta)[m];
         ConstConnAccessor conn = (*var.connectivity)[(*_elem)[m]];
@@ -957,8 +952,7 @@ void MarkerSet::get_ZPT(const Param& param, const Variables& var, int m, double 
             T += (*var.temperature)[conn[i]] * eta[i];
         }
 
-        // Get pressure, which is constant in the element
-        // P = - trace((*var.stress)[e]) / NDIMS;
+        // Reference pressure at the marker's elevation relative to the datum.
         P = ref_pressure(param, Z);    
 }
 

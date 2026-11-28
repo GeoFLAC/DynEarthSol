@@ -197,9 +197,8 @@ namespace {
     }
 
     // unconsolidated sediment -> sedimentary rock (compaction/lithification).
-    // 80 C and 2 km: geoflac's thresholds, which it gives no source for. Both
-    // must hold, as in geoflac master until July 2026; geoflac now converts
-    // on either. Heuristic, untuned.
+    // The heuristic temperature and depth thresholds come from geoFLAC.
+    // Compaction requires both thresholds to be met.
     #pragma acc routine seq
     bool sediment_compaction(double depth, double press, double T)
     {

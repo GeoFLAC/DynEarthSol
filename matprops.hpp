@@ -185,9 +185,9 @@ private:
     // Pure function of visc_exponent / visc_coefficient, never mutated.
     double_vec visc_pow_edot, visc_coef_term, visc_nR;
 
-    // The hot means, rebuilt by refresh_elem_cache(): pure functions of elemmarkers.
-    // Not exhaustive -- rho/visc CANNOT be cached (T, stress, edot). Stride 8 keeps one
-    // element's slots in a 64 B line; seven separate arrays measured 1.6x slower.
+    // Store each element's material means contiguously. refresh_elem_cache()
+    // updates them from the marker counts. Density and viscosity depend on
+    // the evolving fields and are evaluated when needed.
     static constexpr int MP_STRIDE = 8;
     enum CacheSlot : int { MPC_BULKM = 0, MPC_SHEARM, MPC_PHI, MPC_ALPHA_BIOT,
                            MPC_CP, MPC_K, MPC_BETA_FLUID };

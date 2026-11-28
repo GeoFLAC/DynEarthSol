@@ -250,9 +250,7 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     characteristic_distance = p.mat.characteristic_distance;
     // static_friction_coefficient = p.mat.static_friction_coefficient;
 
-    // Material-only terms of the creep law, in the association visc() evaluates them in
-    // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
-    // under -ffast-math and on openacc=1 (device -> host libm).
+    // Cache the material-only creep terms with the grouping used by visc().
     {
         // J mol^-1 K^-1, as the Chen & Morgan creep law uses it.
         const double gas_constant = 8.3144;

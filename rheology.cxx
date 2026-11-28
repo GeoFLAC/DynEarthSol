@@ -14,10 +14,9 @@
 #include "utils.hpp"
 
 #ifdef THREED
-// Half-width of the undecided band around the yield surface, relative to
-// (|p0| + anphi*|p2| + |amc|). Covers dsyevc3's 6.6e-4 error relative to max|lambda|:
-// anphi >= 1, so band >= 1e-2*max|lambda|; worst measured error/band 4e-2 over 2.6e7 tensors.
-// Only the 3D yield test pre-filters, so 2D has no use for it.
+// Relative margin around the 3D yield surfaces, scaled by
+// |p0| + anphi*|p2| + |amc|. The margin accounts for eigenvalue error
+// in the elastic screen.
 const double YIELD_PREFILTER_MARGIN = 1e-2;
 #endif
 
@@ -60,9 +59,8 @@ static void unflatten_stress3(T s, double a[3][3])
     a[1][2] = s[5];
 }
 
-/* Eigenvalues ONLY, ascending, for the yield test in elasto_plastic(). dsyevc3 (Cardano)
- * is 4.8x cheaper (25.1 vs 121.1 ns/call) but inaccurate near degeneracy, so a decision
- * near the surface is undecided -- see YIELD_PREFILTER_MARGIN. */
+/* Ascending eigenvalues for the elastic screen. The Cardano solver dsyevc3
+ * loses accuracy near repeated roots. See YIELD_PREFILTER_MARGIN. */
 #pragma acc routine seq
 template <typename T>
 static void principal_values3(T s, double p[3])
@@ -1591,9 +1589,8 @@ static void elasto_plastic(double bulkm, double shearm,
     // eigenvectors
     double v[3][3];
 
-    // Eigenvalue-only PRE-FILTER: v is needed only to rotate a CORRECTED stress back, and
-    // only 0.170% of elements yield, so the eigenvectors are almost never needed.
-    // One-sided -- anything within the band falls through to the accurate solver.
+    // Skip the full eigensolve when both yield checks are elastic by the margin.
+    // The full solve provides the eigenvectors for rotating a corrected stress back.
     {
         double pf[3];
         principal_values3(s, pf);
@@ -2083,7 +2080,8 @@ void update_stress(const Param& param, Variables& var, tensor_t& stress,
             //double div2 = ((*var.volume)[e] / (*var.volume_old)[e] - 1) / var.dt;
             #pragma acc loop seq
             for (int i=0; i<NDIMS; ++i) {
-                edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;  // XXX: should NDIMS -> 3 in plane strain?
+                // The active normal components must sum to edvoldt.
+                edot[i] += ((*var.edvoldt)[e] - div) / NDIMS;
             }
         }
 

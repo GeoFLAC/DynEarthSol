@@ -30,9 +30,8 @@ is_restarting_weakzone (exit 11) stop the run, as do two faults of one name with
 ic.gwb_fault_is_gaussian (exit 12).
 --unsupported checks that a build without usegwb=1 refuses option 936 (exit 31).
 
-gwb-dat is queried in 3D, at (x, 0, z) for a 2D model, whose world must then
-have the cross section [[0,0],[L,0]]: before GWB PR #949 its 2D output prints
-the compositions one column off.
+Use the 3D gwb-dat column layout for both dimensions. For a 2D model
+the query lies at y = 0 and its world needs the cross section [[0,0],[L,0]].
 """
 import argparse
 import json

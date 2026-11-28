@@ -47,8 +47,8 @@ Fixes #
 
 ## Numerical effect
 
-<!-- CI builds every flag combination and checks restart determinism, but cannot
-     tell whether THIS change altered results. If it can, compare a
+<!-- CI checks selected build configurations and restart determinism.
+     If this change can alter results, compare a
      benchmarks-cores case before and after (`make set` on the parent commit,
      then `make cmp`) -- see "Benchmarks and regression testing" in
      CONTRIBUTING.md. -->

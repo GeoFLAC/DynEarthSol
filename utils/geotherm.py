@@ -84,7 +84,7 @@ def get_visc(edot, T,  n, A, E, P=0.0, V=0.0):
     edot: second invariant of strain rate
     T: temperature in Celsius
     n, A, E: viscosity parameters
-    P: pressure in MPa (compression -> negative)
+    P: pressure in MPa, positive in compression
     V: activation volume in cm^3/mol
 
     return viscosity in Pascal.s
@@ -117,26 +117,12 @@ def main():
     mat_n = np.array([3.5, 3.0, 4.0])
     mat_B = [-15.56,-15.40,-28.00]
 
-    # mat_A = np.array([2.87E+03, 8.29E+00, 5.21E-07])
     mat_A = np.power(4,1-mat_n) / 3 * np.power(10,mat_B) * np.power(1e6,mat_n)
-    # mat_A = np.power(4,1-mat_n) / 3 * np.exp(mat_B) * np.power(1e6,mat_n)
-    # mat_A = np.power(4,1-mat_n) / 3 * np.exp(mat_B) * np.power(1e6,1)
 
     mat_E = [5.30E+05, 3.56E+05, 2.23E+05]
     mat_V = [13.0, 0.0, 0.0] # cm^3/mol
-    # Andres 2019
-    # mat_rho = [3300,3300,2850,2700] # kg/m^3 density
-    # mat_k = [3.3, 3.3, 2.5, 2.1]
-    # mat_cp = [1200, 1200, 1200, 1200]
-    # mat_H0 = [0.0, 0.0, 7.02E-11, 4.81e-10]
-    # mat_A = [1.17E+03, 5.58E+01, 8.29E+00, 5.21E-07]
-    # mat_n = [3.5, 4.2, 3.0, 4.0]
-    # mat_E = [5.30E+05, 4.45E+05, 3.56E+05, 2.23E+05]
-    # mat_V = [13.0, 0.0, 0.0, 0.0] # cm^3/mol
 
-
-    # 9.6e-10 W/kg for granite
-    hr = 20e3 # km length_scale_for_the_decrease_of_heat_production
+    hr = 20e3  # Heat production decay length (m).
     is_hr_from_layer_top = True
 
     mat_k = np.array(mat_k)
@@ -153,9 +139,10 @@ def main():
     T0 = 273
     Tm = 1300 + 273
 
-    Zulb = 22e3 # km
-    Zmoho = 33e3 # km
-    Zbot = 90e3 # km
+    # Layer boundary depths in metres.
+    Zulb = 22e3
+    Zmoho = 33e3
+    Zbot = 90e3
     edot = 1e-15 # 1/s
     
     phase_arr = [2, 1, 0]
@@ -192,8 +179,6 @@ def main():
         bdy_top[ind] = bdy_arr[i]
         dtlayer[ind] = dtlayer_acc_arr[i]
 
-    # calculate temperature increase by radiogenic heat production in the crust    
-    # temp, qm = continental_radiogenic_T2(z,T0,Tm,bdy_arr,hr,k_arr,rhoH0_arr,is_hr_from_layer_top=is_hr_from_layer_top)
     temp = continental_radiogenic_T3(z,dtlayer,bdy_top,rhoH0,k,T0,hr,qm,is_hr_from_layer_top=is_hr_from_layer_top)
 
     pres = np.cumsum(rho)*9.8*dz

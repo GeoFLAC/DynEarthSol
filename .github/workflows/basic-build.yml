@@ -43,7 +43,3 @@ jobs:
       run: make clean ndims=2; make ndims=2 opt=2 openmp=1
     - name: make 3d
       run: make clean ndims=3; make ndims=3 opt=2 openmp=1
-    # - name: make check
-    #   run: make check
-    # - name: make distcheck
-    #   run: make distcheck

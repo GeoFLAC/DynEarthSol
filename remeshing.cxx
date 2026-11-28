@@ -1325,46 +1325,14 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 // ============================================================================
 //  FREEZE / REQUIRED POLICY
 // ============================================================================
-// Every entity MMG rebuilds is re-interpolated, which diffuses the fields, above all the
-// localized plastic strain. MMG rebuilds everything not forbidden, so this policy forbids it
-// explicitly: MMG never moves or deletes a required VERTEX and never touches a required ELEMENT.
+// Pin quiet regions during MMG adaptation to limit interpolation of fields
+// such as localized plastic strain. derive_required maps the grades to MMG.
 //
-// Grades:
-//   node : MOVABLE, or PINNED (MMG-required; its nodal fields are carried verbatim).
-//   elem : FREE   -- split, collapse and swap, with the nodes its rule frees (full repair);
-//          SPLIT  -- split and swap only; R2 frees no node, so refinement carries the band's
-//                    plastic strain verbatim. MMG never splits or swaps an edge it shares with a
-//                    required element;
-//          FROZEN -- MMG-required when all its nodes are pinned, else a HINGE: an element with a
-//                    movable node is never required (derive_required).
-// At a node on a required edge MMG starts from the required edges' length, not the metric,
-// except at a SPLIT element's node (mmg_adapt).
-//
-// Rules, in order; each may only raise freedom (details at each function):
-//   R1 REPAIR, R2 REFINE  rule_repair_and_refine: distorted or tiny -> FREE; yielding -> SPLIT.
-//   R3 BOUNDARY           rule_boundary_nodes: which boundary nodes are movable.
-//   R4 SIDE STRIP         rule_side_strip (option 13): the band of a receiving or outward wall.
-//   R5 SIZE RECOVERY      rule_size_recovery: fossil-fine or oversized quiet elements -> FREE.
-//   R6 FLATTEN-BROKEN     detect_flatten_broken, mark_quiet_required: what flatten_* broke -> FREE.
-//   R7 COLLAPSE-REGION    mark_quiet_required (collapse path): the collapse region + 1 ring.
-//
-// POST-OUTPUT QUALITY GATE: mmg_adapt_quality_gated, with unfreeze_near_bad_output.
-// INIT-TIME (mesh.cxx): refine_initial_weak_zone and refine_initial_side_walls free part of the
-// initial mesh in the same way, under the same gate.
-//
-// KNOBS ([mesh]): min_quality, mmg_remesh_defensive_quality_ratio (R1), mmg_remesh_active_plstrain
-// (R2), smallest_size and resolution (floors), mmg_remesh_defensive_tiny_ratio (MMG floor, metric
-// floor, gate, R1 tiny), mmg_remesh_size_recovery_ratio (R5; 0 = off).
-//
-// Rejected (measured), do not retry:
-//   an unbounded undersized flood-fill unfreeze, or R5 against init_elem_size_n instead of the
-//     gradation envelope: re-frees MMG's own hgrad transition at every remesh;
-//   freeing wider than REPAIR around flatten damage on the direct path: NaN;
-//   dissolving small required islands: more bad outputs and retries;
-//   R1's tiny floor at the metric floor: frees REFINE-pinned band nodes, diffuses the band;
-//   an explicit extra hinge ring: no effect;
-//   SPLIT instead of FREE for R1's quality term: MMG cannot fix distortion without moving nodes,
-//     so the badness reaches the gate's blunter unfreeze; more remeshes, no preservation gain.
+// Rules in order, each increasing the mesh regions open to adaptation:
+// R1/R2 rule_repair_and_refine, R3 rule_boundary_nodes, R4 rule_side_strip,
+// R5 rule_size_recovery, then R6/R7 in mark_quiet_required.
+// mmg_adapt_quality_gated checks the result. Initial refinement in mesh.cxx
+// uses the same gate.
 // ============================================================================
 
 
@@ -1372,7 +1340,8 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //  Freedom masks + rules R1-R5 (the OLD-mesh part of the policy)
 // ----------------------------------------------------------------------------
 
-// Element grades (FREEZE / REQUIRED POLICY); derive_required maps them to MMG's inputs.
+// FREE permits full repair. SPLIT permits refinement and swaps and frees no nodes itself.
+// FROZEN elements become required when all their nodes are pinned.
 enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
 // node_rule codes are the rule numbers: 0 = not freed by R1-R5, else 1, 3, 4 or 5 (R2 frees no
@@ -1443,7 +1412,7 @@ void rule_repair_and_refine(const Param &param, const Variables &var,
                             int nelem, FreezeMask &m)
 {
     const double q_thr = param.mesh.min_quality * param.mesh.mmg_remesh_defensive_quality_ratio;
-    // MMG's floor, not the metric floor (rejected designs, FREEZE / REQUIRED POLICY)
+    // Use MMG's volume floor to avoid freeing nodes pinned by the refinement rule.
     const double repair_vol = refine_floors(param.mesh).smallest_vol
                               * param.mesh.mmg_remesh_defensive_tiny_ratio;
     const double pls_thr = param.mesh.mmg_remesh_active_plstrain;
@@ -1552,8 +1521,7 @@ void rule_boundary_nodes(const Param &param, const Variables &var, int nnode,
 //   outward:   flatten_* snaps the wall back, which narrows a frozen band by the drift. EVERY band
 //              node off that wall becomes movable (interface nodes, the top and bottom rows, in 3D
 //              the adjacent walls): only moving them restores the edges the snap shortened.
-// The band is chosen by the wall, not by the flatten displacement, and is no wider than a
-// receiving side's, so it is not the rejected flatten-damage freeing (FREEZE / REQUIRED POLICY).
+// Wall connectivity sets the strip width for both cases.
 void rule_side_strip(const Param &param, const Variables &var, const conn_t &connectivity,
                      int nnode, int nelem, const SideInflowState &sis, uint side_bits,
                      FreezeMask &m)
@@ -3256,18 +3224,10 @@ int majority_sign(const double *xz, const int *conn, int ne)
     return (2 * npos >= ne) ? 1 : -1;
 }
 
-// TEMPORARY repair of the bottom-snap fold: flatten_bottom() lifts a bottom node that sank below
-// the bottom plane back onto it, sometimes so far that a triangle above it turns inside out; MMG
-// reorients it silently and returns a folded mesh, which check_mesh_tangle() stops on. Lift
-// interior nodes (on no boundary segment) of the input's inverted triangles, so they move up with
-// the bottom node, each by the least amount that gives its triangle a measure of FRAC x its
-// longest edge^2 (before the lift), and repeat for the triangles a lift inverts in turn. Up only:
-// the snap moved the bottom up, and a node moved down would close on the restored bottom. A
-// triangle's measure is linear in one node's z, so each lift hits its target exactly. Returns the
-// number of nodes lifted (0: nothing inverted), or -1 when a triangle has no interior node a lift
-// unfolds, or the passes run out. Called only on a fold, so a remesh that does not fold is
-// untouched. The full fix, the bc.has_winkler_bottom_restore option, comes in a later release;
-// this repair then goes.
+// Unfold 2D triangles inverted by flatten_bottom() by lifting interior nodes.
+// Use upward lifts to preserve clearance above the restored bottom. The signed
+// area is linear in the lifted coordinate. Return the number of nodes lifted
+// or -1 if a triangle cannot be unfolded or the pass limit is reached.
 int lift_to_unfold(double *xz, const int *conn, int nn, int ne, const int *seg, int ns,
                    double &max_lift)
 {
@@ -3555,9 +3515,7 @@ void optimize_mesh_2d(const Param &param, Variables &var, int bad_quality,
     MMGInput  mmg_in = { mnode, melem, mseg, mcoord, mconn1, mseg1, msegflag, mmetric, rn, re, false, mmetric_aniso, ie_ptr, n_ie, split_node.data() };
     MMGOutput mmg_out;
     mmg_adapt_quality_gated(param, mmg_in, mmg_out, req_node, req_elem);
-    // TEMPORARY repair of the bottom-snap fold (lift_to_unfold()): only when MMG returned a
-    // mesh that check_mesh_tangle() stops on (the same fold test), so a remesh that does not
-    // fold is untouched.
+    // Use the same fold test as check_mesh_tangle() before calling lift_to_unfold().
     auto out_measure = [&](int e, double &m, double &tol) {
         const double *x = mmg_out.coord.data();
         const int *cn = &mmg_out.conn[3*e];

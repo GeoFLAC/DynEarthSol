@@ -863,14 +863,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only
     // than transposing the indices at the read.
     double_vec cmiT((size_t)M * M);
     double_vec am((size_t)M * ND);              // mode amplitude at each depth
-    // Threaded per point: a point owns a contiguous row of the table, and the sum
-    // over modes keeps serial order, so the table is bit-identical to a serial build
-    // at the default opt=2. Only there: opt=3 adds -ffast-math, which lets the
-    // compiler reassociate that sum, and this traversal then lands ~3 ulp from the
-    // serial one. Same reason there is no `#ifndef ACC` as in the 3-D branch.
-    // Only locals are listed: members (heff, dmax, Lg, ...) reach the region through
-    // `this`, which default(none) does not police, so naming them would not check
-    // anything.
+    // Thread the host transform over independent outputs and preserve the
+    // order of each sum. Members reach the OpenMP region through this.
     #pragma omp parallel default(none) \
         shared(s, a, am, cmiT, M) firstprivate(ND, pn)
     {
@@ -1032,10 +1026,8 @@ void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only
     // inverse back to (x, y) as two cosine passes: over n into U, then over m into
     // the table. Cost is O(M^3) for the forward pair, O(M^3 * ND) for the inverse.
     //
-    // Threaded as one region: each loop splits the axis that owns its output and the
-    // inner sums keep serial order, so the table is bit-identical to a serial build.
-    // No `#ifndef ACC` -- that guard belongs where a paired `acc parallel loop`
-    // takes over on the device, and this is host-only STL called from serial code.
+    // Each host loop partitions independent outputs and preserves the
+    // order of each inner sum.
     const double pn = M_PI / (M - 1);
     dmax = param.mesh.zlength + hmax;           // deepest element depth below any surface
     const int ND = 65;                          // depth rows, as in the 2-D branch
@@ -1427,9 +1419,7 @@ void spr_node_to_elem(const Param &param, const Variables &var,
 #ifdef NPROF_DETAIL
     nvtxRangePush(__FUNCTION__);
 #endif
-    // Step B: nodal SPR stresses -> new element stresses, then reconcile with the
-    // NN remap. topo is the NEW-mesh surface, built by the caller and shared with
-    // restore_stress_from_ref (rasterising it twice would cost ~14 ms in 3-D).
+    // Use the new-mesh surface table shared with restore_stress_from_ref().
 
     // Pin the top-boundary nodal stress before averaging back to elements: the SPR
     // patch fit is one-sided at surface nodes, its least reliable spot, while the

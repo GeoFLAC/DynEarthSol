@@ -240,11 +240,7 @@ void init(const Param& param, Variables& var)
     for (int e=0; e<var.nelem; ++e)
         (*var.viscosity)[e] = var.mat->visc(e);
 
-    // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
-    // and elemmarkers, which those calls are the first to write -- before them tmass was built at
-    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). On a static mesh
-    // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
-    // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
+    // Mass uses the initialized temperature and marker counts. Isostasy calls
     // update_mesh() ungated before the loop.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 

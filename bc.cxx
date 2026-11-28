@@ -813,23 +813,22 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 
                 double p;
                 if (i==iboundz0 && param.bc.has_winkler_foundation) {
-                    double rho_effective = var.mat->rho(e);  // Base density of the solid material
+                    double rho_effective = var.mat->rho(e);
 
-                    // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
+                    // Use the density of the saturated mixture in the hydraulic branch.
                     if (param.control.has_hydraulic_diffusion) {
                         rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
                         // 1000.0 is the fluid density (e.g., water, in kg/m³)
                         // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                        p = var.compensation_pressure -
+                            (rho_effective + param.bc.winkler_delta_rho) *
+                            param.control.gravity * (zcenter + param.mesh.zlength);
                     }
                     else
                     {
-                        // Winkler foundation for the bottom boundary with adjusted effective density
-                        p = var.compensation_pressure - 
-                            (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
-                            param.control.gravity * (zcenter + param.mesh.zlength);  // Adjust for depth from base
+                        p = var.compensation_pressure -
+                            (rho_effective + param.bc.winkler_delta_rho) *
+                            param.control.gravity * (zcenter + param.mesh.zlength);
                     }
                 }
                 else if (i==iboundz1 && param.bc.has_water_loading) {
@@ -841,14 +840,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                     }
                 }
                 else {
-                    // sidewalls: lithostatic support pressure (Archimedes) from the exterior column.
-                    // Floor at zero: for a wall facet ABOVE the datum (zcenter > 0, wall-edge
-                    // topography) ref_pressure_option 0/4 extrapolate linearly NEGATIVE, which would
-                    // flip the traction into an unphysical OUTWARD suction that actively pulls the
-                    // topographic strip out of the domain. The true exterior there is air/vacuum
-                    // (zero traction), so clamp. Options 1/2/3 already return 0 above the datum, so
-                    // this only changes options 0/4; below the datum (the usual case) p > 0 and the
-                    // clamp is inert -> normal runs are bit-identical.
+                    // Keep the exterior lithostatic support compressive. The linear
+                    // reference pressure can be negative on wall facets above the datum.
                     p = ref_pressure(param, zcenter);
                     if (p < 0.0) p = 0.0;
                 }
@@ -966,13 +959,13 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
                 continue; // Skip if no valid stress BC type
         }
 #else
-        // 2D case: Apply stress based on boundary type (x0, x1, z0, z1)
+        // Traction components in 2D are ordered (x, z).
         switch (var.stress_bc_types[i]) {
             case 1: // Traction in the x-direction
                 traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
                 break;
-            case 3: // Traction in the z-direction (mapped to y in 2D)
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value in 2D
+            case 3: // Traction in the z-direction
+                traction[1] = var.stress_bc_values[i];
                 break;
             default:
                 continue; // Skip if no valid stress BC type
@@ -986,7 +979,6 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 
             // Distribute the traction (stress) to the nodes on the facet
             for (int d = 0; d < NDIMS; ++d) {
-                // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
                 force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
             }
         }
@@ -1904,19 +1896,6 @@ void apply_surface_dh(const Variables& var, array_t& coord, SurfaceInfo& surfinf
             (*var.surfinfo.edvacc_surf)[i] += dh_e * base / NDIMS;
         }
     }
-
-//     if (var.steps%1000 == 0) {
-//         double sum = 0.;
-// #ifndef ACC
-//         #pragma omp parallel default(none) shared(var) reduction(+:sum)
-// #endif
-//         #pragma acc parallel loop gang vector async reduction(+:sum)
-//         for (int i=0; i<var.surfinfo.etop; i++) {
-//             sum += (*var.surfinfo.edvacc_surf)[i];
-//         }
-//         #pragma acc wait
-//         printf("Sum of accu. surface deposition volume: %.2e\n", sum);
-//     }
 
     // find max surface velocity
     double maxdh = 0.;

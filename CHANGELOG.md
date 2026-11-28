@@ -265,6 +265,8 @@ For a release, the full auto-generated list of merged pull requests is in its
   lands on an output time to within rounding ([#135]).
 - The benchmark comparator resolves the requested frame through the frame list
   when printing its step, allowing sparse restart outputs beginning above frame 0.
+- The legacy VTK converter's help shows `2vtk-legacy.py` in the usage examples
+  for des-binary frames.
 - PT steps that start or end near equilibrium no longer stop with exit 54:
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
