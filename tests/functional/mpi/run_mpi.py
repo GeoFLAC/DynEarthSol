@@ -4,10 +4,10 @@
 Pass an executable built on the parent commit as --serial for regression testing.
 All generated configs, logs, snapshots and results.json stay under --workdir (a new
 temporary directory by default). No existing run or reference is overwritten.
-Both executables must use HDF5 output; full physical datasets are checked exactly.
+Both executables must use HDF5 output; full physical datasets are checked exactly,
+except the sums over nodes in NODE_SUMS, which the ranks add in another order.
 """
 import argparse
-import configparser
 import json
 import os
 from pathlib import Path
@@ -21,8 +21,18 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "tests/functional"))
+from des_test_utils import read_config
 # Output fields the current executables write that a reference from an earlier commit may lack.
 ADDED_FIELDS = {"dv surface acc facets"}
+# Sums over the nodes of a frame, which MPI adds in another order. Each order of n
+# terms is within (n - 1) eps/2 of their summed sizes from the exact sum (Higham,
+# Accuracy and Stability of Numerical Algorithms, 2nd ed., sec. 4.2), so two orders
+# differ by at most (n - 1) eps times that size. A frame does not store the terms, so
+# the larger of the reference's largest entry and the volume the case's sources move
+# in a step (source_rate times dt) stands in for it: sources of opposite rate cancel
+# in every entry. Every other dataset, the fields included, must still match exactly.
+NODE_SUMS = {"fluid balance"}
 
 
 def command_text(command):
@@ -31,9 +41,7 @@ def command_text(command):
 
 
 def configure(ndims, moving, resolution, steps=196, output_interval=49):
-    cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-    cfg.optionxform = str
-    cfg.read(ROOT / "examples/core-complex-mmg.cfg")
+    cfg = read_config(ROOT / "examples/core-complex-mmg.cfg", inline_comment_prefixes=("#", ";"))
     cfg["sim"].update(modelname="result", max_steps=str(steps), max_time_in_yr="1e20",
                       output_step_interval=str(output_interval),
                       output_time_interval_in_yr="1e20", checkpoint_frame_interval="1")
@@ -69,7 +77,9 @@ def execute(command, directory, env, logname="run.log", expected_failure=False, 
 
 
 def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save", finite=True,
-                          group="VTKHDF"):
+                          group="VTKHDF", source_rate=0.0):
+    # source_rate: the summed absolute rates of the fluid sources, in the units of the
+    # fluid balance per second (m^2/s in 2D, m^3/s in 3D).
     import h5py
     import numpy as np
 
@@ -88,26 +98,39 @@ def compare_physical_hdf5(reference, current, frame, prefix="result", kind="save
                  if path in left or path.split("/")[-1] not in ADDED_FIELDS}
         if not left or left.keys() != right.keys():
             raise RuntimeError(f"Physical HDF5 dataset sets differ in frame {frame}")
+        rounded = {}
         for path in left:
             a, b = left[path][()], right[path][()]
             if a.shape != b.shape or a.dtype != b.dtype:
                 raise RuntimeError(f"Shape or dtype differs: frame {frame}, {path}")
             if finite and a.dtype.kind in "fc" and (not np.isfinite(a).all() or not np.isfinite(b).all()):
                 raise RuntimeError(f"Non-finite physical data: frame {frame}, {path}")
-            if a.tobytes() != b.tobytes():
+            if a.tobytes() == b.tobytes():
+                continue
+            parent = left[path].parent
+            if path.split("/")[-1] not in NODE_SUMS or "NumberOfPoints" not in parent:
                 raise RuntimeError(f"Physical data differ: frame {frame}, {path}")
-        report = dict(frame=frame, bit_exact=True, datasets=sorted(left))
+            nodes = int(parent["NumberOfPoints"][0])
+            difference = float(np.max(np.abs(a - b)))
+            size = max(float(np.max(np.abs(a))), source_rate * float(parent["dt_sec"][0]))
+            tolerance = (nodes - 1) * float(np.finfo(a.dtype).eps) * size
+            if not difference <= tolerance:
+                raise RuntimeError(f"Node sum differs by {difference:.3g} > {tolerance:.3g}: "
+                                   f"frame {frame}, {path}")
+            rounded[path] = dict(difference=difference, tolerance=tolerance)
+        report = dict(frame=frame, bit_exact=not rounded, datasets=sorted(left), rounded=rounded)
         (current / f"full-compare-{kind}-{frame}.json").write_text(json.dumps(report, indent=2) + "\n")
+        return not rounded
 
 
-def compare(reference, current, frame, env):
+def compare(reference, current, frame, env, source_rate=0.0):
     # The standard comparator checks invariants and selected coordinates; also check
     # complete vectors/tensors, connectivity, material fields, force and marker records.
-    compare_physical_hdf5(reference, current, frame)
+    exact = compare_physical_hdf5(reference, current, frame, source_rate=source_rate)
     log, _ = execute([sys.executable, str(ROOT / "benchmarks-cores/compare.py"),
                       str(reference / "result"), str(current / "result"), str(frame)],
                      current, env, f"compare-{frame}.log")
-    return "Status: BIT-EXACT" in log
+    return exact and "Status: BIT-EXACT" in log
 
 
 def metrics(log, elapsed):
@@ -182,9 +205,7 @@ def main():
     if args.serial3d:
         cases += [("defaults.cfg",3,40),("aniso_test.cfg",3,2)]
     for example, ndims, steps in cases:
-        cfg=configparser.ConfigParser(inline_comment_prefixes=("#",";"))
-        cfg.optionxform = str
-        cfg.read(ROOT / "examples" / example)
+        cfg=read_config(ROOT / "examples" / example, inline_comment_prefixes=("#",";"))
         cfg["sim"].update(modelname="result",max_steps=str(steps),max_time_in_yr="1e20",
                           output_step_interval=str(max(1,steps//4)),
                           output_time_interval_in_yr="1e20",is_outputting_averaged_fields="no")
@@ -206,14 +227,12 @@ def main():
             print(f"{name}: ranks={ranks} OMP={threads}: bit-exact ({len(frames)} frames)",flush=True)
 
     # Exercise optional kernels that the stock examples leave disabled.
-    optional = [(name,ndims) for name in ("hydraulic","pt-hydraulic","thermal-off")
+    optional = [(name,ndims) for name in ("hydraulic","hydraulic-sources","pt-hydraulic","thermal-off")
                 for ndims in ((2,3) if args.serial3d else (2,))]
     optional.append(("hydration",2))
     for name,ndims in optional:
         if name=="hydration":
-            cfg=configparser.ConfigParser(inline_comment_prefixes=("#",";"))
-            cfg.optionxform = str
-            cfg.read(ROOT / "examples/subduction.cfg")
+            cfg=read_config(ROOT / "examples/subduction.cfg", inline_comment_prefixes=("#",";"))
             cfg["sim"].update(modelname="result",max_steps="40",max_time_in_yr="1e20",
                               output_step_interval="10",output_time_interval_in_yr="1e20",
                               is_outputting_averaged_fields="no")
@@ -228,13 +247,32 @@ def main():
                 cfg["control"]["has_hydraulic_diffusion"]="yes"
                 cfg["mat"]["porosity"]="[0.01]"
                 cfg["mat"]["hydraulic_perm"]="[1e-20]"
+            if name=="hydraulic-sources":
+                # A well screen and a point source inside the mesh, so that they
+                # cross rank boundaries, with timed flux on two faces: everything the
+                # distributed pressure step assembles.
+                x, z = float(cfg["mesh"]["xlength"]), float(cfg["mesh"]["zlength"])
+                y = float(cfg["mesh"].get("ylength", "0"))
+                cfg["mat"].update(hydraulic_perm="[1e-16]")
+                cfg["bc"].update(hbc_x0="3", hbc_val_x0="1e-12", num_hbc_period_x0="2",
+                                 hbc_period_x0_time_in_yr="[0,1e-5]", hbc_period_x0_ratio="[1,2]",
+                                 hbc_z1="3", hbc_val_z1="-1e-12", num_hbc_period_z1="2",
+                                 hbc_period_z1_time_in_yr="[0,1e-5]", hbc_period_z1_ratio="[1,0]")
+                rate = "[-1e-6]" if ndims==2 else "[-1e-3]"
+                cfg["fluid_source"] = dict(
+                    num_wells="1", well_x=f"[{0.37*x}]", well_y=f"[{0.41*y}]",
+                    well_screen_top=f"[{-0.3*z}]", well_screen_bottom=f"[{-0.7*z}]", well_rate=rate,
+                    num_points="1", point_x=f"[{0.63*x}]", point_y=f"[{0.55*y}]",
+                    point_z=f"[{-0.45*z}]", point_rate=rate)
+                if ndims==2:
+                    del cfg["fluid_source"]["point_y"]
+                    del cfg["fluid_source"]["well_y"]
             if name=="pt-hydraulic":
                 # The physical-step solver must converge, including its
                 # initial equilibrium, so the case starts from the
                 # hydrostatic-equilibrium cfg.
-                cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-                cfg.optionxform = str
-                cfg.read(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg")
+                cfg = read_config(ROOT / "tests/functional/pt_hydrostatic_equilibrium.cfg",
+                                  inline_comment_prefixes=("#", ";"))
                 cfg["sim"].update(modelname="result", max_steps="8", max_time_in_yr="1e20",
                                   output_step_interval="2", output_time_interval_in_yr="1e20")
         label=f"optional-{name}-{ndims}d"
@@ -242,7 +280,63 @@ def main():
         current,timing=run(label+"-mpi2",cfg,executables["mpi" if ndims==2 else "mpi3d"],2)
         exact=all([compare(reference,current,frame,env) for frame in range(1,5)])
         results["checks"].append(dict(case=label,ranks=2,bit_exact=exact,timing=timing))
-        print(f"{label}: bit-exact",flush=True)
+        print(f"{label}: {'bit-exact' if exact else 'within rounding of the node sums'}",flush=True)
+
+    # A well on a mesh pushed from one side, which moves some ranks' nodes and not others:
+    # the screen moves with the material on every rank as in serial.
+    cfg = read_config(ROOT / "benchmarks/poromechanics/1d-consolidation-des2d_traction.cfg",
+                      inline_comment_prefixes=("#", ";"))
+    cfg["sim"].update(modelname="result", max_steps="5", max_time_in_yr="1e20",
+                      output_step_interval="1", output_time_interval_in_yr="1e20")
+    cfg["mesh"].update(meshing_option="1", xlength="1200", zlength="100", resolution="10",
+                       quality_check_step_interval="100")
+    cfg["control"].update(has_PT="no", is_quasi_static="no", gravity="0", fixed_dt="0.001",
+                          has_thermal_diffusion="no", has_moving_mesh="yes",
+                          has_poroelastic_pressure_feedback="no")
+    cfg["bc"].update(vbc_val_x1="1", stress_bc_z1="0", stress_val_z1="0", hbc_z1="0")
+    cfg["fluid_source"] = dict(num_wells="1", well_x="[1100]",
+                               well_screen_top="[-25]", well_screen_bottom="[-75]",
+                               well_rate="[-1e-8]")
+    cfg["ic"].update(weakzone_option="0", has_body_force_adjustment="no")
+    cfg["mat"]["hydraulic_perm"] = "[1e-18]"
+    reference, _ = run("moving-well-parent", cfg, executables["serial"])
+    current, timing = run("moving-well-mpi2", cfg, executables["mpi"], 2)
+    exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
+    results["checks"].append(dict(case="moving-well", ranks=2, bit_exact=exact, timing=timing))
+    print(f"moving-well: {'bit-exact' if exact else 'within rounding of the node sums'}", flush=True)
+
+    # Fluid points outside a .poly mesh, with opposite rates that cancel in every total,
+    # stop the run once with the serial report and exit code.
+    (work / "box.poly").write_text("4 2 0 0\n0 0 0\n1 0 -100\n2 1200 -100\n3 1200 0\n"
+                                   "4 1\n0 0 1 1\n1 1 2 16\n2 2 3 2\n3 3 0 32\n0\n"
+                                   "1\n0 600 -50 0 0\n")
+    cfg["mesh"].update(meshing_option="90", poly_filename=str(work / "box.poly"))
+    cfg["control"]["has_moving_mesh"] = "no"
+    cfg["fluid_source"] = dict(num_points="2", point_x="[-25, 1225]",
+                               point_z="[-43, -57]", point_rate="[1e-6, -1e-6]")
+    for label, command in (("serial", [str(executables["serial"])]),
+                           ("mpi2", launcher + ["-n", "2", str(executables["mpi"])])):
+        directory = work / f"outside-points-{label}"
+        directory.mkdir()
+        with (directory / "model.cfg").open("w") as f:
+            cfg.write(f)
+        log, _ = execute(command + ["model.cfg"], directory, env, expected_failure=True)
+        if log.count("[DES exit 51]") != 1 or log.count("could not be mapped") != 1:
+            raise RuntimeError(f"{label}: expected one unmapped-point report and DES exit 51")
+    results["checks"].append(dict(case="outside-points", ranks=2, passed=True))
+    print("Points outside the mesh stop the run on two ranks as in serial: passed", flush=True)
+
+    # The same points inside the mesh: every balance entry cancels to rounding, which
+    # the ranks leave in another order.
+    cfg["fluid_source"]["point_x"] = "[375, 825]"
+    rates = [float(r) for r in cfg["fluid_source"]["point_rate"].strip("[]").split(",")]
+    reference, _ = run("cancelling-points-parent", cfg, executables["serial"])
+    current, timing = run("cancelling-points-mpi2", cfg, executables["mpi"], 2)
+    exact = all([compare(reference, current, frame, env, sum(map(abs, rates)))
+                 for frame in range(1, 6)])
+    results["checks"].append(dict(case="cancelling-points", ranks=2, bit_exact=exact, timing=timing))
+    print(f"cancelling-points: {'bit-exact' if exact else 'within rounding of the node sums'}",
+          flush=True)
 
     for moving in (False, True):
         case = "remesh" if moving else "fixed"
@@ -254,7 +348,7 @@ def main():
             current, timing = run(f"{case}-mpi{ranks}-omp{threads}", cfg, executables["mpi"],
                                   ranks, threads)
             exact = all([compare(reference, current, frame, env) for frame in range(1, 5)])
-            # The checkpoints MPI writes match the serial ones in every dataset.
+            # Check that the checkpoints MPI writes match the serial ones in every dataset.
             for frame in range(5):
                 compare_physical_hdf5(reference, current, frame, kind="chkpt", group="/")
             if moving and ranks > 1 and timing["ownership_reports"] < 2*ranks:
@@ -306,9 +400,7 @@ def main():
         poly.write_text(f"{len(points)} 2 0 0\n" + "".join(f"{i} {x} {z}\n" for i, (x, z) in enumerate(points))
                         + f"{len(facets)} 1\n" + "".join(f"{i} {a} {b} {f}\n" for i, (a, b, f) in enumerate(facets))
                         + "0\n1\n0 1000 -2000 0 -1\n")
-        cfg = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
-        cfg.optionxform = str
-        cfg.read(ROOT / "examples/defaults.cfg")
+        cfg = read_config(ROOT / "examples/defaults.cfg", inline_comment_prefixes=("#", ";"))
         cfg["sim"].update(modelname="result", max_steps=str(steps), max_time_in_yr="1e20",
                           output_step_interval=str(max(1, steps // 2)), output_time_interval_in_yr="1e20",
                           checkpoint_frame_interval="1", is_outputting_averaged_fields="no")

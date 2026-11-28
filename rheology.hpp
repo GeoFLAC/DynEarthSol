@@ -11,5 +11,4 @@ void refresh_rsf_friction(const Param& param, Variables& var,
                           double_vec& dyn_fric_coeff,
                           const double_vec& state_variable);
 
-void update_old_mean_stress(const Param& param ,const Variables& var, tensor_t& stress, double_vec& old_mean_stress);
 #endif

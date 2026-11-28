@@ -39,7 +39,8 @@ void dsytrd3(double A[3][3], double Q[3][3], double d[3], double e[2])
   const int n = 3;
   double u[n], q[n];
   double omega, f;
-  double K, h, g;
+  double K, h, g, s;
+  int k = 0;
   
   // Initialize Q to the identitity matrix
 #ifndef EVALS_ONLY
@@ -51,16 +52,22 @@ void dsytrd3(double A[3][3], double Q[3][3], double d[3], double e[2])
   }
 #endif
 
-  // Bring first row and column to the desired form 
-  h = SQR(A[0][1]) + SQR(A[0][2]);
-  if (A[0][1] > 0)
+  // Bring first row and column to the desired form. The reflection depends
+  // only on the direction of u, so it is built from that row scaled by 2^-k
+  // into [0.5, 1), exactly: h and the square of 1/omega below then stay in
+  // range for a matrix of any size.
+  s = fabs(A[0][1]) > fabs(A[0][2]) ? fabs(A[0][1]) : fabs(A[0][2]);
+  frexp(s, &k);
+  u[1] = ldexp(A[0][1], -k);
+  u[2] = ldexp(A[0][2], -k);
+  h = SQR(u[1]) + SQR(u[2]);
+  if (u[1] > 0)
     g = -sqrt(h);
   else
     g = sqrt(h);
-  e[0] = g;
-  f    = g * A[0][1];
-  u[1] = A[0][1] - g;
-  u[2] = A[0][2];
+  e[0] = ldexp(g, k);
+  f    = g * u[1];
+  u[1] = u[1] - g;
   
   omega = h - f;
   if (omega > 0.0)

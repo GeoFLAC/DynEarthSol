@@ -9,9 +9,9 @@
 #endif
 
 // Vectors that MPI reads or writes. A GPU build (-gpu=mem:managed) puts every heap
-// allocation in CUDA managed memory, and a CUDA-aware transport (UCX) corrupted managed
-// payloads on two GPUs. It treats pinned host memory as host memory, so a GPU build pins
-// these vectors, as it pins the halo staging buffers.
+// allocation in CUDA managed memory, and a CUDA-aware transport (UCX) can corrupt
+// managed payloads exchanged between GPUs. It treats pinned host memory as host memory,
+// so a GPU build pins these vectors, as it pins the halo staging buffers.
 #ifdef ACC
 template<class T> struct MpiHostAllocator {
     using value_type = T;

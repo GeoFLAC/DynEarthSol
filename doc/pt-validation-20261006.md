@@ -392,9 +392,9 @@ OMP_NUM_THREADS=1 python3 benchmarks/simple_shear_rsf/check_simple_shear_benchma
 ```
 
 GPU Maxwell runs add `--steps 6 --timeout 240`; GPU elastic runs use
-`--timeout 180`. Local raw inputs, scripts, binaries, logs and comparison metrics
-are archived at `/home/slee91/work/des-pt-stationary-20261021` (`CONTRACT.txt`,
-`SUMMARY.json`, `FINDINGS.txt`). No long core-complex runs, new acceleration,
+`--timeout 180`. Raw inputs, scripts, binaries, logs and comparison metrics
+were archived outside the repository (`CONTRACT.txt`, `SUMMARY.json`,
+`FINDINGS.txt`). No long core-complex runs, new acceleration,
 MMG/Exodus/GoSPL builds or full hydraulic GPU qualification are included.
 
 ### Optional residual conversion notice
@@ -500,9 +500,8 @@ OMP_NUM_THREADS=1 python3 tests/functional/pt_output_schedule.py ./dynearthsol2d
 ```
 
 Repeat for 3D, both PT options and `use_global_velocity_scaling` settings.
-Local raw evidence, scripts and parent/final binaries are retained at
-`/home/slee91/work/des-pt-review-20261022`; final application builds/tests are
-under `final/`. Earlier intermediate builds/tests were superseded after the
+Raw evidence, scripts and parent/final binaries were retained outside the
+repository, with the final application builds/tests under `final/`. Earlier intermediate builds/tests were superseded after the
 clock correction; only the final builds qualify that change. No long runs,
 new acceleration, full-application sanitizer, MMG/Exodus/GoSPL or full hydraulic
 GPU qualification is claimed.
@@ -551,8 +550,8 @@ Validation on GNU 13.3 with system Boost 1.83 and HDF5 1.10.10:
 Commands use `make ndims=2 hdf5=1 BOOST_ROOT_DIR=/usr` and its 3D equivalent,
 with `CONDA_PREFIX` unset to avoid mixing Conda libraries with system HDF5.
 Functional tests use `OMP_NUM_THREADS=1` for exact comparisons. Raw inputs,
-outputs and logs are retained under `/tmp/pr106-*`; the isolated worktrees are
-`/home/sungho/bin/des-pr106`, `des-pr106-parent` and `des-pr106-master`.
+outputs and logs were kept outside the repository, with separate worktrees
+for the change, its parent and master.
 NVHPC/GPU, MMG, Exodus and GoSPL runtime validation were not run in this merge
 check. The earlier scientific/convergence limits remain unchanged.
 

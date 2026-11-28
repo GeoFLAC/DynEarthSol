@@ -1,8 +1,13 @@
-// B0 focused test: undamped force exposure in update_force.
-// Modes: -DBASE (5-arg API) / -DB0 (6-arg API with force_undamped output).
+// Focused tests of real DES routines: force assembly in update_force and its
+// undamped output, PT velocity constraints and residual norm, material trials and
+// Mohr-Coulomb returns, the 3x3 eigensolver, and hydraulic and point-source
+// updates.
+// Modes: -DBASE (5-arg update_force) / -DB0 (6-arg, with the force_undamped output).
 // Mesh: two elements sharing node 0, identical constant stress -> cancellation at node 0.
-// Cases: cancellation, Neumann traction, damping exclusion, body force.
+// Force cases: cancellation, Neumann traction, damping exclusion, body force.
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -12,11 +17,15 @@
 
 #include "parameters.hpp"
 #include "fields.hpp"
+#include "hydraulics.hpp"
+#include "point_sources.hpp"
 #include "bc.hpp"
 #include "rheology.hpp"
 #include "pseudo_transient.hpp"
 #include <limits>
 #include "matprops.hpp"
+#include "geometry.hpp"
+#include "3x3-C/dsyevh3.h"
 
 #ifndef ATOL
 #define ATOL 1e-9
@@ -49,7 +58,10 @@ struct Fixture {
     elem_cache tmp_result;
     double_vec volume;
     double_vec temperature, pressure, pressure_increment, lookup;
-    tensor_t strain_rate;
+    double_vec hydraulic_mass;
+    double_vec volume_rate, balance;
+    uint_vec boundary_flags;
+    tensor_t strain_rate, strain;
     int_vec2D markers;
     int_vec etmp_int;
 
@@ -64,6 +76,8 @@ static void build_mesh(Fixture& m) {
     const int nelem = 2;
     m.var.nnode = nnode;
     m.var.nelem = nelem;
+    m.var.time = 0;
+    m.var.steps = 0;
 
     m.coord.resize(nnode);
     m.vel.resize(nnode);
@@ -157,13 +171,35 @@ static void build_mesh(Fixture& m) {
     m.param.ic.has_body_force_adjustment = true;
 }
 
+// Uniform temperature, pore pressure and pending pressure increment on the
+// fixture's nodes, one marker of material 0 per element, and var bound to them
+// and to the lookup tables.
+static void bind_fields(Fixture& m, double temperature, double pressure = 0,
+                        double pressure_increment = 0) {
+    m.temperature.assign(m.var.nnode, temperature);
+    m.pressure.assign(m.var.nnode, pressure);
+    m.pressure_increment.assign(m.var.nnode, pressure_increment);
+    m.markers.assign(m.var.nelem, int_vec(1, 1));
+    m.var.temperature = &m.temperature;
+    m.var.ppressure = &m.pressure;
+    m.var.dppressure = &m.pressure_increment;
+    m.var.elemmarkers = &m.markers;
+    m.var.log_table = m.var.tan_table = m.var.sin_table = &m.lookup;
+}
+
+// Build the material of var again from param.mat.
+static void reset_material(Fixture& m) {
+    delete m.var.mat;
+    m.var.mat = new MatProps(m.param, m.var);
+}
+
 static void run_update_force(Fixture& m) {
 #ifdef BASE
     update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result);
 #else
     update_force(m.param, m.var, m.force, m.force_residual, m.tmp_result, &m.force_undamped);
-    // The optional output cannot change either existing output. Reevaluate the
-    // identical assembly with the default null argument and compare exact bits.
+    // Supplying force_undamped must not change force or force_residual: reevaluate
+    // the same assembly with the default null argument and compare exact bits.
     std::vector<double> force_before, residual_before;
     for (int n=0; n<m.var.nnode; ++n)
         for (int d=0; d<NDIMS; ++d) {
@@ -197,10 +233,10 @@ static void test_cancellation() {
 
     run_update_force(*m);
 
-    // Measurement only (legacy defect record): force_residual at the shared node
-    // is overwritten per incident element, so it equals the last element's term,
-    // not the assembled sum. With identical stress in both elements it is nonzero
-    // while the true assembled internal force is exactly 0.
+    // BASE records force_residual at the shared node, which each incident element
+    // overwrites: it equals the last element's term, not the assembled sum, so
+    // with identical stress in both elements it is nonzero while the true
+    // assembled internal force is exactly 0.
 #ifdef BASE
     {
         std::printf("  [measure] legacy force_residual@shared = (%.17g", m->force_residual[0][0]);
@@ -270,7 +306,60 @@ static void test_traction() {
     snprintf(name, sizeof name, "traction u0[0]");
     check(name, m->force_undamped[0][0], 0.0);
 #endif
+    m->var.stress_bc_types[iboundx0] = 4;
+    m->var.stress_bc_values[iboundx0] = -T;
+    run_update_force(*m);
+    for (int d=0; d<NDIMS; ++d) {
+        double resultant=0;
+        for (int n=0; n<m->var.nnode; ++n) resultant+=m->force[n][d];
+        check("oblique facet normal-stress resultant",resultant,-T*nx);
+        for (int l=1; l<NODES_PER_ELEM; ++l)
+            check("normal stress distributed over facet nodes",m->force[l][d],-add*nx);
+    }
     delete m->var.bfacets[iboundx0];
+    delete m;
+}
+
+static void test_platen() {
+    std::printf("[Rigid platen momentum, resultant and virtual work]\n");
+    auto* m=new Fixture();build_mesh(*m);
+    const int nn=m->var.nnode,last=nn-1;
+    auto& mass=m->hydraulic_mass;
+    auto& flags=m->boundary_flags;
+    mass.assign(nn,1); flags.assign(nn,0);
+    mass[0]=2;mass[last]=5;
+    flags[0]=flags[last]=BOUNDZ1;
+    m->var.mass=&mass;m->var.bcflag=&flags;m->param.bc.vbc_z1=8;
+    for (int n=0;n<nn;++n)
+        for (int d=0;d<NDIMS;++d) {
+            m->vel[n][d]=n+d+1;
+            m->force[n][d]=2*n-d;
+        }
+    const array_t old_velocity=m->vel,old_force=m->force;
+    const double common=(2*old_velocity[0][NDIMS-1]+5*old_velocity[last][NDIMS-1])/7;
+    const double resultant=old_force[0][NDIMS-1]+old_force[last][NDIMS-1];
+    apply_platen_velocity(m->param,m->var,m->vel);
+    apply_platen_force(m->param,m->var,m->force);
+    double power_velocity=0,power_force=0;
+    for (int n=0;n<nn;++n)
+        for (int d=0;d<NDIMS;++d) {
+            const bool on_plate=(flags[n]&BOUNDZ1) && d==NDIMS-1;
+            check("platen velocity and tangential freedom",m->vel[n][d],
+                  on_plate ? common:old_velocity[n][d]);
+            check("platen force and tangential freedom",m->force[n][d],
+                  on_plate ? mass[n]*resultant/7:old_force[n][d]);
+            power_velocity+=old_force[n][d]*m->vel[n][d];
+            power_force+=m->force[n][d]*old_velocity[n][d];
+        }
+    check("platen projections preserve virtual work",power_velocity,power_force);
+    const array_t projected=m->vel;
+    apply_platen_velocity(m->param,m->var,m->vel);
+    for (int n=0;n<nn;++n)
+        for (int d=0;d<NDIMS;++d) {
+            const double before=projected[n][d],after=m->vel[n][d];
+            check("platen velocity projection is bitwise idempotent",
+                  std::memcmp(&before,&after,sizeof(double))==0,1);
+        }
     delete m;
 }
 
@@ -313,19 +402,11 @@ static void test_body_force() {
     std::printf("[body force]\n");
     Fixture* m = new Fixture();
     build_mesh(*m);
-    m->temperature.assign(m->var.nnode, 273.0);
-    m->pressure.assign(m->var.nnode, 0.0);
-    m->pressure_increment.assign(m->var.nnode, 0.0);
+    bind_fields(*m, 273.0);
     m->strain_rate.resize(m->var.nelem);
-    m->markers.assign(m->var.nelem, int_vec(1, 1));
     m->etmp_int.resize(m->var.nelem);
-    m->var.temperature = &m->temperature;
-    m->var.ppressure = &m->pressure;
-    m->var.dppressure = &m->pressure_increment;
     m->var.strain_rate = &m->strain_rate;
-    m->var.elemmarkers = &m->markers;
     m->var.etmp_int = &m->etmp_int;
-    m->var.log_table = m->var.tan_table = m->var.sin_table = &m->lookup;
     // Suppress gravity-induced boundary tractions to isolate the body load.
     // Neumann tractions are exercised separately, using the real BC routine.
     for (int i=0; i<nbdrytypes; ++i) m->var.vbc_types[i] = 1;
@@ -336,15 +417,18 @@ static void test_body_force() {
     p.bulk_modulus = {1e9}; p.shear_modulus = {1e9};
     p.visc_exponent = {1.0}; p.visc_coefficient = {1.0};
     p.biot_coeff = {1.0}; p.heat_capacity = {1.0};
-    p.therm_cond = {1.0}; p.fluid_bulk_modulus = {2e9};
+    p.therm_cond = {1.0}; p.fluid_bulk_modulus = {2e9}; p.bulk_modulus_s = {37e9};
+    p.fluid_rho0 = {1200};
+    p.hydraulic_perm = {1e-12}; p.fluid_visc = {1e-3};
     m->param.control.gravity = 9.8;
+    m->param.control.has_hydraulic_diffusion = true;
     m->param.control.damping_option = 2;
     m->param.control.damping_factor = 0.25;
-    m->var.mat = new MatProps(m->param, m->var);
+    reset_material(*m);
     run_update_force(*m);
     // Each simplex distributes its weight equally among its vertices. The
     // shared vertex receives two contributions, all other vertices one.
-    const double weight = (2500.0*0.8 + 1000.0*0.2)*9.8*m->volume[0];
+    const double weight = (2500.0*0.8 + 1200.0*0.2)*9.8*m->volume[0];
     for (int n=0; n<m->var.nnode; ++n)
         for (int d=0; d<NDIMS; ++d) {
             const double raw = d == NDIMS-1 ? -weight*(n == 0 ? 2 : 1)/NODES_PER_ELEM : 0;
@@ -353,6 +437,26 @@ static void test_body_force() {
             check("undamped gravity", m->force_undamped[n][d], raw);
 #endif
         }
+    m->param.control.has_hydraulic_diffusion=true;
+    m->param.control.is_quasi_static=false;
+    m->param.control.inertial_scaling=1;
+    m->var.max_vbc_val=m->var.max_global_vel_mag=0.01;
+    check("saturated reference lithostat",ref_pressure(m->param,-2.5),2240*9.8*2.5);
+    double_vec volume_n(m->var.nnode),mass(m->var.nnode),tmass(m->var.nnode),
+               hmass(m->var.nnode),ymass(m->var.nnode);
+    for(bool global : {false,true}) {
+        m->param.control.use_global_velocity_scaling=global;
+        compute_mass(m->param,m->var,0.01,volume_n,mass,tmass,hmass,ymass,m->tmp_result);
+        #pragma acc wait
+        for(int n=0;n<m->var.nnode;++n)
+            check("dynamic saturated nodal mass",mass[n],2240*m->volume[0]*(n==0 ? 2 : 1)/NODES_PER_ELEM);
+    }
+    m->param.control.has_hydraulic_diffusion=false;
+    run_update_force(*m);
+    for(int n=0;n<m->var.nnode;++n) {
+        const double dry_weight=2500*9.8*m->volume[0]*(n==0 ? 2 : 1)/NODES_PER_ELEM;
+        check("dry body weight with nonzero porosity",m->force[n][NDIMS-1],-0.75*dry_weight);
+    }
 #ifdef B0
     // A horizontal unit foundation: uniform upward displacement must reduce
     // the vertical supporting force by rho*g*area*displacement. This checks
@@ -382,12 +486,13 @@ static void test_body_force() {
         auto* magnitude = new array_t(m->var.nnode);
         update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,
                      &m->force_undamped,0,false,magnitude);
+        // Saturated elements weigh their solid and water; dry ones their solid only.
+        const double rho = wet ? 2240 : 2500;
         for (int n=0;n<m->var.nnode;++n)
             for (int d=0;d<NDIMS;++d)
                 check("node force magnitude survives boundary scratch",(*magnitude)[n][d],
-                      d==NDIMS-1 ? weight*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
+                      d==NDIMS-1 ? rho*9.8*m->volume[0]*(n==0 ? 2 : 1)/NODES_PER_ELEM : 0);
         delete magnitude;
-        const double rho = wet ? 2200 : 2500;
         const double area = NDIMS==2 ? 1 : 0.5;
         for (double dt : {0.5,1.0,0.5,0.0}) {
             update_force(m->param,m->var,m->force,m->force_residual,m->tmp_result,&m->force_undamped,dt);
@@ -520,7 +625,7 @@ struct MaterialFixture {
     MaterialFixture(int model, double alpha) {
         m = new Fixture();
         build_mesh(*m);
-        const int ne=m->var.nelem, nn=m->var.nnode;
+        const int ne=m->var.nelem;
         strain = new tensor_t(ne,0.);
         yy = new double_vec(ne,0.);
         dp = new double_vec(ne,0.);
@@ -531,17 +636,11 @@ struct MaterialFixture {
         state = new double_vec(ne,10.);
         div = new double_vec(ne,0.);
         m->strain_rate.resize(ne,0.);
-        m->temperature.assign(nn,300.);
-        m->pressure.assign(nn,10.);
-        m->pressure_increment.assign(nn,-10.);
-        m->markers.assign(ne,int_vec(1,1));
+        bind_fields(*m,300.,10.,-10.);
         m->var.strain=strain; m->var.stressyy=yy; m->var.dpressure=dp;
         m->var.viscosity=visc; m->var.plstrain=pls; m->var.delta_plstrain=dpls;
         m->var.dyn_fric_coeff=friction; m->var.state_variable=state;
         m->var.edvoldt=div; m->var.strain_rate=&m->strain_rate;
-        m->var.temperature=&m->temperature; m->var.ppressure=&m->pressure;
-        m->var.dppressure=&m->pressure_increment; m->var.elemmarkers=&m->markers;
-        m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
         m->var.dt=0.1; m->var.time=1;
         auto& p=m->param.mat;
         p.nmat=1; p.rheol_type=model; p.is_plane_strain=NDIMS==2;
@@ -550,14 +649,14 @@ struct MaterialFixture {
         p.visc_exponent={1}; p.visc_coefficient={1};
         p.visc_activation_energy={0}; p.visc_activation_volume={0};
         p.visc_min=p.visc_max=1e9;
-        p.biot_coeff={alpha}; p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9};
+        p.biot_coeff={alpha}; p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9}; p.bulk_modulus_s={37e9};
         p.pls0={1}; p.pls1={2}; p.cohesion0=p.cohesion1={1e8};
         p.friction_angle0=p.friction_angle1={0};
         p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e8;
         m->param.control.has_hydraulic_diffusion=true;
         m->param.control.is_using_mixed_stress=true;
         m->param.control.iterative_return_mapping_option=return_mapping_option;
-        m->var.mat=new MatProps(m->param,m->var);
+        reset_material(*m);
     }
     ~MaterialFixture() {
         delete m->var.mat;
@@ -573,10 +672,7 @@ struct MaterialFixture {
             (*pls)[e]=(*dpls)[e]=0;
         }
     }
-    void set_material() {
-        delete m->var.mat;
-        m->var.mat=new MatProps(m->param,m->var);
-    }
+    void set_material() { reset_material(*m); }
     void update() {
         update_stress(m->param,m->var,m->stress,*yy,*dp,*visc,*strain,*pls,*dpls,
                       m->strain_rate,m->pressure,m->pressure_increment,m->vel,
@@ -591,45 +687,12 @@ static void test_material_trials() {
     for (int model : {MatProps::rh_elastic, MatProps::rh_maxwell, MatProps::rh_viscous,
                       MatProps::rh_ep, MatProps::rh_evp}) {
         for (double alpha : {0.,0.6,1.}) {
-            Fixture* m = new Fixture();
-            build_mesh(*m);
+            MaterialFixture f(model, alpha);
+            Fixture* m = f.m;
             const int ne=m->var.nelem, nn=m->var.nnode;
-            auto* strain = new tensor_t(ne,0.);
-            auto* yy = new double_vec(ne,0.);
-            auto* dp = new double_vec(ne,0.);
-            auto* visc = new double_vec(ne,1e9);
-            auto* pls = new double_vec(ne,0.);
-            auto* dpls = new double_vec(ne,0.);
-            auto* friction = new double_vec(ne,0.6);
-            auto* state = new double_vec(ne,10.);
-            auto* div = new double_vec(ne,0.);
-            m->strain_rate.resize(ne,0.);
-            m->temperature.assign(nn,300.);
-            m->pressure.assign(nn,10.);
-            m->pressure_increment.assign(nn,-10.);
-            m->markers.assign(ne,int_vec(1,1));
-            m->var.strain=strain; m->var.stressyy=yy; m->var.dpressure=dp;
-            m->var.viscosity=visc; m->var.plstrain=pls; m->var.delta_plstrain=dpls;
-            m->var.dyn_fric_coeff=friction; m->var.state_variable=state;
-            m->var.edvoldt=div; m->var.strain_rate=&m->strain_rate;
-            m->var.temperature=&m->temperature; m->var.ppressure=&m->pressure;
-            m->var.dppressure=&m->pressure_increment; m->var.elemmarkers=&m->markers;
-            m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
-            m->var.dt=0.1; m->var.time=1;
-            auto& p=m->param.mat;
-            p.nmat=1; p.rheol_type=model; p.is_plane_strain=NDIMS==2;
-            p.rho0={2500}; p.alpha={0}; p.porosity={0.2};
-            p.bulk_modulus={1e9}; p.shear_modulus={1e9};
-            p.visc_exponent={1}; p.visc_coefficient={1};
-            p.visc_activation_energy={0}; p.visc_activation_volume={0};
-            p.visc_min=p.visc_max=1e9;
-            p.biot_coeff={alpha}; p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9};
-            p.pls0={1}; p.pls1={2}; p.cohesion0=p.cohesion1={1e8};
-            p.friction_angle0=p.friction_angle1={0};
-            p.dilation_angle0=p.dilation_angle1={0}; p.tension_max=1e8;
-            m->param.control.has_hydraulic_diffusion=true;
-            m->param.control.is_using_mixed_stress=true;
-            m->var.mat=new MatProps(m->param,m->var);
+            tensor_t* strain=f.strain;
+            double_vec *yy=f.yy, *dp=f.dp, *visc=f.visc, *pls=f.pls, *dpls=f.dpls,
+                       *friction=f.friction, *state=f.state;
             auto* baseline=new MechanicalState(ne);
             baseline->capture(m->var);
             if (model==MatProps::rh_elastic || model==MatProps::rh_ep) {
@@ -816,9 +879,7 @@ static void test_material_trials() {
                 delete after; delete ntmp; delete etmp; delete volume_n;
                 delete flags; delete normals;
             }
-            delete baseline; delete m->var.mat;
-            delete strain; delete yy; delete dp; delete visc; delete pls; delete dpls;
-            delete friction; delete state; delete div; delete m;
+            delete baseline;
         }
     }
 }
@@ -973,7 +1034,7 @@ static void test_mohr_coulomb_returns() {
         set_mc_material(f, dilation);
         p.cohesion1={1e5+slope*1e-4};
         f.set_material();
-        check("MC nonzero cohesion slope",m->var.mat->plastic_props(0,0).hardn,slope);
+        check("MC nonzero cohesion slope",m->var.mat->strength_here(0,0).dcohesion,slope);
         const double psi=dilation==0 ? 1. : 3.;
         // face=0 is a single face; 1/2 repeat the low/high stress.
         for(int face=0;face<3;++face) for(double ratio : {1.,2.}) {
@@ -1002,7 +1063,7 @@ static void test_mohr_coulomb_returns() {
                 check("MC tangent plastic increment",dpls[e],increment);
                 check("MC tangent stays in linear strength range",pls[e]<1e-4,1);
             }
-            const auto stored=m->var.mat->plastic_props(0,pls[0]);
+            const auto stored=m->var.mat->strength_here(0,pls[0]);
             const double new_amc=stored.strength.amc,new_phi=stored.strength.anphi;
             const double high=NDIMS==2 ? yy[0] : stress[0][2];
             check("MC stored history reproduces yield",stress[0][0]-new_phi*high+new_amc,0);
@@ -1141,7 +1202,7 @@ static void check_law_return(MaterialFixture& f, const char* name, const double 
     const double recorded=nd==2 ? recorded_plastic_increment_2d(plastic)
                                 : recorded_plastic_increment(plastic);
     const double history=(*f.pls)[0];
-    const auto props=f.m->var.mat->plastic_props(0,start_angles ? initial_history : history);
+    const auto props=f.m->var.mat->strength_here(0,start_angles ? initial_history : history);
     const double amc=props.strength.amc,anphi=props.strength.anphi,anpsi=props.strength.anpsi,cap=props.strength.ten_max;
     double scale=std::fabs(amc);
     for(int k=0;k<nd;++k) scale=std::max(scale,std::fabs(result[k]));
@@ -1335,7 +1396,7 @@ static void test_pure_2d_softening_return() {
         f.update();
         auto& stress=f.m->stress;
         const double history=(*f.pls)[0];
-        const auto props=f.m->var.mat->plastic_props(0,history);
+        const auto props=f.m->var.mat->strength_here(0,history);
         const double amc=props.strength.amc,anphi=props.strength.anphi;
         const double low=0.5*(stress[0][0]+stress[0][1])-std::hypot(0.5*(stress[0][0]-stress[0][1]),stress[0][2]);
         const double high=stress[0][0]+stress[0][1]-low;
@@ -1535,7 +1596,7 @@ static void test_rsf_law_returns() {
         f.state->assign(f.m->var.nelem,10.);
         f.update();
         const double history=(*f.pls)[0], mu=(*f.friction)[0];
-        const auto props=f.m->var.mat->plastic_props(0,start_angles ? 0 : history);
+        const auto props=f.m->var.mat->strength_here(0,start_angles ? 0 : history);
         const double amc=props.strength.amc,anphi=props.strength.anphi;
         const double cohesion=amc/(2*std::sqrt(anphi));
         const double static_mu=std::tan(std::asin((anphi-1)/(anphi+1)));
@@ -1600,6 +1661,71 @@ static void test_rejected_mc_return(bool pure_2d) {
     f.update();
 }
 
+#ifdef THREED
+// Two equal principal stresses split only by shears near underflow, the rounding a
+// confined column leaves, send dsyevh3 to its QL fallback with a first row far below
+// the diagonal. The return must match the same state without them.
+static void test_tiny_shear_return() {
+    std::printf("[Mohr-Coulomb return with near-underflow shear]\n");
+    MaterialFixture f(MatProps::rh_ep, 0);
+    set_mc_material(f, 0);
+    const double trial[3]={-1e6,-1e6,-1e5};
+    f.set_principal(trial);
+    f.update();
+    double reference[NSTR];
+    for(int d=0;d<NSTR;++d) reference[d]=f.m->stress[0][d];
+    f.set_principal(trial);
+    for(int e=0;e<f.m->var.nelem;++e) {
+        f.m->stress[e][4]=-4.9e-88;
+        f.m->stress[e][5]=-6e-16;
+    }
+    f.update();
+    for(int d=0;d<NSTR;++d)
+        check("near-underflow shear leaves the return unchanged",f.m->stress[0][d],reference[d]);
+}
+#endif
+
+// dsyevh3 on one symmetric matrix scaled from 1e-300 to 1e30: the eigenvalues scale
+// with it and Q diag(w) Q^T rebuilds it. Below ~1e-7 the eigenvalues come from the QL
+// fallback, whose first Householder reflection is built from the small first row.
+static void test_eigen_scales() {
+    std::printf("[3x3 eigensystem across input scales]\n");
+    const double B[3][3]={{1,0.5,2},{0.5,3,-0.7},{2,-0.7,2}};
+    auto solve=[&](double scale,double w[3],double& rebuilt) {
+        double A[3][3],Q[3][3];
+        for(int i=0;i<3;++i) for(int j=0;j<3;++j) A[i][j]=scale*B[i][j];
+        // A NaN would drop out of std::max and break the sort below: check
+        // finiteness first and stop there.
+        bool solved=dsyevh3(A,Q,w)==0;
+        for(int i=0;i<3;++i) {
+            solved=solved && std::isfinite(w[i]);
+            for(int j=0;j<3;++j) solved=solved && std::isfinite(Q[i][j]);
+        }
+        rebuilt=0;
+        if(!solved) return false;
+        for(int i=0;i<3;++i) for(int j=0;j<3;++j) {
+            double a=0;
+            for(int m=0;m<3;++m) a+=Q[i][m]*w[m]*Q[j][m];
+            rebuilt=std::max(rebuilt,std::fabs(a-A[i][j])/(3*scale));
+        }
+        std::sort(w,w+3);
+        return true;
+    };
+    double unit[3],rebuilt;
+    check("unit-scale eigensystem is finite",solve(1,unit,rebuilt),1);
+    for(int p=-300;p<=30;p+=10) {
+        const double scale=std::pow(10.0,p);
+        double w[3];
+        const bool solved=solve(scale,w,rebuilt);
+        double eigen=0;
+        for(int i=0;i<3;++i) eigen=std::max(eigen,std::fabs(w[i]/scale-unit[i])/3);
+        const bool ok=solved && eigen<1e-12 && rebuilt<1e-12;
+        if(!ok) std::printf("  scale 1e%d: %s, eigenvalue error %.3g, rebuilt error %.3g\n",
+                            p,solved?"finite":"failed or not finite",eigen,rebuilt);
+        check("eigensystem scales with the matrix",ok,1);
+    }
+}
+
 static void test_pt_norm() {
     std::printf("[PT projected residual reduction]\n");
     auto* m = new Fixture();
@@ -1629,16 +1755,9 @@ static void test_darcy_gravity_limit() {
     std::printf("[Darcy zero-gravity and hydrostatic invariants]\n");
     auto* m = new Fixture();
     build_mesh(*m);
+    m->param.control.has_PT = true; // this fixture prescribes total-stress increments
     const int nn=m->var.nnode, ne=m->var.nelem;
-    m->temperature.assign(nn,273.0);
-    m->pressure.assign(nn,0.0);
-    m->pressure_increment.assign(nn,0.0);
-    m->markers.assign(ne,int_vec(1,1));
-    m->var.temperature=&m->temperature;
-    m->var.ppressure=&m->pressure;
-    m->var.dppressure=&m->pressure_increment;
-    m->var.elemmarkers=&m->markers;
-    m->var.log_table=m->var.tan_table=m->var.sin_table=&m->lookup;
+    bind_fields(*m,273.0);
     auto* mass=new double_vec(nn,1.0);
     auto* rate=new double_vec(nn,0.0);
     auto* old_mean=new double_vec(ne,0.0);
@@ -1651,15 +1770,14 @@ static void test_darcy_gravity_limit() {
     p.bulk_modulus={1e9}; p.shear_modulus={1e9};
     p.visc_exponent={1}; p.visc_coefficient={1};
     p.biot_coeff={1}; p.heat_capacity={1}; p.therm_cond={1};
-    p.fluid_bulk_modulus={2e9}; p.hydraulic_perm={1e-12};
-    p.fluid_visc={1e-3}; p.fluid_rho0={1000}; p.fluid_alpha={0};
-    m->var.mat=new MatProps(m->param,m->var);
+    p.fluid_bulk_modulus={2e9}; p.hydraulic_perm={1e-12}; p.bulk_modulus_s={37e9};
+    p.fluid_visc={1e-3}; p.fluid_rho0={1200}; p.fluid_alpha={0};
+    reset_material(*m);
     double_vec reference(nn,0.0);
-    double reference_diffusivity=0;
     for(int driven=0;driven<2;++driven) for(double gravity : {0.0,10.0}) {
         m->param.control.gravity=gravity;
         for(int n=0;n<nn;++n) {
-            m->pressure[n]=2e5+driven*1e5*m->coord[n][0]-1000*gravity*m->coord[n][NDIMS-1];
+            m->pressure[n]=2e5+driven*1e5*m->coord[n][0]-1200*gravity*m->coord[n][NDIMS-1];
             m->pressure_increment[n]=0;
         }
         update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
@@ -1677,12 +1795,269 @@ static void test_darcy_gravity_limit() {
         }
         check("closed-system fluid conservation",net,0);
         if(driven) check("nonconstant pressure diffuses",work>0,1);
-        const double diffusivity=m->var.mat->hydro_diff_max;
-        check("finite positive hydraulic diffusivity",std::isfinite(diffusivity)&&diffusivity>0,1);
-        if(gravity==0) reference_diffusivity=diffusivity;
-        else check("gravity independent hydraulic diffusivity",diffusivity,reference_diffusivity);
+    }
+    // Prescribe an undrained elastic compression, independently enforcing
+    // zeta = alpha*eps_v + p/M = 0 and sigma = C:eps - alpha*p*I.
+    // The production pressure update must recover this pressure from stress.
+    m->param.control.gravity=0;
+    m->param.control.has_hydraulic_diffusion=true;
+    for (double alpha : {0.2,0.6,1.0}) for (double grain_bulk : {2.5e9,1e30}) {
+        p.biot_coeff[0]=alpha; p.bulk_modulus_s[0]=grain_bulk;
+        reset_material(*m);
+        const double inv_M=0.2/2e9+(alpha-0.2)/grain_bulk;
+        const double eps_v=-1e-5;
+        const double pressure=-alpha*eps_v/inv_M;
+        const double mean_modulus=1e9+(NDIMS==2 ? 1e9/3 : 0);
+        const double mean_stress=mean_modulus*eps_v-alpha*pressure;
+        std::fill(mass->begin(),mass->end(),0);
+        for(int e=0;e<ne;++e) {
+            for(int i=0;i<NODES_PER_ELEM;++i)
+                (*mass)[m->connectivity[e][i]]+=hydraulic_storage(*m->var.mat,e)*m->volume[e]/NODES_PER_ELEM;
+            for(int s=0;s<NSTR;++s) m->stress[e][s]=(s<NDIMS ? mean_stress : 0);
+        }
+        for(double dt : {0.1,1.0}) {
+            m->var.dt=dt;
+            std::fill(m->pressure.begin(),m->pressure.end(),0);
+            update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
+                                 *rate,m->tmp_result,m->stress,*old_mean);
+            for(int n=0;n<nn;++n) {
+                check("undrained pressure from accepted stress",m->pressure[n]/pressure,1);
+                check("undrained fluid content",(alpha*eps_v+inv_M*m->pressure[n])/std::abs(alpha*eps_v),0);
+                check("pending increment is negative pressure change",m->pressure_increment[n]/pressure,-1);
+            }
+        }
+        check("diffusivity uses current pressure storage",
+              hydraulic_diffusivity(m->param,*m->var.mat,0),
+              1e-12/1e-3/(inv_M+alpha*alpha/mean_modulus));
+        m->param.control.gravity=10;
+        m->param.ic.excess_pore_pressure=1e5;
+        initial_hydrostatic_state(m->param,m->var,m->pressure,m->pressure_increment);
+        const double H=1e9+4e9/3;
+        const double initial_pressure=alpha*1e5/(H*inv_M+alpha*alpha);
+        for(int n=0;n<nn;++n)
+            check("uniaxial undrained initial loading",(m->pressure[n]+1200*10*m->coord[n][NDIMS-1])/initial_pressure,1);
+        m->param.control.gravity=0;
+    }
+    {
+        const bool feedback=m->param.control.has_poroelastic_pressure_feedback;
+        m->param.control.has_poroelastic_pressure_feedback=true;
+        p.biot_coeff={.6};
+        auto& strain=m->strain; strain.resize(ne,0.0);
+        m->var.strain=&strain;
+        m->pressure.assign(nn,1e5); m->pressure_increment.assign(nn,-100);
+        for(int e=0;e<ne;++e) strain[e][0]=.001;
+        reset_material(*m);
+        const double storage=hydraulic_inverse_biot_modulus(*m->var.mat,0);
+        ContentRemap remap(m->param,m->var);
+        remap.transfer(m->var,m->coord,m->connectivity);
+        m->pressure.assign(nn,2e5); m->pressure_increment.assign(nn,-500);
+        for(int e=0;e<ne;++e) {
+            strain[e][0]=.002;
+            for(int d=0;d<NSTR;++d) m->stress[e][d]=0;
+        }
+        remap.restore(m->param,m->var);
+        for(int n=0;n<nn;++n) {
+            check("remap physical content independent of strain interpolation",
+                  (storage*(m->pressure[n]-1e5)+.6*.001)/(.6*.001),0);
+            check("remap numerical buffer independent of physical water",m->pressure_increment[n],-100);
+        }
+        for(int e=0;e<ne;++e) {
+            const int n=m->connectivity[e][0];
+            check("remap retains mechanical effective-stress reference",
+                  (m->stress[e][0]+.6*(m->pressure[n]+m->pressure_increment[n]))/1e5,
+                  .6*(2e5-500)/1e5);
+        }
+        ContentRemap fixed(m->param,m->var);
+        fixed.transfer(m->var,m->coord,m->connectivity);
+        const double fixed_pressure=m->pressure[0];
+        for(int e=0;e<ne;++e) strain[e][0]+=.0001;
+        std::fill(flags->begin(),flags->end(),BOUNDZ1); m->var.hbc_types[iboundz1]=1;
+        fixed.restore(m->param,m->var);
+        for(int n=0;n<nn;++n)
+            check("all-Dirichlet remap preserves imposed pressure",m->pressure[n],fixed_pressure);
+        std::fill(flags->begin(),flags->end(),0); m->var.hbc_types[iboundz1]=0;
+        m->var.strain=nullptr;
+        m->param.control.has_poroelastic_pressure_feedback=feedback;
     }
     delete m->var.mat; delete flags; delete old_mean; delete rate; delete mass; delete m;
+}
+
+static void test_strain_pressure(bool scaled = false) {
+    std::printf("[Strain-driven storage and subcycling: %s mass]\n",
+                scaled ? "scaled" : "physical");
+    auto* m = new Fixture(); build_mesh(*m);
+    const int nn=m->var.nnode, ne=m->var.nelem;
+    bind_fields(*m,273.01,5e4,999);
+    auto& p=m->param.mat;
+    p.nmat=1; p.rheol_type=MatProps::rh_elastic;
+    p.rho0={2500}; p.alpha={3e-5}; p.porosity={.2}; p.biot_coeff={.6};
+    p.bulk_modulus={1e9}; p.shear_modulus={1e9};
+    p.visc_exponent={1}; p.visc_coefficient={1};
+    p.heat_capacity={1}; p.therm_cond={1}; p.fluid_bulk_modulus={2e9};
+    p.bulk_modulus_s={37e9}; p.fluid_rho0={1000}; p.fluid_alpha={2e-4};
+    p.hydraulic_perm={0}; p.fluid_visc={1e-3};
+    m->param.control.has_hydraulic_diffusion=true;
+    m->param.control.is_quasi_static=scaled;
+    m->param.control.inertial_scaling=1e5;
+    p.visc_min=1e30;
+    if (scaled) p.bulk_modulus={2e9};
+    reset_material(*m);
+    double_vec mass(nn),volume_n(nn),tmass(nn),ymass(nn),rate(nn),old_mean(ne,-2e5);
+    auto& hmass=m->hydraulic_mass;
+    auto& vol_rate=m->volume_rate;
+    auto& balance=m->balance;
+    auto& flags=m->boundary_flags;
+    hmass.resize(nn);
+    vol_rate.resize(ne); balance.resize(5); flags.assign(nn,0);
+    m->var.hmass=&hmass; m->var.bcflag=&flags; m->var.dt=2;
+    m->var.edvoldt=&vol_rate;
+    m->var.fluid_balance=&balance;
+    for(int e=0;e<ne;++e) {
+        vol_rate[e]=(e+1)*1e-7;
+        for(int d=0;d<NDIMS;++d) m->stress[e][d]=1e6;
+    }
+    compute_mass(m->param,m->var,.01,volume_n,mass,tmass,hmass,ymass,m->tmp_result);
+    const double storage=.2/2e9+.4/37e9;
+    check("physical pressure capacity",hydraulic_storage(m->param,*m->var.mat,0)/storage,1);
+    double expected_total=0;
+    double_vec nodal_change(nn,0),nodal_volume(nn,0);
+    for(int e=0;e<ne;++e) {
+        const double change=-.6*m->var.dt*vol_rate[e]*m->volume[e];
+        expected_total+=change;
+        for(int j=0;j<NODES_PER_ELEM;++j) {
+            const int n=m->connectivity[e][j];
+            nodal_change[n]+=change/NODES_PER_ELEM;
+            nodal_volume[n]+=m->volume[e]/NODES_PER_ELEM;
+        }
+    }
+    for(int substeps : {1,7}) {
+        std::fill(m->pressure.begin(),m->pressure.end(),5e4);
+        std::fill(m->pressure_increment.begin(),m->pressure_increment.end(),999);
+        m->var.mat->hydro_step_limit=m->var.dt/substeps;
+        update_pore_pressure(m->param,m->var,m->pressure,m->pressure_increment,
+                             rate,m->tmp_result,m->stress,old_mean);
+        #pragma acc wait
+        for(int n=0;n<nn;++n) {
+            const double dp=nodal_change[n]/(storage*nodal_volume[n]);
+            check("physical pressure strain increment",m->pressure[n],5e4+dp);
+            check("raw increment reset and integrated once",m->pressure_increment[n],-dp);
+        }
+        check("physical fluid content",balance[0]/expected_total,1);
+        check("physical fluid balance",balance[4]/expected_total,0);
+    }
+    delete m->var.mat; delete m;
+}
+
+static void test_point_sources() {
+    std::printf("[Point-source shape weights, signed schedules and intervals]\n");
+    auto* m=new Fixture();build_mesh(*m);
+    Injection source;
+    source.enabled=true;source.num_points=3;source.rate_model=injection_rate_constant;
+    const double c=1.0/NODES_PER_ELEM;
+    source.points_x={c,-c,0};source.points_y={c,-c,0};source.points_z={c,-c,0};
+    source.rate={5,-2,7};source.total_amount={3,-1.4,2.8};
+    source.start_time={.2,.5,.3};source.end_time={.8,1.2,.7};
+    double_vec rate(m->var.nnode,0),integrated(m->var.nnode,0);
+    PointSourceOwners owners;
+    place_point_sources(source,m->var,owners);
+    assemble_point_sources(source,owners,m->var,0,1,rate);
+    for(int n=0;n<m->var.nnode;++n) {
+        const double expected=n==0 ? 2*c+2.8 : n<=NDIMS ? 3*c : -c;
+        check("point barycentric rates and shared-node ownership",rate[n],expected);
+    }
+    const double breaks[]={0,.13,.47,.81,1.4};
+    for(int i=0;i<4;++i) {
+        assemble_point_sources(source,owners,m->var,breaks[i],breaks[i+1],rate);
+        for(int n=0;n<m->var.nnode;++n) integrated[n]+=rate[n]*(breaks[i+1]-breaks[i]);
+    }
+    double total=0;for(double v:integrated) total+=v;
+    check("subintervals conserve signed scheduled amount",total,4.4);
+    source.rate_model=injection_rate_total_amount;
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
+    for(int n=0;n<m->var.nnode;++n)
+        check("rate/total-amount equivalence",rate[n]*1.4,integrated[n]);
+    // The points are fixed in the material: they move with the mesh, away from
+    // their configured coordinates.
+    for(int n=0;n<m->var.nnode;++n) for(int d=0;d<NDIMS;++d) m->coord[n][d]+=10;
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
+    for(int n=0;n<m->var.nnode;++n)
+        check("point sources move with the mesh",rate[n]*1.4,integrated[n]);
+    source.enabled=false;
+    place_point_sources(source,m->var,owners);
+    assemble_point_sources(source,owners,m->var,0,1.4,rate);
+    for(double v:rate) check("disabled point source clears derived rates",v,0);
+    delete m;
+}
+
+static void test_well_screens() {
+    std::printf("[Material screen rate through repeated placement]\n");
+    Fixture m;
+    build_mesh(m);
+    m.param.control.has_hydraulic_diffusion = true;
+    BC &bc = m.param.bc;
+    bc.num_wells = 1;
+    bc.well_z_bottom = {0};
+    bc.well_z_top = {1};
+    bc.well_rate = {1};
+    double_vec rate(m.var.nnode, 0);
+    m.var.fluid_source = &rate;
+    const double first = .125, last = .5;
+    const struct { double join_x, join_z; int segments; } cases[] = {
+        {.25, .5*(first+last), 2},
+        {.125, .25, 2},
+        {.125, .5*(first+last), 1},
+    };
+    for (const auto &test : cases) {
+        auto &pieces = m.var.well_pieces;
+        pieces.well = {0, 0};
+        pieces.element = {0, 0};
+        pieces.length = {.5, .5};
+        double_vec ends(4*NDIMS, .125);
+        ends[NDIMS] = ends[2*NDIMS] = test.join_x;
+        ends[2*NDIMS-1] = ends[3*NDIMS-1] = test.join_z;
+        ends[4*NDIMS-1] = last;
+        double centroid[NDIMS];
+        for (int d = 0; d < NDIMS; ++d)
+            centroid[d] = .25*(ends[d] + 2*ends[NDIMS+d] + ends[3*NDIMS+d]);
+        for (int repeat = 0; repeat < 2; ++repeat) {
+            place_well_screens(m.param, m.var, &ends);
+            assemble_well_source(m.param, m.var);
+            double total = 0, moment[NDIMS] = {};
+            for (int n = 0; n < m.var.nnode; ++n) {
+                total += rate[n];
+                for (int d = 0; d < NDIMS; ++d) moment[d] += rate[n]*m.coord[n][d];
+            }
+            check("screen rate", total, 1);
+            for (int d = 0; d < NDIMS; ++d)
+                check("screen rate centroid", moment[d], centroid[d]);
+            check("screen pieces", pieces.length.size(), test.segments);
+            well_screen_positions(m.var, ends);
+        }
+    }
+
+    // The two simplices share the horizontal face crossed by the screen.
+    for (int i = 0; i < NDIMS; ++i) m.connectivity[1][i] = i;
+    std::swap(m.connectivity[1][0], m.connectivity[1][1]);
+    m.connectivity[1][NDIMS] = 2*NDIMS;
+    bc.well_x = {.2};
+    bc.well_y = {.2};
+    bc.well_z_bottom = {-.5};
+    bc.well_z_top = {.5};
+    place_well_screens(m.param, m.var);
+    for (int repeat = 0; repeat < 4; ++repeat) {
+        check("shared face gives two screen pieces", m.var.well_pieces.length.size(), 2);
+        assemble_well_source(m.param, m.var);
+        double total = 0, elevation = 0;
+        for (int n = 0; n < m.var.nnode; ++n) {
+            total += rate[n];
+            elevation += rate[n]*m.coord[n][NDIMS-1];
+        }
+        check("shared-face screen rate", total, 1);
+        check("shared-face screen centroid", elevation, 0);
+        double_vec ends;
+        well_screen_positions(m.var, ends);
+        place_well_screens(m.param, m.var, &ends);
+    }
 }
 
 int main(int argc, char** argv) {
@@ -1696,6 +2071,10 @@ int main(int argc, char** argv) {
         test_rejected_jump(std::strcmp(argv[1],"--reject-mc-cap-jump")==0);
         return 1;  // check.sh requires status 54 from update_stress
     }
+    test_point_sources();
+    test_well_screens();
+    test_strain_pressure();
+    test_strain_pressure(true);
     test_darcy_gravity_limit();
     test_pt_norm();
     test_material_trials();
@@ -1711,9 +2090,14 @@ int main(int argc, char** argv) {
 #endif
     }
     return_mapping_option=0;
+#ifdef THREED
+    test_tiny_shear_return();
+#endif
+    test_eigen_scales();
     test_constraints();
     test_cancellation();
     test_traction();
+    test_platen();
     test_damping();
     test_body_force();
     std::printf("\n%d passed, %d failed\n", npass, nfail);

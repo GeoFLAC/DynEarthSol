@@ -168,7 +168,7 @@ double ref_pressure(const Param& param, double z)
         if (param.control.has_hydraulic_diffusion) {
         // Modified density considering porosity for hydraulic diffusion
             p = (param.mat.rho0[param.mat.mattype_ref] * (1 - param.mat.porosity[param.mat.mattype_ref]) + \
-                1000.0 * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
+                param.mat.fluid_rho0[param.mat.mattype_ref] * param.mat.porosity[param.mat.mattype_ref]) * param.control.gravity * depth;
         } else {
             // Standard reference pressure without hydraulic diffusion
             p = param.mat.rho0[param.mat.mattype_ref] * param.control.gravity * depth;
@@ -190,16 +190,12 @@ MatProps::MatProps(const Param& p, const Variables& var) :
   visc_max(p.mat.visc_max),
   tension_max(p.mat.tension_max),
   therm_diff_max(p.mat.therm_diff_max),
-  hydro_diff_max(1e-1),
   coord(*var.coord),
   connectivity(*var.connectivity),
   temperature(*var.temperature),
   stress(*var.stress),
-//   stress_old(*var.stress_old),
   strain_rate(*var.strain_rate),
   elemmarkers(*var.elemmarkers),
-  ppressure(*var.ppressure),
-  dppressure(*var.dppressure),
   log_table(*var.log_table),
   tan_table(*var.tan_table),
   sin_table(*var.sin_table)
@@ -248,7 +244,6 @@ MatProps::MatProps(const Param& p, const Variables& var) :
     evolution_b = p.mat.evolution_b;
     characteristic_velocity = p.mat.characteristic_velocity;
     characteristic_distance = p.mat.characteristic_distance;
-    // static_friction_coefficient = p.mat.static_friction_coefficient;
 
     // Material-only terms of the creep law, in the association visc() evaluates them in
     // so the per-element result is bit-identical at opt <= 2. Round-off-equivalent only
@@ -495,10 +490,15 @@ MatProps::StrengthPiece MatProps::strength_piece(int e, double pls) const
 // The angle factors and the strength at the start of the piece.
 void MatProps::finish_piece(StrengthPiece& piece) const
 {
-    double phi = piece.friction;
-    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    piece.factors = angle_factors(phi, piece.dilation, piece.rsf != 0);
+    piece.factors = piece_factors(piece, piece.friction, piece.dilation);
     piece.strength = strength_from(piece.cohesion, piece.factors);
+}
+
+MatProps::AngleFactors MatProps::piece_factors(const StrengthPiece& piece, double phi,
+                                               double psi) const
+{
+    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
+    return angle_factors(phi, psi, piece.rsf != 0);
 }
 
 void MatProps::rsf_terms(int e, double slip_rate, double state_variable, int state_model,
@@ -581,6 +581,7 @@ MatProps::StrengthPiece MatProps::rsf_strength_piece(int e, double pls, double s
     if (frozen_history) {
         // The stored coefficient, as in plastic_weakening_rsf.
         piece.rsf = 2;
+        piece.rsf_terms[0] = piece.rsf_terms[1] = 0;
         piece.friction = std::atan(dyn_fric_coeff) / DEG2RAD;
         piece.dfriction = 0;
     }
@@ -596,10 +597,8 @@ MatProps::PiecePoint MatProps::piece_point(const StrengthPiece& piece, double of
 {
     const double cohesion = piece.cohesion + piece.dcohesion*offset;
     if (!piece.angles_change()) return PiecePoint{cohesion, piece.factors};
-    double phi = piece.friction + piece.dfriction*offset;
-    if (piece.rsf == 1) phi = std::atan(rsf_coefficient(phi, piece.rsf_terms)) / DEG2RAD;
-    return PiecePoint{cohesion,
-                      angle_factors(phi, piece.dilation + piece.ddilation*offset, piece.rsf != 0)};
+    return PiecePoint{cohesion, piece_factors(piece, piece.friction + piece.dfriction*offset,
+                                              piece.dilation + piece.ddilation*offset)};
 }
 
 MatProps::Strength MatProps::piece_strength(const StrengthPiece& piece, double offset) const
@@ -740,12 +739,6 @@ void MatProps::update_state_variable(int e, double slip_rate, double& state_vari
     }
 }
 
-MatProps::PlasticProps MatProps::plastic_props(int e, double pls) const
-{
-    const Weakening w = weakening_means(e, pls);
-    return PlasticProps{derived_strength(w.cohesion, w.friction, w.dilation, false), w.hardening};
-}
-
 MatProps::Strength MatProps::derived_strength(double cohesion, double phi, double psi,
                                               bool rsf) const
 {
@@ -854,44 +847,9 @@ double MatProps::beta_fluid(int e) const
     return cache_props[std::size_t(e) * MP_STRIDE + MPC_BETA_FLUID];
 }
 
-double MatProps::rho_fluid(int e) const
+double MatProps::rho_fluid_reference(int e) const
 {
-    const double p0 = 1.0e5; // Reference pressure in Pascals (1 atm)
-    const double T0 = 273; // Reference temperature in Kelvin (0°C)
-
-    // Average temperature of this element
-    double T = 0;
-    ConstConnAccessor conn = connectivity[e];
-    #pragma acc loop seq
-    for (int i = 0; i < NODES_PER_ELEM; ++i) {
-        T += temperature[conn[i]];
-    }
-    T /= NODES_PER_ELEM;
-
-    // Average pore pressure of this element
-    double p = 0;
-    #pragma acc loop seq
-    for (int i = 0; i < NODES_PER_ELEM; ++i) {
-        p += ppressure[conn[i]];
-    }
-    p /= NODES_PER_ELEM;
-
-    // Use the functions to get thermal expansivity and compressibility
-    double alpha_f = alpha_fluid(e);  // Thermal expansivity for the fluid
-    double beta_f = beta_fluid(e);    // Compressibility for the fluid
-
-    // Calculate fluid density based on thermal expansivity and compressibility
-    double result = 0;
-    int n = 0;
-    #pragma acc loop seq
-    for (int m = 0; m < nmat; m++) {
-        double rho_f = (fluid_rho0)[m];  // Reference fluid density
-        result += rho_f * (1 - alpha_f * (T - T0) + beta_f * (p - p0)) * elemmarkers[e][m];
-        n += elemmarkers[e][m];
-    }
-
-    // Return the averaged fluid density
-    return result / n;
+    return arithmetic_mean(fluid_rho0, elemmarkers[e]);
 }
 
 double MatProps::mu_fluid(int e) const

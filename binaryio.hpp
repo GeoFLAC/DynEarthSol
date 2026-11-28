@@ -53,6 +53,23 @@ public:
     template <typename T, int N>
     void write_array(const Array2D<T,N>& A, const char *name, hsize_t len, int dest_N = -1);
 
+    // Cell association cannot be inferred from length when nnode == nelem.
+    // Writes through write_array under the CellData group, so root aliases
+    // and the numerical layout are those of write_array.
+    template <typename Array>
+    void write_cell_array(const Array& A, const char *name, hsize_t len)
+    {
+        const std::string base = block_base;
+        const bool metadata = has_metadata;
+        if (metadata) {
+            block_base += "/CellData";
+            has_metadata = false;
+        }
+        write_array(A, name, len);
+        block_base = base;
+        has_metadata = metadata;
+    }
+
     void write_nodal_vec_array(const Array2D<double,NDIMS>& A, const char *name, hsize_t len);
 
     void write_attribute(const std::string& A, const std::string& name, hid_t& vtkgrpBlock_id);

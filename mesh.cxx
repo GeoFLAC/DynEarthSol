@@ -3474,8 +3474,8 @@ void create_boundary_facets(Variables& var)
      */
 
     // Element facets whose nodes share a boundary flag, sorted by their node
-    // ids, then by element and facet: the first match of a key is the one a
-    // scan over all elements would find.
+    // ids, then by element and facet, so the first match of a key is the
+    // lowest-numbered element and facet.
     typedef std::array<int,NODES_PER_FACET> facet_key;
     struct Candidate {
         facet_key key;
@@ -3505,7 +3505,6 @@ void create_boundary_facets(Variables& var)
                   return a.e < b.e || (a.e == b.e && a.f < b.f);
               });
 
-    // Looping through var.segment, in its order
     for (int i=0; i<var.nseg; ++i) {
         uint flag = static_cast<uint>((*var.segflag)[i][0]);
         if ((flag & BOUND_ANY) == 0) continue; // not a boundary facet
@@ -3519,7 +3518,7 @@ void create_boundary_facets(Variables& var)
         auto c = std::lower_bound(candidates.begin(), candidates.end(), af,
                                   [](const Candidate &a, const facet_key &k) { return a.key < k; });
         for (; c != candidates.end() && c->key == af && !found; ++c) {
-            if ((flag & c->flag) == 0U) continue; // skip
+            if ((flag & c->flag) == 0U) continue;
             for (int k=0; k<nbdrytypes; ++k) {
                 if (flag == (1U << k)) {
                     var.bfacets[k]->emplace_back(c->e, c->f);

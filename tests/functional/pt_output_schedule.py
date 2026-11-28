@@ -5,9 +5,12 @@ import json
 import math
 from pathlib import Path
 import struct
+import sys
 
-from pt_initial_checkpoint import fields
-from des_test_utils import read_config, run_des
+from des_test_utils import fields, physical_differences, read_config, record_name, run_des
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from Dynearthsol import YEAR2SEC
 
 
 def main():
@@ -41,9 +44,7 @@ def main():
         assert args.schedule == 'time' and args.time_after_restart > 1
     dt = cfg.getfloat('control', 'fixed_dt')
     assert dt > 0, 'Use a positive fixed physical dt for this schedule test'
-    # Use the solver YEAR2SEC constant, not a calendar-year approximation.
-    year_seconds = 365.2422 * 86400
-    interval = (0.2 if args.schedule == 'catchup' else 2.5) * dt / year_seconds
+    interval = (0.2 if args.schedule == 'catchup' else 2.5) * dt / YEAR2SEC
     cfg['sim'].update(max_steps='64' if args.schedule == 'overflow' else '18', max_time_in_yr='1', has_initial_checkpoint='yes',
                       checkpoint_frame_interval='1', is_outputting_averaged_fields='no',
                       has_output_during_remeshing='no',
@@ -68,7 +69,7 @@ def main():
             if args.step_after_restart:
                 cfg['sim']['output_step_interval'] = str(args.step_after_restart)
             if args.time_after_restart:
-                cfg['sim']['output_time_interval_in_yr'] = repr(args.time_after_restart*dt/year_seconds)
+                cfg['sim']['output_time_interval_in_yr'] = repr(args.time_after_restart*dt/YEAR2SEC)
         run_des(executable, output, phase, cfg, timeout=240)
     histories = {}
     for phase in phases:
@@ -88,7 +89,7 @@ def main():
     if args.schedule == 'overflow':
         expected, index = [], 1
         for _, step, time in histories['reference']:
-            target = index*interval*year_seconds
+            target = index*interval*YEAR2SEC
             if (time >= target if uses_gvs else time > target):
                 expected.append(step)
                 index += 1
@@ -104,7 +105,7 @@ def main():
             period = float(cfg['sim']['output_time_interval_in_yr'])
             for _, step, time in histories['reference']:
                 if step <= start: continue
-                elapsed, target = time-epoch, index*period*year_seconds
+                elapsed, target = time-epoch, index*period*YEAR2SEC
                 due = elapsed >= target if uses_gvs else elapsed > target
                 if due:
                     expected.append(step); index += 1
@@ -119,9 +120,8 @@ def main():
             for suffix in ('save', 'chkpt'):
                 a = fields(output/f'reference.{suffix}.{other:06d}')
                 b = fields(output/f'resumed.{suffix}.{frame:06d}')
-                differences[f'{suffix}.{frame}'] = [key for key in a.keys() | b.keys()
-                    if key.split('/')[-1] not in clock | {'walltime_sec', 'provenance'}
-                    and a.get(key) != b.get(key)]
+                differences[f'{suffix}.{frame}'] = [key for key in physical_differences(a, b)
+                                                    if record_name(key) not in clock]
         result = dict(method=args.method, schedule=args.schedule, step_after_restart=args.step_after_restart,
                       time_after_restart=args.time_after_restart,
                       histories=histories, differences=differences)
@@ -134,8 +134,7 @@ def main():
             for suffix in ('save', 'chkpt'):
                 a = fields(output / f'fresh.{suffix}.{frame:06d}')
                 b = fields(output / f'resumed.{suffix}.{frame:06d}')
-                differences[f'{suffix}.{frame}'] = [key for key in a.keys() | b.keys()
-                    if key.split('/')[-1] not in ('walltime_sec', 'provenance') and a.get(key) != b.get(key)]
+                differences[f'{suffix}.{frame}'] = physical_differences(a, b)
     result = {'method': args.method, 'schedule': args.schedule, 'histories': histories, 'differences': differences}
     (output / 'comparison.json').write_text(json.dumps(result, indent=2) + '\n')
     assert histories['fresh'] == histories['resumed'], result

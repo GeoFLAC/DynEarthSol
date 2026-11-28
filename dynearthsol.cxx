@@ -19,12 +19,14 @@
 #include "fields.hpp"
 #include "geometry.hpp"
 #include "gwb.hpp"
+#include "hydraulics.hpp"
 #include "ic.hpp"
 #include "input.hpp"
 #include "matprops.hpp"
 #include "markerset.hpp"
 #include "mesh.hpp"
 #include "monitor.hpp"
+#include "point_sources.hpp"
 #include "mpi_simulation.hpp"
 #include "output.hpp"
 #include "phasechanges.hpp"
@@ -184,6 +186,7 @@ void init(const Param& param, Variables& var)
     gwb_build(param);   // ic options 936 query the world from meshing on
     create_new_mesh(param, var);
     create_boundary_flags(var);
+    validate_hydraulic_boundaries(param, var);
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
@@ -246,6 +249,7 @@ void init(const Param& param, Variables& var)
     // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
     // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
     // update_mesh() ungated before the loop.
+    place_sources(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     // After compute_mass: it fills var.volume_n, which this divides by.
@@ -261,6 +265,82 @@ void init(const Param& param, Variables& var)
 #endif
 }
 
+
+// Points fixed in the material, as Output::write_checkpoint stores them under "<prefix> point
+// ...". Returns the saved count, 0 without one, and reads the points only when it is `expected`.
+template <class Input>
+static int read_material_points(Input &bin, const std::string &prefix, int expected,
+                                int_vec &elements, double_vec &weights,
+                                double_vec *positions = nullptr)
+{
+    int count = 0;
+    if (bin.has_array((prefix + " point count").c_str()))
+        bin.read_scalar(count, prefix + " point count");
+    if (count != expected) return count;
+    if (positions) {
+        positions->resize(std::size_t(count)*NDIMS);
+        bin.read_array(*positions, (prefix + " point positions").c_str());
+    }
+    elements.resize(count);
+    weights.resize(std::size_t(count)*NODES_PER_ELEM);
+    bin.read_array(elements, (prefix + " point elements").c_str());
+    bin.read_array(weights, (prefix + " point weights").c_str());
+    return count;
+}
+
+// A restart keeps source locations by list index. The point count and the
+// well screen lengths must match the checkpoint, or the set is placed again.
+template <class Input>
+static void restore_sources(const Param &param, Variables &var, Input &bin)
+{
+    const Injection &injection = param.injection;
+    PointSourceOwners &owners = var.fluid_points;
+    if (!injection.enabled ||
+        read_material_points(bin, "fluid", injection.num_points, owners.element,
+                             owners.weight) != injection.num_points)
+        place_point_sources(injection, var, owners);
+    else {
+        for (int p = 0; p < injection.num_points; ++p)
+            if (owners.element[p] < 0 || owners.element[p] >= var.nelem)
+                die(EXIT_IO_RESTART, "Invalid point-source element in the checkpoint.");
+        for (double w : owners.weight)
+            if (!std::isfinite(w)) die(EXIT_IO_RESTART, "Invalid point-source weight in the checkpoint.");
+    }
+
+    const BC &bc = param.bc;
+    int count = 0;
+    if (param.control.has_hydraulic_diffusion && bc.num_wells > 0 && bin.has_array("well piece count"))
+        bin.read_scalar(count, "well piece count");
+    WellPieces &pieces = var.well_pieces;
+    bool same = count > 0;
+    if (same) {
+        pieces.well.resize(count);
+        pieces.element.resize(count);
+        pieces.length.resize(count);
+        for (double_vec *v : {&pieces.start, &pieces.end, &pieces.mean})
+            v->resize(std::size_t(count)*NODES_PER_ELEM);
+        bin.read_array(pieces.well, "well piece wells");
+        bin.read_array(pieces.element, "well piece elements");
+        bin.read_array(pieces.start, "well piece starts");
+        bin.read_array(pieces.end, "well piece ends");
+        bin.read_array(pieces.mean, "well piece means");
+        bin.read_array(pieces.length, "well piece lengths");
+        double_vec length(bc.num_wells, 0.0);
+        for (int k = 0; k < count; ++k) {
+            if (pieces.element[k] < 0 || pieces.element[k] >= var.nelem ||
+                !std::isfinite(pieces.length[k]))
+                die(EXIT_IO_RESTART, "Invalid well piece in the checkpoint.");
+            if (pieces.well[k] < 0 || pieces.well[k] >= bc.num_wells) same = false;
+            else length[pieces.well[k]] += pieces.length[k];
+        }
+        for (int w = 0; same && w < bc.num_wells; ++w) {
+            const double screen = bc.well_z_top[w] - bc.well_z_bottom[w];
+            same = std::fabs(length[w] - screen) <= 1e-9 * screen;
+        }
+    }
+    if (!same) place_well_screens(param, var);
+    assemble_well_source(param, var);
+}
 
 void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
 {
@@ -342,6 +422,7 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     }
 
     create_boundary_flags(var);
+    validate_hydraulic_boundaries(param, var);
     create_boundary_nodes(var);
     create_boundary_facets(var);
     create_support(var);
@@ -503,9 +584,11 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             if (!bin_chkpt.has_array("pending pore pressure increment"))
                 die(EXIT_IO_RESTART, "Hydraulic checkpoint lacks the pending pressure increment; exact continuation is not recoverable.");
             bin_chkpt.read_array(*var.dppressure, "pending pore pressure increment");
+            if (bin_chkpt.has_array("fluid balance"))
+                bin_chkpt.read_array(*var.fluid_balance, "fluid balance");
         }
         if (param.control.has_PT) {
-            // Optional save diagnostic, not a new checkpoint requirement.
+            // Optional save diagnostic; a restart does not require it.
             if (bin_save.has_array("PT residual force")) {
                 bin_save.read_array(*var.force_residual, "PT residual force");
                 var.PT_force_residual_valid = true;
@@ -515,8 +598,8 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
                 bin_chkpt.read_scalar(complete, "initial equilibrium done");
                 var.initial_equilibrium_done = complete != 0;
             } else {
-                // Legacy output is written before adjustment at step zero and
-                // after the accepted physical step at positive step counts.
+                // A checkpoint without this flag is written before adjustment at
+                // step zero and after the accepted physical step at positive steps.
                 var.initial_equilibrium_done = var.steps > 0;
             }
         }
@@ -638,14 +721,29 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
     }
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+    bool hydraulic_order_changed = false;
+    if (param.control.has_hydraulic_diffusion) {
+        const bool saved_strain_form = bin_chkpt.has_array("physical hydraulic step");
+        if (saved_strain_form) {
+            int marker = 0;
+            bin_chkpt.read_scalar(marker, "physical hydraulic step");
+            if (marker != 1) die(EXIT_IO_RESTART, "Invalid hydraulic step ordering in checkpoint.");
+        }
+        const bool initial = var.steps == 0 && std::all_of(var.dppressure->begin(),
+            var.dppressure->end(), [](double dp) { return dp == 0; });
+        hydraulic_order_changed = saved_strain_form != hydraulic_strain_form(param);
+        if (hydraulic_order_changed && !initial)
+            die(EXIT_IO_RESTART, "Hydraulic step ordering differs from this checkpoint; use its matching solver/formulation.");
+    }
+    restore_sources(param, var, bin_chkpt);
     // require max_global_vel_mag, var.volume, and var.temperature to be loaded before
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 
     create_boundary_normals(var, *var.bnormals, var.edge_vec, var.edge_slot);
 
-    // PT checkpoints carry the accepted velocity. The legacy boundary map can
-    // change it (notably on oblique boundaries); the next PT solve imposes its
-    // own constraints at the next physical time.
+    // PT checkpoints carry the accepted velocity. apply_vbcs() can change it
+    // (notably on oblique boundaries); the next PT solve imposes its own
+    // constraints at the next physical time.
     if (!param.control.has_PT) apply_vbcs(param, var, *var.vel);
 
     if (param.ic.is_restarting_weakzone) {
@@ -695,19 +793,18 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
         const double_vec current = dt_controls(param);
         double_vec saved(current.size());
         bin_chkpt.read_array(saved, "dt controls");
-        if (saved.size() != current.size() ||
-            std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
+        if (std::any_of(saved.begin(), saved.end(), [](double v) { return !std::isfinite(v); }))
             die(EXIT_IO_RESTART, "Invalid timestep controls in checkpoint.");
         dt_controls_changed = saved != current;
     } else {
-        // The old PT clock identifies PT checkpoints without saved dt controls.
+        // A "PT output start time" entry marks a PT checkpoint without saved dt controls.
         dt_controls_changed = (!param.control.has_PT && bin_chkpt.has_array("PT output start time")) ||
             (param.control.fixed_dt != 0 && param.control.fixed_dt != var.dt);
     }
 
     // Unchanged controls retain the saved next interval and velocity scale.
     // Changed controls must use the same timestep/mass pair as a fresh stage.
-    if (dt_controls_changed ||
+    if (dt_controls_changed || hydraulic_order_changed ||
         (param.control.use_global_velocity_scaling && !param.control.has_PT)) {
         var.dt = compute_dt(param, var);
         compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
@@ -719,20 +816,10 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
             bin_chkpt.has_array("monitor point elements") + bin_chkpt.has_array("monitor point weights");
         if (fields != 0 && fields != 4)
             die(EXIT_IO_RESTART,"Incomplete monitor checkpoint state.");
-        int count = 0;
-        if (fields == 4)
-            bin_chkpt.read_scalar(count, "monitor point count");
-        if (count < 0)
-            die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
         // A changed point set relocates the configured points.
-        if (count > 0 && count == param.monitor.num_points) {
-            monitor.positions.resize(std::size_t(count)*NDIMS);
-            monitor.elements.resize(count);
-            monitor.weights.resize(std::size_t(count)*NODES_PER_ELEM);
-            bin_chkpt.read_array(monitor.positions, "monitor point positions");
-            bin_chkpt.read_array(monitor.elements, "monitor point elements");
-            bin_chkpt.read_array(monitor.weights, "monitor point weights");
-        }
+        if (read_material_points(bin_chkpt, "monitor", param.monitor.num_points, monitor.elements,
+                                 monitor.weights, &monitor.positions) < 0)
+            die(EXIT_IO_RESTART,"Invalid monitor checkpoint count.");
     }
 
     report_mesh_info(var, "restart");
@@ -847,6 +934,7 @@ void isostasy_adjustment(const Param &param, Variables &var)
 
         update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
         update_velocity(var, *var.vel);
+        apply_platen_velocity(param, var, *var.vel);
 
         #pragma acc wait
 
@@ -1120,6 +1208,10 @@ int main(int argc, const char* argv[])
 #endif
     // Publish and monitor the accepted initial state, not the pre-equilibrium
     // candidate. The first checkpoint therefore records initialization as done.
+    if (param.bc.vbc_z1 == 8) {
+        validate_platen_constraints(param, var);
+        apply_platen_velocity(param, var, *var.vel);
+    }
     if (param.ic.has_body_force_adjustment && !var.initial_equilibrium_done) {
         if (param.control.has_PT)
             require_pt_convergence(param, var, run_initial_equilibrium_pt(param, var));
@@ -1189,6 +1281,9 @@ int main(int argc, const char* argv[])
             update_strain_rate(var, *var.strain_rate);
             compute_dvoldt(var, *var.ntmp, *var.etmp);
             compute_edvoldt(var, *var.ntmp, *var.edvoldt);
+            if (hydraulic_strain_form(param))
+                update_pore_pressure(param, var, *var.ppressure, *var.dppressure,
+                    *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
             update_stress(param, var, *var.stress, *var.stressyy, *var.dpressure,
                 *var.viscosity, *var.strain, *var.plstrain, *var.delta_plstrain,
                 *var.strain_rate,
@@ -1201,11 +1296,11 @@ int main(int argc, const char* argv[])
 
             update_force(param, var, *var.force, *var.force_residual, *var.tmp_result);
             update_velocity(var, *var.vel);
-
+            apply_platen_velocity(param, var, *var.vel);
             var.l2_residual = calculate_residual_force(var, *var.force_residual);
         }
 
-        if(param.control.has_hydraulic_diffusion)
+        if(param.control.has_hydraulic_diffusion && !hydraulic_strain_form(param))
             update_pore_pressure(param, var, *var.ppressure, *var.dppressure, *var.ntmp, *var.tmp_result, *var.stress, *var.old_mean_stress);
 
         // The functions of a slow step are expensive and their inputs change
@@ -1302,13 +1397,7 @@ int main(int argc, const char* argv[])
         } else {
             if (regular_output_is_due(param, var, next_regular_frame, false)) {
                 var.output_next_regular_frame = next_regular_frame + 1;
-                if (next_regular_frame % param.sim.checkpoint_frame_interval == 0) {
-                    const int64_t checkpoint_start = get_nanoseconds();
-                    var.output->write_checkpoint(param, var);
-                    var.func_time.output_time += get_nanoseconds() - checkpoint_start;
-                }
-
-                var.output->write(var);
+                var.output->write_regular(param, var, next_regular_frame);
 
                 next_regular_frame ++;
                 var.reference_frame_time = var.output_start_time +
@@ -1353,7 +1442,7 @@ int main(int argc, const char* argv[])
         var.gospl_driver->print_coupling_summary();
 #endif
 
-    monitor_finalize(var);
+    monitor_finalize();
 
     // Before end() deletes the Output that keeps the run's peak.
     const double peak_rss_gib = var.output->update_peak_rss_gib();

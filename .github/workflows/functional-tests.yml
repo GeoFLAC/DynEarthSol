@@ -39,7 +39,7 @@ jobs:
         python-version: '3.10'
         
     - name: Install Python dependencies
-      run: python -m pip install --upgrade pip numpy h5py
+      run: python -m pip install --upgrade pip numpy h5py scipy
 
     - name: get hdf5
       run: |
@@ -76,6 +76,16 @@ jobs:
     - name: test seismic moment from plastic strain
       working-directory: ./tests/earthquake-moment-test
       run: make ndims=2 check && make ndims=3 check
+
+    - name: test 2d linear Biot content through remeshing
+      run: >-
+        OMP_NUM_THREADS=1 python3 hydromechanics/check_fluid_remap.py
+        ../../dynearthsol2d fluid-remap-2d
+
+    - name: test exact simplex overlap moments
+      run: >-
+        OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python3
+        hydromechanics/check_overlap.py overlap
 
     - name: test 2d ep irregular remesh
       run: ../../dynearthsol2d 2d-ep-irregular.cfg && rm -rf functional-test.*

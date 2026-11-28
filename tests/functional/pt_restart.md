@@ -1,5 +1,33 @@
 # PT checkpoint and remeshing regression
 
+## Changed timestep controls
+
+```sh
+OMP_NUM_THREADS=1 python3 tests/functional/check_restart_dt.py EXE OUT --legacy-executable OLD_EXE
+```
+
+Use a fresh output directory and executables of the same dimension and
+container. Twelve tiny-cell cases check exact unchanged PT/explicit
+continuation and the first interval after changing method, physical
+inertia, scaling, characteristic speed, step fraction or fixed timestep.
+The explicit velocity increment also checks the mass actually used.
+
+New checkpoints retain a versioned record of the timestep controls.
+Unchanged controls preserve the saved next interval; changed controls
+select the current interval and matching mass before the first new step.
+Older files detect PT/explicit conversion through the existing output
+clock schema and honor an explicitly changed positive `fixed_dt`.
+An older ordinary-explicit file does not record its previous scaling
+settings: resume it with its original settings to write a current-format
+checkpoint before changing those settings. GVS already reselects its
+adaptive timestep/mass pair at restart.
+
+The recorded 2D/3D cells select 0.05/0.0333 s after a PT checkpoint
+carrying 1 s; the parent incorrectly keeps 1 s. This check does not
+qualify an earthquake-cycle energy budget.
+
+## Unchanged physical continuation
+
 From the repository root, use a CPU executable (the comparisons require Python
 h5py and NumPy):
 

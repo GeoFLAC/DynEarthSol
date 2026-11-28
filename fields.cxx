@@ -1,4 +1,5 @@
 #include <iostream>
+#include <limits>
 
 #include "constants.hpp"
 #include "parameters.hpp"
@@ -6,7 +7,16 @@
 #include "matprops.hpp"
 #include "fields.hpp"
 #include "mpi_simulation.hpp"
+#include "hydraulics.hpp"
 #include "utils.hpp"
+
+// Nodal point-source fields, sized to the current mesh.
+static void allocate_source_fields(const Param &param, Variables &var)
+{
+    const int n = var.nnode;
+    delete var.fluid_point_source;
+    var.fluid_point_source = param.injection.enabled ? new double_vec(n,0) : nullptr;
+}
 
 void allocate_variables(const Param &param, Variables& var)
 {
@@ -18,11 +28,11 @@ void allocate_variables(const Param &param, Variables& var)
 
     var.mass = new double_vec(n);
     var.tmass = new double_vec(n);
-    var.hmass = new double_vec(n);
     var.ymass = new double_vec(n);
     var.edvoldt = new double_vec(e);
 
-    var.old_mean_stress = new double_vec(e, 0);
+    allocate_hydraulic_state(var);
+    allocate_source_fields(param, var);
 
     {
         // these fields are reallocated during remeshing interpolation
@@ -30,34 +40,16 @@ void allocate_variables(const Param &param, Variables& var)
         var.stressyy = new double_vec(e, 0);
         var.volume_old = new double_vec(e); // for dv remeshing interpolation
         var.temperature = new double_vec(n);
-        var.ppressure = new double_vec(n);
-        var.dppressure = new double_vec(n);
         var.coord0 = new array_t(n);
         var.plstrain = new double_vec(e);
         var.delta_plstrain = new double_vec(e);
         var.plstrain_remesh = new double_vec(e);
         var.vel = new array_t(n, 0);
         var.strain = new tensor_t(e, 0);
-        // var.stress_old = new tensor_t(e, 0);
         var.radiogenic_source = new double_vec(e, 0);
         var.dyn_fric_coeff = new double_vec(e);
         var.state_variable = new double_vec(e);
 
-//         // these fields are from Denis' code
-//         var.MAX_shear = new double_vec(e);
-//         var.MAX_shear_0 = new double_vec(e);
-//         var.CL = new double_vec(e);
-//         var.dl_min = new double_vec(e);
-//         var.maxv = new double_vec(e);
-//         var.strain_energy = new double_vec(e);
-//         var.kinetic_energy = new double_vec(e);
-// #ifdef RS
-//         var.state1 = new double_vec(e);
-//         var.slip_velocity = new double_vec(e);
-//         var.friction_coefficient = new double_vec(e);
-//         var.RS_shear = new double_vec(e);
-//         var.Failure_mode = new double_vec(e);
-// #endif
     }
 
     var.ntmp = new double_vec(n);
@@ -111,8 +103,8 @@ void reallocate_variables(const Param& param, Variables& var)
     var.mass = new double_vec(n);
     var.tmass = new double_vec(n);
 
-    delete var.hmass;
-    var.hmass = new double_vec(n);
+    reset_hydraulic_assembly(param, var);
+    allocate_source_fields(param, var);
     delete var.ymass;
     var.ymass = new double_vec(n);
   
@@ -137,11 +129,6 @@ void reallocate_variables(const Param& param, Variables& var)
     // var.stress and var.stressyy are NOT reallocated here: the NN interpolation
     // already swapped in remapped copies sized to the new mesh, which
     // spr_node_to_elem reads before overwriting with the SPR average.
-
-    if (param.control.has_hydraulic_diffusion) {
-        delete var.old_mean_stress;
-        var.old_mean_stress = new double_vec(var.nelem);
-    }
 
     // Must run AFTER remap_markers(), which deletes and recreates *var.elemmarkers:
     // MatProps binds it by REFERENCE and its constructor seeds the property-mean cache.
@@ -266,145 +253,34 @@ void update_temperature(const Param &param, const Variables &var,
 #endif
 }
 
-// Function to check if a node is a boundary node
-inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
-    int boundary_types[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i) {
-        if (((*var.bcflag)[n] & boundary_types[i]) && (var.hbc_types[i] == 1)) {
-            return true;
-        }
-    }
-    return false;
+int explicit_substeps(double dt, double limit, const char *message)
+{
+    const double count = std::ceil(dt / limit);
+    if (!std::isfinite(count) || count > std::numeric_limits<int>::max())
+        die(EXIT_RUNTIME_RESOURCE, message);
+    return std::max(1, static_cast<int>(count));
 }
 
-
-void update_pore_pressure(const Param &param, const Variables &var,
-                          double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache &tmp_result, tensor_t& stress, double_vec& old_mean_stress)
+double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
+                        double limit)
 {
-#ifdef USEMPI
-    if (var.mpi && var.mpi->dispatch(MpiOp::PorePressure, var, 0.0)) return;
-#endif
-    const int mpi_eb = 0, mpi_ee = mpi_element_end(var);
-    const int mpi_nb = 0, mpi_ne = mpi_node_end(var);
-
-#ifdef NPROF
-    nvtxRangePush(__FUNCTION__);
-#endif
-
-    // Initialize diff_max_local for reduction
-    double diff_max_local = 1.0e-38;
-
+    const int mpi_ne = mpi_node_end(var);
 #ifndef ACC
-    #pragma omp parallel for default(none) shared(var, ppressure, tmp_result, stress, old_mean_stress, param) \
-        reduction(max:diff_max_local) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma omp parallel for default(none) shared(var, work, mass) firstprivate(mpi_ne) reduction(min:limit)
 #endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(max:diff_max_local) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-    for (int e=mpi_eb; e<mpi_ee; e++) {
-        ConstConnAccessor conn = (*var.connectivity)[e];
-        ElemCacheAccessor tr = tmp_result[e];
-        double current_mean_stress = trace(stress[e])/NDIMS;
-        double mean_stress_change = current_mean_stress - old_mean_stress[e];
-
-        // Retrieve hydraulic properties for the element
-        double perm_e = var.mat->perm(e);                // Intrinsic permeability 
-        double mu_e = var.mat->mu_fluid(e);              // Fluid dynamic viscosity
-        double alpha_b = var.mat->alpha_biot(e);         // Biot coefficient
-        double rho_f = var.mat->rho_fluid(e);            // Fluid density
-        double phi_e = var.mat->phi(e);        // Element porosity
-        double comp_fluid = var.mat->beta_fluid(e);        // fluid comporessibility
-        double bulkm = var.mat->bulkm(e);
-        double shearm = var.mat->shearm(e);
-        double matrix_comp = 1.0 / (bulkm +4.0*shearm/3.0);
-
-        double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-        if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
-
-        rho_f = 1000.0; 
-        double gamma_w = rho_f * param.control.gravity; // specific weight
-        
-        // Pressure-form Darcy mobility remains well-defined when gravity is zero.
-        // This is algebraically equivalent to the former head-form expression:
-        //   (k * gamma_w / mu) * grad(p / gamma_w + z).
-        const double mobility = perm_e / mu_e;
-        const double kv_pressure = mobility * (*var.volume)[e];
-        const double kv_gravity = mobility * gamma_w * (*var.volume)[e];
-
-        // Compute element diffusivity and update max using reduction
-        const double diff_e = mobility / (phi_e * comp_fluid + alpha_b * matrix_comp);
-        diff_max_local = std::max(diff_max_local, diff_e);
-
-        // volume term (poroelastic effect)
-        double pe = alpha_b * mean_stress_change * bulk_comp * (*var.volume)[e] / NODES_PER_ELEM  / var.dt;
-#ifdef THREED
-        double shpdx[NODES_PER_ELEM], shpdy[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdy, shpdz);
-#else
-        double shpdx[NODES_PER_ELEM], shpdz[NODES_PER_ELEM];
-        get_local_shape_fn(var, e, shpdx, shpdz);
-#endif
-
-        for (int i = 0; i < NODES_PER_ELEM; ++i) {
-            double pressure_diffusion = 0.0;
-            double gravity_drive = 0.0;
-            for (int j = 0; j < NODES_PER_ELEM; ++j) {
-#ifdef THREED
-                const double grad_dot = shpdx[i] * shpdx[j] +
-                                        shpdy[i] * shpdy[j] +
-                                        shpdz[i] * shpdz[j];
-#else
-                const double grad_dot = shpdx[i] * shpdx[j] +
-                                        shpdz[i] * shpdz[j];
-#endif
-                pressure_diffusion += grad_dot * ppressure[conn[j]];
-                gravity_drive += grad_dot * (*var.coord)[conn[j]][NDIMS-1];
-            }
-
-            // Add diffusion, compressibility, poroelastic effects, and source term
-            tr[i] = kv_pressure * pressure_diffusion + kv_gravity * gravity_drive + pe;
-        }
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector firstprivate(mpi_ne) reduction(min:limit)
+    for (int n = 0; n < mpi_ne; ++n) {
+        double row = 0;
+        const int *patch = var.support.patch(n), *local = var.support.local(n);
+        for (int k = 0; k < var.support.size(n); ++k) row += work[patch[k]][local[k]];
+        if (row > 0 && mass[n] > 0)
+            limit = std::min(limit, mass[n] / row);
     }
-
-    mpi_sync(var, tmp_result, MpiEntity::Element, NODES_PER_ELEM);
-
-#ifndef ACC
-    #pragma omp parallel for default(none) shared(param, var, tdot, ppressure, dppressure, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-#endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
-    for (int n=mpi_nb; n<mpi_ne; n++) {
-        tdot[n] = 0.0;
-        {
-            const int npatch = var.support.size(n);
-            const int* patch = var.support.patch(n);
-            const int* lpatch = var.support.local(n);
-            for (int k = 0; k < npatch; ++k)
-                tdot[n] += tmp_result[patch[k]][lpatch[k]];
-        }
-
-        // Update pore pressure for non-boundary nodes
-        if (!is_boundary_node_for_pp(n, var)) {
-            // Ensure mass is non-zero before division
-            if ((*var.hmass)[n] > 0.0) {
-                ppressure[n] -= tdot[n] * var.dt / (*var.hmass)[n]; // Update pore pressure
-                dppressure[n] = tdot[n] * var.dt / (*var.hmass)[n]; // Update pressure change
-            }
-        }
-
-        // if ((*var.bcflag)[n] & BOUNDZ1) {
-        //     ppressure[n] = 0.0; 
-        //     dppressure[n] = 0.0;
-        // }
-            
-    }
-
     #pragma acc wait
-    // Update global hydro_diff_max after the loop
 #ifdef USEMPI
-    if (var.mpi && var.mpi->in_kernel()) diff_max_local = var.mpi->maximum(diff_max_local);
+    if (var.mpi && var.mpi->in_kernel()) var.mpi->minimum(&limit, 1);
 #endif
-    var.mat->hydro_diff_max = diff_max_local;
-#ifdef NPROF
-    nvtxRangePop();
-#endif
+    return limit;
 }
 
 void update_strain_rate(const Variables& var, tensor_t& strain_rate)
@@ -654,9 +530,9 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
 
             double buoy = 0;
             if (param.control.gravity != 0) {
-                // Calculate buoyancy based on the gravity and element properties
-                // buoy = var.mat->rho(e) * param.control.gravity / NODES_PER_ELEM;
-                buoy = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e)) * param.control.gravity / NODES_PER_ELEM;
+                const double density = param.control.has_hydraulic_diffusion
+                    ? hydraulic_bulk_density(*var.mat, e) : var.mat->rho(e);
+                buoy = density * param.control.gravity / NODES_PER_ELEM;
             }
 
 
@@ -726,6 +602,8 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
     apply_stress_bcs(param, var, force, displacement_dt);
 
     if (!param.ic.has_body_force_adjustment) apply_stress_bcs_neumann(param, var, force);
+    apply_platen_force(param, var, force);
+    apply_platen_force(param, var, force_residual);
     if (force_undamped) {
         // Same accelerator queue as assembly and damping; the wait below makes
         // both outputs visible to the caller. Constraint projection is separate.
@@ -737,8 +615,11 @@ void update_force(const Param& param, const Variables& var, array_t& force, arra
             for (int d=0; d<NDIMS; ++d)
                 (*force_undamped)[n][d] = force[n][d];
     }
-    if (damp_force) apply_damping(param, var, force);
-    
+    if (damp_force) {
+        apply_damping(param, var, force);
+        apply_platen_force(param, var, force);
+    }
+
     #pragma acc wait
 
 #ifdef NPROF

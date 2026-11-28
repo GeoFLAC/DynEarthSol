@@ -260,6 +260,7 @@ struct Control {
     bool is_quasi_static;
     bool has_thermal_diffusion;
     bool has_hydraulic_diffusion;
+    bool has_poroelastic_pressure_feedback = true;
 
     bool has_hydration_processes;
     double hydration_migration_speed;
@@ -361,13 +362,28 @@ struct BC {
     int stress_bc_z0;
     int stress_bc_z1;
 
-    // hyrdaulic bouncdary
+    // hydraulic boundary conditions
     int hbc_x0;
     int hbc_x1;
     int hbc_y0;
     int hbc_y1;
     int hbc_z0;
     int hbc_z1;
+
+    double hbc_val[nbdrytypes_hydro] = {};
+    int num_hbc_period[nbdrytypes_hydro];
+    double_vec hbc_period_time_in_yr[nbdrytypes_hydro], hbc_period_ratio[nbdrytypes_hydro];
+
+    // Vertical rate-controlled wells sharing one period table.
+    int num_wells;
+    int num_well_period;
+    double_vec well_x;
+    double_vec well_y;
+    double_vec well_z_top;
+    double_vec well_z_bottom;
+    double_vec well_rate;
+    double_vec well_period_time_in_yr;
+    double_vec well_period_ratio;
 
     double stress_val_x0;
     double stress_val_x1;
@@ -444,6 +460,8 @@ struct IC {
     double isostasy_adjustment_time_in_yr;
 
     double excess_pore_pressure;
+    int pore_pressure_option;
+    double pore_pressure_value;
     bool has_body_force_adjustment;
     int initial_stress_option;
     double_vec initial_stress;
@@ -516,16 +534,15 @@ struct Mat {
     double_vec fluid_bulk_modulus;  // pore fluid bulk modulus
     double_vec fluid_visc;  // pore fluid dynamic viscosity
     double_vec biot_coeff;  // Biot-Willis coefficient
+    bool derive_biot_coeff_from_bulk_moduli;
     double_vec bulk_modulus_s;  // bulk modulus of solid grain (mineral)
-  
+
     // rate-and-state friction parameters
     double_vec direct_a;
     double_vec evolution_b;
     double_vec characteristic_velocity;
     double_vec characteristic_distance;
     int state_var_model;
-    // double_vec static_friction_coefficient;
-
 };
 
 struct Time {
@@ -627,7 +644,19 @@ struct PointCloud {
 
 using NANOKDTree = nanoflann::KDTreeSingleIndexAdaptor<nanoflann::L2_Simple_Adaptor<double, PointCloud>, PointCloud, NDIMS>;
 
+enum { injection_rate_constant = 0, injection_rate_total_amount = 1 };
+
+struct Injection {
+    bool enabled = false;
+    int num_points = 0;
+    std::string points_unit;
+    int rate_model = injection_rate_constant;
+    double_vec points_x, points_y, points_z;
+    double_vec rate, total_amount, start_time, end_time;
+};
+
 struct Param {
+    Injection injection;
     Sim sim;
     Monitor monitor;
     Mesh mesh;
@@ -828,10 +857,30 @@ struct SurfaceInfo {
 class MatProps;
 class MarkerSet;
 class VirtualTopology;
+// Point sources fixed in the material, as monitor points are: the element of the
+// whole mesh that holds each point and its barycentric weights there. They move
+// with the mesh and are placed again by their positions after a remesh.
+struct PointSourceOwners {
+    int_vec element;      // per point
+    double_vec weight;    // NODES_PER_ELEM per point
+};
+
+// Well screens fixed in the material: the screen in pieces, each a straight
+// segment in one element of the whole mesh, in order from bottom to top. The
+// barycentric coordinates of its ends, and their mean over it, which weights its
+// nodal source, stay fixed while the mesh moves. length weights the prescribed
+// rate and sums to the configured screen length over the active pieces.
+struct WellPieces {
+    int_vec well, element;
+    double_vec start, end, mean;  // NODES_PER_ELEM per piece
+    double_vec length;
+};
+
 struct Variables {
 #ifdef USEMPI
     MpiSimulation *mpi = nullptr; // owned by main; null in ordinary serial builds
 #endif
+    double_vec *fluid_point_source = nullptr;
     double time;
     double last_remesh_time; // Deborah-number timescale for the remesh stress blend
     double dt;
@@ -866,16 +915,6 @@ struct Variables {
     double global_dt_min;
     double compensation_pressure;
     double bottom_temperature;
-
-// #ifdef ATS
-//     double vmax, hmin, dt_elastic, dt_min, vmax_shear_zone, CL_min;
-// #endif    
-//     double a0, b0, a1, b1, max_pls, number_plf, seismic_eff, S_E, K_E;
-
-//     double_vec *MAX_shear, *CL, *dl_min, *maxv, *strain_energy, *kinetic_energy, *MAX_shear_0;
-// #ifdef RS
-//     double_vec *state1, *slip_velocity, *friction_coefficient, *RS_shear, *Failure_mode, avg_shear_stress, avg_vm, slip_area;
-// #endif
 
     // These 5 arrays are allocated by external library
     array_t *coord = nullptr;
@@ -942,12 +981,13 @@ struct Variables {
     double_vec *refined_elem_size_n = nullptr;
     double_vec *radiogenic_source = nullptr;
 
-    // For hyraulic proceses
-    double_vec *fmass = nullptr; // pore water mass
+    // For hydraulic processes
     double_vec *ppressure = nullptr; // pore pressure
     double_vec *dppressure = nullptr; // delta pore pressure
-    double_vec *dppressure_zero = nullptr; // delta pore pressure
-    double_vec *fluid_source = nullptr; // injection and pumping of pore water
+    double_vec *fluid_source = nullptr; // signed nodal well supply rate at period ratio 1 (m^3/s; m^2/s in 2D)
+    PointSourceOwners fluid_points;
+    WellPieces well_pieces;
+    double_vec *fluid_balance = nullptr; // last accepted step: storage, mechanics, wells, boundary, error
 
     // For rate-and-state friction
     double_vec *dyn_fric_coeff = nullptr;
@@ -971,14 +1011,12 @@ struct Variables {
     double_vec *etmp = nullptr;
     int_vec *etmp_int = nullptr;
 
-    // tensor_t *stress_old;
-
     MatProps *mat = nullptr;
 
     std::vector<MarkerSet*> markersets;
     int hydrous_marker_index;
 
-    int_vec2D *elemmarkers = nullptr; // for marksersets[0] (mattype markers)
+    int_vec2D *elemmarkers = nullptr; // for markersets[0] (mattype markers)
     Array2D<int,1> *hydrous_elemmarkers = nullptr; // for markersets[hydrous_marker_index] (hydrous markers)
 
     bool initial_equilibrium_done = false;

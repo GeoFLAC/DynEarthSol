@@ -468,67 +468,6 @@ void initial_stress_state_1d_load(const Param &param, const Variables &var,
     compensation_pressure = ref_pressure(param, -param.mesh.zlength);
 }
 
-// Function to check if a node is a boundary node
-inline bool is_boundary_node_for_pp(const int n, const Variables &var) {
-    int boundary_types[6] = {BOUNDX0, BOUNDX1, BOUNDY0, BOUNDY1, BOUNDZ0, BOUNDZ1};
-    for (int i = 0; i < 6; ++i) {
-        if (((*var.bcflag)[n] & boundary_types[i]) && (var.hbc_types[i] == 1)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void initial_hydrostatic_state(const Param &param, const Variables &var,
-                               double_vec &ppressure, double_vec &dppressure)
-{
-    // Check if gravity is enabled
-    if (param.control.gravity == 0) {
-        return;
-    }
-
-    // Hydrostatic condition for pressure calculation
-    double rho_fluid = var.mat->rho_fluid(0);
-    rho_fluid = 1000.0; // Assuming a standard fluid density (e.g., water)
-    double gravity = param.control.gravity; // Gravitational acceleration
-    double loading = param.ic.excess_pore_pressure;
-    double ks = var.mat->bulkm(0);
-    double mu = var.mat->shearm(0);
-    double lame = ks - (2.0 / 3.0) * mu;
-    double alpha_c = var.mat->alpha_biot(0);
-    double phi = var.mat->phi(0);
-    double beta_w = var.mat->beta_fluid(0);
-    double skempton = 1.0/(phi * beta_w * (lame + 2 * mu) / (alpha_c + phi - phi*alpha_c) + alpha_c);
-    // skempton = 1.0;
-    
-    // Loop over all nodes
-    for (int i = 0; i < var.nnode; ++i) {
-        // Get the z-coordinate (depth) of the current node
-        ConstArrayAccessor coord = (*var.coord)[i];
-        double z = coord[NDIMS - 1];
-
-        // Calculate hydrostatic pressure at the node: p = rho * g * z 
-        // positive for compression (sign is opposite to soild matrix) because measurement of groundwater is postive when stress is negative.
-        // if(z >= 0)
-        // {
-        //     ppressure[i] = 0.0;
-        
-        // }
-        // else
-        // {
-        //     ppressure[i] = -1.0 * rho_fluid * gravity * z + skempton * loading;
-        // }
-
-        ppressure[i] = -1.0 * rho_fluid * gravity * z;
-
-        // Add excess pore pressure for non-boundary nodes
-        if (!is_boundary_node_for_pp(i, var)) ppressure[i] += skempton * loading;
-        
-        // Initialize pressure change (dppressure) to zero
-        dppressure[i] = 0.0;
-    }
-}
-
 // The weak zone on any mesh: sets plstrain of the elements whose centroid lies in the zone and leaves
 // the others untouched.
 void initial_weak_zone(const Param &param, int nelem, const array_t &coord_all,

@@ -53,6 +53,9 @@ public:
            int start_frame);
     ~Output();
     void write(Variables& var);
+    // Frame regular_frame of the output schedule, after a checkpoint when regular_frame is a
+    // multiple of sim.checkpoint_frame_interval.
+    void write_regular(const Param& param, Variables& var, int regular_frame);
     void write_exact(Variables& var);
     void write_exact_error(const Variables& var);
     void write_checkpoint(const Param& param, const Variables& var);

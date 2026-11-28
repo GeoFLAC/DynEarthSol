@@ -122,10 +122,10 @@ void bisect(int_vec& ids, int begin, int end, int rank_begin, int rank_end,
 std::vector<MpiPartition> mpi_partition_mesh(const Variables& var, int nranks) {
     int_vec elem_owner(var.nelem);
     int_vec node_owner(var.nnode, nranks);
-    // METIS partitions every mesh. Its coarsening is inappropriate for tiny
-    // meshes with empty partitions, which use recursive coordinate bisection.
-    // One rank (a single GPU) owns every element; METIS 5.1 divides by zero
-    // when asked for one part.
+    // METIS partitions the mesh, except where recursive coordinate bisection
+    // does: tiny meshes with empty partitions, for which METIS coarsening is
+    // inappropriate, and one rank (a single GPU), which owns every element and
+    // for which METIS 5.1 divides by zero when asked for one part.
     const bool geometric = var.nelem <= nranks || nranks == 1;
     if (geometric) {
         int_vec ids(var.nelem);

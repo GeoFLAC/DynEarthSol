@@ -4,7 +4,9 @@
 // Element shape gradients shared by field updates and the current-rate timestep bound.
 #ifdef THREED
 #pragma acc routine seq
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], double shpdy[4], double shpdz[4])
+inline void get_local_shape_fn(const Variables &var, int e,
+                               double shpdx[NODES_PER_ELEM], double shpdy[NODES_PER_ELEM],
+                               double shpdz[NODES_PER_ELEM])
 {
     ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
@@ -34,7 +36,8 @@ inline void get_local_shape_fn(const Variables &var, int e, double shpdx[4], dou
 }
 #else
 #pragma acc routine seq
-inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], double shpdz[3])
+inline void get_local_shape_fn(const Variables &var, int e,
+                               double shpdx[NODES_PER_ELEM], double shpdz[NODES_PER_ELEM])
 {
     ConstArrayIndirectAccessor d = var.coord->view_const((*var.connectivity)[e]);
 
@@ -50,17 +53,34 @@ inline void get_local_shape_fn(const Variables &var, int e, double shpdx[3], dou
 }
 #endif
 
+// The same gradients as rows g[d][j] = dN_j/dx_d, for loops over the dimensions.
+#pragma acc routine seq
+inline void get_shape_gradients(const Variables &var, int e, double g[NDIMS][NODES_PER_ELEM])
+{
+#ifdef THREED
+    get_local_shape_fn(var, e, g[0], g[1], g[2]);
+#else
+    get_local_shape_fn(var, e, g[0], g[1]);
+#endif
+}
+
+// Number of explicit substeps of at most limit that cover dt; dies with
+// message when it does not fit in an int.
+int explicit_substeps(double dt, double limit, const char *message);
+// Smallest mass/row over the owned nodes of all ranks, starting from limit.
+// A node's row sums its element rows in work.
+double nodal_step_limit(const Variables &var, const elem_cache &work, const double_vec &mass,
+                        double limit);
+
 void allocate_variables(const Param &param, Variables& var);
 void reallocate_tmp(const Param &param, Variables& var);
 void reallocate_variables(const Param &param, Variables& var);
 void update_temperature(const Param &param, const Variables &var,
     double_vec &temperature, elem_cache& tmp_result);
-void update_pore_pressure(const Param &param, const Variables &var,
-    double_vec &ppressure, double_vec &dppressure, double_vec &tdot, elem_cache& tmp_result, tensor_t &stress, double_vec& old_mean_stress);
 void update_strain_rate(const Variables& var, tensor_t& strain_rate);
-// Optional caller-owned nnode-sized output includes physical loads but excludes
-// artificial damping. It must not alias force, force_residual or assembly inputs.
-// damp_force=false skips artificial damping; existing callers retain damped force.
+// force_undamped optionally receives a caller-owned nnode-sized copy of the force with
+// the physical loads but without artificial damping. It must not alias force,
+// force_residual or assembly inputs. damp_force=false skips artificial damping.
 // node_force_magnitude optionally receives, at each node, the sum of the
 // absolute element force contributions, before boundary assembly reuses tmp_result.
 void update_force(const Param& param, const Variables& var, array_t& force, array_t& force_residual,

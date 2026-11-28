@@ -19,6 +19,8 @@
 #include "brc-interpolation.hpp"
 #include "fields.hpp"
 #include "geometry.hpp"
+#include "hydraulics.hpp"
+#include "point_sources.hpp"
 #include "matprops.hpp"
 #include "mesh.hpp"
 #include "mmg_utils.hpp"
@@ -1587,19 +1589,14 @@ void rule_side_strip(const Param &param, const Variables &var, const conn_t &con
             continue;
         }
 
-        // Find the most abundant marker mattype in this element
-        int_vec &a = (*var.elemmarkers)[e];
-        int mattype = std::distance(a.begin(), std::max_element(a.begin(), a.end()));
+        const int mattype = dominant_material((*var.elemmarkers)[e]);
 
         for (int i = 0; i < NODES_PER_ELEM; ++i) {
             const int npatch = var.support.size(conn[i]);
             const int* patch = var.support.patch(conn[i]);
             bool is_iface = false;
             for (int j = 0; j < npatch; ++j) {
-                int e_sup = patch[j];
-                int_vec &b = (*var.elemmarkers)[e_sup];
-                int mat_sup = std::distance(b.begin(), std::max_element(b.begin(), b.end()));
-                if (mat_sup != mattype) {
+                if (dominant_material((*var.elemmarkers)[patch[j]]) != mattype) {
                     is_iface = true;  // mark as interface node
                     break;
                 }
@@ -1643,17 +1640,13 @@ std::vector<int> build_interface_req_edges(const Variables &var, const conn_t &c
         if ((*var.bcflag)[n] & inflow_side_bits) band_node[n] = 1;
     free_wall_band(nnode, nelem, connectivity, 1, band_node, band_elem);
 
-    auto dominant = [&](int e) -> int {
-        const int_vec &a = (*var.elemmarkers)[e];
-        return (int)std::distance(a.begin(), std::max_element(a.begin(), a.end()));
-    };
     // An interior edge is shared by exactly two triangles; emit it once, on the second share,
     // when the two dominant mattypes differ.
     std::map<std::pair<int,int>, int> first_mat;      // edge -> dominant mattype of its first elem
     std::vector<int> out;
     for (int e = 0; e < nelem; ++e) {
         if (!band_elem[e]) continue;
-        const int mt = dominant(e);
+        const int mt = dominant_material((*var.elemmarkers)[e]);
         ConstConnAccessor el = connectivity[e];
         for (int i = 0; i < NODES_PER_ELEM; ++i)
             for (int j = i + 1; j < NODES_PER_ELEM; ++j) {
@@ -4795,6 +4788,10 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     nvtxRangePush(__FUNCTION__);
 #endif
     int64_t time_tmp = get_nanoseconds();
+    // Where the sources sit in the material, to place them again on the new mesh.
+    const SourcePositions sources = source_positions(var);
+
+    ContentRemap fluid_remap(param,var);
 
     std::cout << "  Remeshing starts (#" << var.nremesh_prior + var.nremesh + 1
               << ", step " << var.steps << ", t = " << var.time / YEAR2SEC << " yr)...\n";
@@ -4987,6 +4984,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
         }
 
         create_boundary_flags(var);
+        validate_hydraulic_boundaries(param, var);
         for (int i=0; i<nbdrytypes; ++i)
             var.bfacets[i]->clear();
         create_boundary_facets(var);
@@ -4999,6 +4997,8 @@ void remesh(const Param &param, Variables &var, int bad_quality)
 
         {
             Barycentric_transformation bary(old.coord, old.connectivity, *var.volume);
+
+            fluid_remap.transfer(var, old.coord, old.connectivity);
 
             // interpolating fields defined on elements
             nearest_neighbor_interpolation(param, var, bary, old.coord, old.connectivity, rs);
@@ -5072,6 +5072,7 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     var.plstrain_remesh = new double_vec(*var.plstrain);
 
     compute_volume(*var.coord, *var.connectivity, *var.volume);
+    place_sources(param, var, &sources);
 
     double_vec surface_area(var.surfinfo.etop);
 
@@ -5101,14 +5102,11 @@ void remesh(const Param &param, Variables &var, int bad_quality)
     for (int e=0; e<var.nelem; ++e)
         (*var.volume_old)[e] = (*var.volume)[e] / (1.0 + (*var.volume_old)[e]);
 
-    // Refresh dt on the NEW mesh unconditionally. dt is otherwise only recomputed every
-    // slow_updates_interval (10) steps in the main loop, so a remesh that refines the mesh
-    // (smaller minl -> smaller stable dt) would run up to 10 steps on the stale, too-large
-    // dt -- enough for an explicit CFL runaway to invert elements (then the step-10
-    // compute_dt hits negative volumes and dies with "dt <= 0"). compute_mass below
-    // consumes var.dt, so the refresh must come first.
+    // The new mesh supplies the geometric and material timestep bounds
+    // before mass assembly uses its velocity scale.
     var.dt = compute_dt(param, var);
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
+    fluid_remap.restore(param,var);
 
 
     #pragma acc wait

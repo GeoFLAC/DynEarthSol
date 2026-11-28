@@ -81,7 +81,7 @@ struct MpiHalo {
 };
 
 // Owned rows precede ghost rows; each group follows global ID ordering.
-// Node supports are rebuilt separately in the original global element order.
+// Node supports are rebuilt separately in global element order.
 struct MpiPartition {
     int owned_nodes = 0, owned_elements = 0, owned_markers = 0;
     int_vec nodes, elements, node_rows, element_rows;

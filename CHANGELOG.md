@@ -51,6 +51,42 @@ For a release, the full auto-generated list of merged pull requests is in its
   using shared-node connectivity and a communication volume objective; meshes with
   no more elements than ranks use recursive coordinate bisection, and a one-rank
   GPU run keeps every element on its rank.
+- The saturated fluid-content check includes the pending PT pressure increment
+  when integrating from a checkpoint.
+
+- A coupled inflow/drainage column checks fluid content from pressure and
+  strain, quantifies the PT coupling lag, and verifies water budgets through
+  adaptive GVS timesteps and exact restarts against an analytical reference.
+
+- A rigid frictionless top platen (`bc.vbc_z1=8`) and normal surface stress
+  on arbitrary facets (`bc.stress_bc_*=4`) support Mandel and Cryer
+  consolidation benchmarks.
+- The `[fluid_source]` section configures wells and point sources. Positive
+  rates inject and negative rates extract. Point sources support signed
+  rates or total amounts and exact partial-step schedules. Contributions at
+  prescribed-pressure nodes enter the boundary reaction.
+- Explicit hydraulic transport supports independent face values and period
+  tables for prescribed pressure or flux, and a checkpointed fluid balance.
+  Large fixed timesteps use stable hydraulic substeps.
+
+- Vertical rate-controlled wells in `[fluid_source]` share one period table
+  that scales every rate. Screens and point sources move with the
+  material and restart from their saved locations. After a remesh cuts a
+  screen, the log reports the retained fraction and the in-domain length
+  carries the prescribed total rate. A screen with no in-domain length
+  stops with exit 51.
+
+- A thickness-averaged Biot pumping reference covers finite well/domain
+  radii and compressible fluid and grains, with standalone NumPy/SciPy checks.
+
+- Analytical comparisons report pressure and settlement for 2D/3D Terzaghi
+  consolidation. Two-well checks verify small-strain superposition and
+  scheduled-volume closure. See `benchmarks/poromechanics/README.md`.
+
+- Independent Theis analytical benchmark reference for pumping, injection,
+  rate changes and shut-in, with standalone checks requiring NumPy/SciPy.
+  Executable pumping/recovery and superposition comparisons are described
+  in `benchmarks/poromechanics/README.md`.
 
 - PT save files expose the accepted projected undamped `PT residual force`
   separately from the legacy damped `force`; `examples/pt-elastic-load.cfg`
@@ -150,6 +186,16 @@ For a release, the full auto-generated list of merged pull requests is in its
   checkpoint written before this, even by one thread, stops the restart with
   exit 22 when an element with two top facets has different entries on them;
   other older checkpoints restart as before.
+- Explicit physical-inertia steps and coupled quasistatic steps, including
+  GVS, advance pressure before stress. With feedback enabled this uses the
+  current strain increment and inverse Biot modulus. PT advances pressure
+  after mechanics and uses fixed-stress storage. Disabling mechanical
+  feedback selects fixed-stress storage at either inertia setting.
+  Checkpoints with an incompatible pressure order stop with exit 22.
+
+- Hydraulic material inputs now require physical finite moduli, viscosity,
+  density and permeability, with `0 <= porosity <= biot_coeff <= 1` and
+  nonzero `biot_coeff` when transport is enabled.
 
 - **Breaking.** Remove the obsolete `control.PT_jump` option; delete it from
   existing inputs. Initial equilibrium now uses homogeneous velocity constraints.
@@ -269,6 +315,54 @@ For a release, the full auto-generated list of merged pull requests is in its
   the default convergence threshold has the same rounding floor as
   `PT_use_running_scale`, and that floor now ignores boundary tractions
   ([#140](https://github.com/GeoFLAC/DynEarthSol/issues/140)).
+- The principal stresses of a tensor whose first row is tiny, or whose
+  entries are all tiny, are finite and correct. The 3x3 eigen solver
+  (`dsytrd3`) builds its first Householder reflection from that row scaled
+  into [0.5, 1); it returned infinite principal stresses, which stop a
+  Mohr-Coulomb return with exit 54, or wrong eigenvalues as success.
+
+- Fixed-property saturated remeshing preserves global linear Biot excess
+  content and its pending pressure buffer separately. Geometric domain
+  transfer and prescribed-pressure reactions have their own report.
+
+- Solver help documents hydraulic pressure/flux boundary types, stress
+  signs, fluid-viscosity units and the actual simplex mesh layouts and
+  region/depth conventions used by the manual examples. Option names,
+  defaults and numerical behavior are unchanged.
+
+- PT flow with plastic or viscous rheologies uses accepted volumetric strain
+  for the mechanical source and retains the fixed-stress pressure buffer
+  across hydraulic substeps and restarts with a changed timestep.
+
+- Imported meshes may prescribe unequal pressures on disjoint tagged
+  boundaries. Conflicting pressures at actual shared nodes are rejected
+  during initialization, restart and remeshing, including when their tags
+  are named as opposite faces of the same nominal axis.
+
+- Explicit and GVS Maxwell and viscoelastic-plastic stress updates include
+  the Biot-weighted pressure increment. Viscous stress uses the current
+  pressure. In 2D poromechanical plane strain, explicit viscous branches also
+  evolve the out-of-plane stress. Explicit poromechanical timesteps use the
+  undrained wave speed with the applicable mechanical mass.
+- The first timestep on a remeshed grid uses its current hydraulic
+  diffusivities. Conservative overlap groups remap donors by size. In 3D,
+  the clipped faces and their cap use the same tolerance-offset plane.
+
+- Hydrostatic initialization, Darcy gravity, saturated mixture weight, dynamic
+  mass and foundation loads honor `mat.fluid_rho0` instead of assuming
+  1000 kg/m^3 water. With transport disabled, body force uses the dry solid
+  density even when a nonzero porosity is configured.
+
+- Poroelastic pressure storage and initial excess-pressure loading include
+  grain compressibility from `bulk_modulus_s`, with Biot's
+  1/M = phi*beta_f + (alpha - phi)/K_s. At alpha = 1 the grain contribution
+  is (1 - phi)/K_s. This storage also sets the hydraulic diffusivity
+  used in the timestep bound ([#144]).
+- The startup check "pseudo speed is too slow, increase mass scaling!" is
+  removed. It compared the pseudo wave speed (m/s) with the hydraulic
+  diffusivity (m^2/s) and refused permeable crust that runs stably; the
+  timestep is now bounded by the undrained wave speed of the coupled skeleton
+  and fluid instead.
 
 - NVHPC CI installs Boost development headers and Python before compiling,
   including when the published build container lacks those dependencies.
@@ -413,6 +507,15 @@ For a release, the full auto-generated list of merged pull requests is in its
   or dilation weakens: on one thread the 2D accretionary-wedge example runs
   about 6% longer than before with the default and about 13% longer with 1.
   Both give the same result when only cohesion weakens ([#136]).
+
+### Removed
+
+- The old consolidation notebooks `1d_consolidation-plot.ipynb` and
+  `2d_consolidation-plot.ipynb`, the input `2d-consolidation.cfg`, and the
+  `1d-consolidation-des2d_water_loading.cfg` and
+  `1d-consolidation-des3d_water_loading.cfg` inputs in `benchmarks/`.
+  The traction columns and analytical comparison are in
+  `benchmarks/poromechanics/`.
 
 ## [2.0.2] - 2026-09-17
 
@@ -595,5 +698,6 @@ the [`v1.0.0`](https://github.com/GeoFLAC/DynEarthSol/releases/tag/v1.0.0) tag.
 [#129]: https://github.com/GeoFLAC/DynEarthSol/pull/129
 [#135]: https://github.com/GeoFLAC/DynEarthSol/pull/135
 [#136]: https://github.com/GeoFLAC/DynEarthSol/pull/136
+[#144]: https://github.com/GeoFLAC/DynEarthSol/issues/144
 [#145]: https://github.com/GeoFLAC/DynEarthSol/pull/145
 [#150]: https://github.com/GeoFLAC/DynEarthSol/pull/150

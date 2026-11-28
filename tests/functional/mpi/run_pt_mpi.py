@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Run the upstream PT analytical/restart checks on serial and compact MPI meshes.
+"""Run the PT analytical/restart checks on serial and compact MPI meshes.
 
 All process commands, logs, configs and field comparisons are retained. Serial
 and MPI builds must enable HDF5 (and MMG for --cases mmg-remesh). Comparisons use
 an explicit tolerance because ADR scalar reductions can change floating-point
-summation order; exactness is measured separately and is never assumed.
+summation order; the report also records whether every dataset matches exactly.
 """
 import argparse
-import configparser
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +21,8 @@ from run_mpi import execute
 
 ROOT = Path(__file__).resolve().parents[3]
 FUNCTIONAL = ROOT / 'tests/functional'
+sys.path.insert(0, str(FUNCTIONAL))
+from des_test_utils import digest, read_config, runtime_key
 CASES = ('elastic', 'maxwell', 'hydrostatic', 'remesh', 'mmg-remesh', 'dynamic', 'oblique', 'running-remesh', 'failure')
 
 
@@ -38,7 +38,7 @@ def compare_outputs(reference, current, rtol, atol):
             a, b = {}, {}
             for source, target in ((left, a), (right, b)):
                 def visit(name, obj):
-                    if isinstance(obj, h5py.Dataset) and name.split('/')[-1] not in ('walltime_sec', 'provenance'):
+                    if isinstance(obj, h5py.Dataset) and not runtime_key(name):
                         target[name] = obj[()]
                 source.visititems(visit)
             assert a.keys() == b.keys(), filename
@@ -58,8 +58,7 @@ def compare_outputs(reference, current, rtol, atol):
                     assert np.isfinite(value).all() and np.isfinite(other).all(), (filename, name)
                     scale = float(np.max(np.abs(value), initial=0))
                     # The projected residual is a cancellation of loaded nodal
-                    # forces. Compare it in force units; independent upstream
-                    # tests still require its RMS to meet the requested tolerance.
+                    # forces, so compare it on the scale of the nodal force.
                     if name.split('/')[-1] == 'PT residual force' and 'force' in a:
                         scale = max(scale, float(np.max(np.abs(a['force']), initial=0)))
                     if name.split('/')[-1] == 'pending pore pressure increment':
@@ -100,14 +99,14 @@ def main():
     args.workdir.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='pt-mpi-', dir=args.workdir.resolve()))
     print(work, flush=True)
-    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads), PYTHONPATH=str(ROOT))
+    env = dict(os.environ, OMP_NUM_THREADS=str(args.threads),
+               PYTHONPATH=os.pathsep.join(filter(None, (str(ROOT), os.environ.get('PYTHONPATH')))))
     launcher = shlex.split(args.launcher)
     report = dict(completed=False, rtol=args.rtol, atol=args.atol, threads=args.threads,
                   partitioner='metis', checks=[])
     executables = {2: (args.serial.resolve(), args.mpi.resolve()),
                    3: (args.serial3d.resolve(), args.mpi3d.resolve())}
-    report['executables'] = {str(p):hashlib.sha256(p.read_bytes()).hexdigest()
-                             for pair in executables.values() for p in pair}
+    report['executables'] = {str(p):digest(p) for pair in executables.values() for p in pair}
     try:
         for dim in args.dimensions:
             for option in args.options:
@@ -120,13 +119,11 @@ def main():
                         'dynamic': 'pt_dynamic_restart.cfg', 'oblique': 'pt_oblique_restart.cfg',
                         'running-remesh': 'pt_remesh_restart.cfg'}[case]
                     source = ROOT/'examples'/fixture if case in ('elastic', 'maxwell', 'failure') else FUNCTIONAL/fixture
-                    cfg = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
-                    cfg.optionxform = str
-                    cfg.read(source)
+                    cfg = read_config(source, inline_comment_prefixes=('#', ';'))
                     cfg['control']['PT_option'] = str(option)
                     if 'remesh' in case:
                         # MMG-adapted meshes need more relaxation passes than
-                        # the original non-MMG fixture; keep its tolerances.
+                        # the fixture sets for its non-MMG mesh; keep its tolerances.
                         cfg['control']['PT_max_iter'] = '50000'
                     if case == 'running-remesh':
                         cfg['control']['PT_use_running_scale'] = 'yes'

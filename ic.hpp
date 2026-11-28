@@ -16,8 +16,6 @@ void initial_weak_zone(const Param &param, const Variables &var,
 void initial_temperature(const Param &param, const Variables &var,
                          double_vec &temperature, double_vec &radiogenic_source,
                          double &bottom_temperature, MarkerSet &ms, int_vec2D &elemmarkers, int_vec2D& markers_in_elem);
-void initial_hydrostatic_state(const Param &param, const Variables &var,
-                          double_vec &ppressure, double_vec &dppressure);
 
 void initial_friction_coeff(const Param &param, const Variables &var,
                             double_vec &friction_coeff);

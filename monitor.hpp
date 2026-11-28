@@ -15,6 +15,6 @@ void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpo
 void monitor_write_if_due(const Param& param, Variables& var);
 void monitor_before_remesh(const Param& param, Variables& var);
 void monitor_remesh_update(const Param& param, Variables& var);
-void monitor_finalize(Variables& var);
+void monitor_finalize();
 MonitorCheckpoint monitor_checkpoint(const Param& param, const Variables& var);
 #endif

@@ -7,9 +7,22 @@ double dist2(T a, T b);
 double compute_volume(ConstArrayIndirectAccessor coord);
 #pragma acc routine seq
 double compute_area_facet(ConstArrayIndirectAccessor coord);
+#pragma acc routine seq
+double compute_facet_measure(ConstArrayIndirectAccessor coord);
 void compute_volume(const array_t &coord, const conn_t &connectivity,
                     double_vec &volume);
 void compute_volume(const Variables &var, double_vec &volume);
+// The point of element e with barycentric coordinates w (NODES_PER_ELEM).
+void barycentric_point(const Variables &var, int e, const double *w, double x[NDIMS]);
+
+// Integral of old shape j times new shape i over their simplex intersection.
+// Host-only geometry; includes partial overlap without normalizing lost volume.
+struct SimplexOverlap {
+    double volume = 0;
+    double product[NODES_PER_ELEM][NODES_PER_ELEM] = {};
+};
+SimplexOverlap simplex_overlap(ConstArrayIndirectAccessor old_coordinate,
+                               ConstArrayIndirectAccessor new_coordinate);
 
 void compute_dvoldt(const Variables &var, double_vec &dvoldt,
                     double_vec &etmp);
@@ -125,7 +138,8 @@ double worst_elem_quality(const array_t &coord, const conn_t &connectivity,
 
 // Local dual-time factors on the fixed mechanical reference mesh.
 // Caller-owned element scratch arrays are reused for the lifetime of a solve.
-// ADR only writes effective_viscosity; the three legacy-factor arrays may be empty.
+// With PT_option=1 (ADR) only effective_viscosity is written; stress_fraction,
+// mobility and height may then be empty.
 void compute_pt_factors(const Param& param, const Variables& var,
                         double_vec& stress_fraction, double_vec& mobility,
                         double_vec& height, double_vec& effective_viscosity);

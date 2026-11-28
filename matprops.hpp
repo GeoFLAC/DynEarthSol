@@ -3,7 +3,6 @@
 
 #include "parameters.hpp"
 
-
 #pragma acc routine seq
 double ref_pressure(const Param& param, double z);
 
@@ -16,6 +15,7 @@ public:
 
     const int rheol_type;
     const int nmat;
+    double hydro_step_limit = 0; // rebuilt after storage/mesh changes, not checkpointed
 
     #pragma acc routine seq
     double bulkm(int e) const;
@@ -40,15 +40,15 @@ public:
     double alpha_fluid(int e) const;
     #pragma acc routine seq
     double beta_fluid(int e) const;
+    // Constant material reference density for Darcy gravity and mixture weight.
     #pragma acc routine seq
-    double rho_fluid(int e) const;
+    double rho_fluid_reference(int e) const;
     #pragma acc routine seq
     double mu_fluid(int e) const;
     #pragma acc routine seq
     double alpha_biot(int e) const;
     #pragma acc routine seq
     double beta_mineral(int e) const;
-
     // rate-and-state friction parameters
     #pragma acc routine seq
     double d_a(int e) const;
@@ -70,20 +70,18 @@ public:
         double hardn;
     };
 
-    #pragma acc routine seq
-    PlasticProps plastic_props(int e, double pls) const;
-    // One linear piece of an element's weakening law, starting at plastic
-    // strain pls: the cohesion and the friction and dilation angles at pls,
-    // their change per unit plastic strain, and the plastic strain where the
-    // piece ends (the next pls0 or pls1 of the element's materials, or the
-    // largest double). A rate-and-state piece also keeps this step's rate and
-    // state terms, which stay fixed along it.
     // Factors of the strength that depend only on the friction and dilation
     // angles, so that a strength with fixed angles needs no trigonometry.
     struct AngleFactors {
         double anphi, anpsi, sqrt_anphi, tan_phi;
         bool zero_friction;
     };
+    // One linear piece of an element's weakening law, starting at plastic
+    // strain pls: the cohesion and the friction and dilation angles at pls,
+    // their change per unit plastic strain, and the plastic strain where the
+    // piece ends (the next pls0 or pls1 of the element's materials, or the
+    // largest double). A rate-and-state piece also keeps this step's rate and
+    // state terms, which stay fixed along it.
     struct StrengthPiece {
         double pls, end;
         double cohesion, friction, dilation;
@@ -151,7 +149,6 @@ public:
     const double visc_max;
     const double tension_max;
     const double therm_diff_max;
-    double hydro_diff_max;
 
     // rheol_type is a sum of these bits; the combinations are the cases of the stress update.
     static constexpr int rh_elastic = 1 << 0;                   // 1
@@ -205,10 +202,6 @@ private:
     // strain on each material's weakening segment, built by the constructor.
     double_vec cohesion_slope, friction_slope, dilation_slope;
 
-    // hydraulic process
-    const double_vec &ppressure;
-    const double_vec &dppressure;
-
     const double_vec &log_table;
     const double_vec &tan_table;
     const double_vec &sin_table;
@@ -247,6 +240,10 @@ private:
     // tables of Mohr-Coulomb.
     #pragma acc routine seq
     AngleFactors angle_factors(double phi, double psi, bool rsf) const;
+    // The angle factors of the piece at friction angle phi and dilation angle
+    // psi; a piece with rate-and-state terms (rsf 1) adds them to tan(phi).
+    #pragma acc routine seq
+    AngleFactors piece_factors(const StrengthPiece& piece, double phi, double psi) const;
     // The cohesion and angle factors at plastic strain piece.pls + offset.
     struct PiecePoint {
         double cohesion;

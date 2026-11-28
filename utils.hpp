@@ -3,12 +3,14 @@
 
 #include "parameters.hpp"
 #include "exit_codes.hpp"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
 #include <cfloat>
 #include <math.h>
 #include <iomanip>
+#include <iterator>
 #if defined(_WIN32)
 #include <windows.h>
 #else
@@ -247,6 +249,15 @@ static inline int binary_search_index(const int* arr, int size, int target) {
 }
 
 
+// The material with the most markers in an element (one entry of elemmarkers); the lowest
+// index on a tie.
+static inline int dominant_material(const int_vec& markers)
+{
+    return static_cast<int>(std::distance(markers.begin(),
+                                          std::max_element(markers.begin(), markers.end())));
+}
+
+
 static int findNearestNeighbourIndex( double x_new, const double_vec& x )
 {
     /* find nearest neighbour index for interpolation
@@ -266,9 +277,8 @@ static int findNearestNeighbourIndex( double x_new, const double_vec& x )
 }
 
 
-static double interp1(const double_vec& x, const double_vec& y, double x_new)
+static double interp1(const double_vec& x, const double_vec& y, double x_new, int idx)
 {
-    int idx = findNearestNeighbourIndex( x_new, x);
     double slope = 0;
 
     if (idx < 0)
@@ -277,6 +287,30 @@ static double interp1(const double_vec& x, const double_vec& y, double x_new)
         slope = (y[idx+1] - y[idx]) / (x[idx+1] - x[idx]);
 
     return slope * (x_new-x[idx]) + y[idx];
+}
+
+static double interp1(const double_vec& x, const double_vec& y, double x_new)
+{
+    return interp1(x, y, x_new, findNearestNeighbourIndex(x_new, x));
+}
+
+// A repeated time uses its last ratio. The left limit uses its first ratio.
+// The arithmetic order matters when pressure histories are compared exactly.
+template <bool divide_first = false>
+static double period_value(const double_vec& times, const double_vec& ratios,
+                           double time, bool left_limit = false)
+{
+    if (times.empty()) return 1.0;
+    const auto next = left_limit ? std::lower_bound(times.begin(), times.end(), time)
+                                 : std::upper_bound(times.begin(), times.end(), time);
+    if (next == times.begin()) return ratios.front();
+    if (next == times.end()) return ratios.back();
+    const int i = static_cast<int>(next - times.begin());
+    if (left_limit && *next == time) return ratios[i];
+    if (times[i-1] == time) return ratios[i-1];
+    if constexpr (divide_first)
+        return interp1(times, ratios, time, i-1);
+    return ratios[i-1] + (ratios[i]-ratios[i-1])*(time-times[i-1])/(times[i]-times[i-1]);
 }
 
 static int64_t get_nanoseconds() {

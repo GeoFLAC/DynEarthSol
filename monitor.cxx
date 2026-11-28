@@ -27,7 +27,6 @@ namespace {
 // with the mesh (follows the material) and is relocated by its position after a remesh.
 struct MonitorPointState {
     int id = -1;
-    double query[NDIMS] = {0.0};
     double position[NDIMS] = {0.0};          // material position before a remesh or from a restart
     int elem = -1;                           // containing element, -1 outside the mesh
     double weight[NODES_PER_ELEM] = {0.0};
@@ -185,19 +184,6 @@ bool write_csv_header(std::FILE* fp, const Param& param)
            std::fputc('\n', fp) != EOF;
 }
 
-bool compute_elem_centroid(const Variables& var, int e, double c[NDIMS])
-{
-    if (e < 0 || e >= var.nelem) return false;
-    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
-    for (int d = 0; d < NDIMS; ++d) c[d] = 0.0;
-    for (int k = 0; k < NODES_PER_ELEM; ++k) {
-        for (int d = 0; d < NDIMS; ++d) c[d] += coord[k][d];
-    }
-    const double inv_n = 1.0 / static_cast<double>(NODES_PER_ELEM);
-    for (int d = 0; d < NDIMS; ++d) c[d] *= inv_n;
-    return true;
-}
-
 template <typename T>
 double distance2_nd(T a, const double* b)
 {
@@ -223,13 +209,20 @@ int find_nearest_node_id(const Variables& var, const double q[NDIMS])
     return best;
 }
 
+// The element whose centroid is nearest q.
 int find_nearest_elem_id(const Variables& var, const double q[NDIMS])
 {
     double min_d2 = std::numeric_limits<double>::infinity();
     int best = -1;
     double c[NDIMS];
     for (int e = 0; e < var.nelem; ++e) {
-        compute_elem_centroid(var, e, c);
+        ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[e]);
+        for (int d = 0; d < NDIMS; ++d) c[d] = 0.0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) {
+            for (int d = 0; d < NDIMS; ++d) c[d] += coord[k][d];
+        }
+        const double inv_n = 1.0 / static_cast<double>(NODES_PER_ELEM);
+        for (int d = 0; d < NDIMS; ++d) c[d] *= inv_n;
         const double d2 = distance2_nd(c, q);
         if (d2 < min_d2) {
             min_d2 = d2;
@@ -266,11 +259,7 @@ void current_position(const Variables& var, const MonitorPointState& p, double x
         for (int d = 0; d < NDIMS; ++d) x[d] = p.position[d];
         return;
     }
-    ConstArrayIndirectAccessor coord = var.coord->view_const((*var.connectivity)[p.elem]);
-    for (int d = 0; d < NDIMS; ++d) {
-        x[d] = 0.0;
-        for (int k = 0; k < NODES_PER_ELEM; ++k) x[d] += p.weight[k] * coord[k][d];
-    }
+    barycentric_point(var, p.elem, p.weight, x);
 }
 
 // Before a row is written: the node, and for grid the element, nearest the point.
@@ -539,15 +528,6 @@ void open_monitor_files_restart(const Param& param, const Variables& var,
     }
 }
 
-void monitor_open_files(const Param& param, const Variables& var,
-                        MonitorManager& manager)
-{
-    if (param.sim.is_restarting)
-        open_monitor_files_restart(param, var, manager);
-    else
-        open_monitor_files_fresh(param, manager);
-}
-
 int get_material_index(const Variables& var, int e)
 {
     if (e < 0 || e >= var.nelem || var.elemmarkers == nullptr) return -1;
@@ -598,8 +578,9 @@ double elem_tensor_or_nan(const Variables& var, int elem, int comp, const tensor
 void monitor_write_point_row(const Param& param,
                              const Variables& var,
                              const MonitorPointState& p,
-                             std::FILE* fp, int kind)
+                             int kind)
 {
+    std::FILE* fp = p.fp;
     if (fp == nullptr) return;
 
     bool first = true;
@@ -734,14 +715,14 @@ void monitor_write_all_points(const Param& param, const Variables& var, MonitorM
     }
 #endif
     for (std::size_t i = 0; i < manager.points.size(); ++i)
-        monitor_write_point_row(param, var, manager.points[i], manager.points[i].fp, kind);
+        monitor_write_point_row(param, var, manager.points[i], kind);
 }
 
 } // namespace
 
 void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpoint& saved)
 {
-    monitor_finalize(var);
+    monitor_finalize();
     if (!param.monitor.enabled) return;
 
     const double_vec& positions = saved.positions;
@@ -758,18 +739,20 @@ void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpo
     for (int i = 0; i < param.monitor.num_points; ++i) {
         MonitorPointState& p = g_monitor.points[i];
         p.id = i;
-        p.query[0] = param.monitor.points_x[i];
-#ifdef THREED
-        p.query[1] = param.monitor.points_y[i];
-#endif
-        p.query[NDIMS-1] = param.monitor.points_z[i];
         // A restart continues the material point where the checkpoint left it.
-        for (int d = 0; d < NDIMS; ++d)
-            p.position[d] = resume ? positions[i*NDIMS + d] : p.query[d];
         if (resume) {
+            for (int d = 0; d < NDIMS; ++d)
+                p.position[d] = positions[i*NDIMS + d];
             p.elem = elements[i];
             for (int k = 0; k < NODES_PER_ELEM; ++k)
                 p.weight[k] = weights[i*NODES_PER_ELEM+k];
+        }
+        else {
+            p.position[0] = param.monitor.points_x[i];
+#ifdef THREED
+            p.position[1] = param.monitor.points_y[i];
+#endif
+            p.position[NDIMS-1] = param.monitor.points_z[i];
         }
     }
     if (!resume) {
@@ -778,7 +761,10 @@ void monitor_initialize(const Param& param, Variables& var, const MonitorCheckpo
         for (MonitorPointState& p : g_monitor.points) locate(var,bary,p.position,p);
     }
 
-    monitor_open_files(param, var, g_monitor);
+    if (param.sim.is_restarting)
+        open_monitor_files_restart(param, var, g_monitor);
+    else
+        open_monitor_files_fresh(param, g_monitor);
     g_monitor.initialized = true;
 
     // A fresh history always starts at t=0 regardless of step_interval.  A
@@ -846,7 +832,7 @@ MonitorCheckpoint monitor_checkpoint(const Param& param, const Variables& var)
     return saved;
 }
 
-void monitor_finalize(Variables& /*var*/)
+void monitor_finalize()
 {
     for (std::size_t i = 0; i < g_monitor.points.size(); ++i) {
         if (g_monitor.points[i].fp != nullptr) {

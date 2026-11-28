@@ -9,6 +9,7 @@
 #include "parameters.hpp"
 #include "mpi_simulation.hpp"
 #include "matprops.hpp"
+#include "hydraulics.hpp"
 #include "markerset.hpp"
 #include "barycentric-fn.hpp"
 #include "geometry.hpp"
@@ -267,7 +268,7 @@ void project_boundary_intersection(const Variables& var, int ic, int ib,
                 : delta*current[d]; // parallel normals: later boundary wins
         return;
     }
-    // Preserve the original edge map exactly for non-PT callers.
+    // Otherwise keep only the velocity component along the precomputed edge.
     const int slot = var.edge_slot[ic*nbdrytypes + ib];
     if (slot < 0) return;
     const double* edge = &var.edge_vec[slot*NDIMS];
@@ -296,7 +297,7 @@ double side_wall_normal_vbc(const BC &bc, int t, double time_in_yr)
                                : (lo ? bc.vbc_period_x0_time_in_yr : bc.vbc_period_x1_time_in_yr);
     const double_vec &ratio = y ? (lo ? bc.vbc_period_y0_ratio : bc.vbc_period_y1_ratio)
                                 : (lo ? bc.vbc_period_x0_ratio : bc.vbc_period_x1_ratio);
-    return v * interp1(time, ratio, time_in_yr);
+    return v * period_value<true>(time, ratio, time_in_yr);
 }
 } // anonymous namespace
 
@@ -817,8 +818,7 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 
                     // If hydraulic diffusion is active, modify the density to account for porosity and fluid content
                     if (param.control.has_hydraulic_diffusion) {
-                        rho_effective = (var.mat->rho(e) * (1 - var.mat->phi(e)) + 1000.0 * var.mat->phi(e));
-                        // 1000.0 is the fluid density (e.g., water, in kg/m³)
+                        rho_effective = hydraulic_bulk_density(*var.mat, e);
                         // Winkler foundation for the bottom boundary with adjusted effective density
                         p = var.compensation_pressure - 
                             (rho_effective + param.bc.winkler_delta_rho) *  // Effective density with hydraulic diffusion
@@ -913,6 +913,59 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
 #endif
 }
 
+static double platen_average(const Variables& var, const array_t& field, bool weighted)
+{
+    // The preceding force/velocity update can still be on an async queue.
+    #pragma acc wait
+    double t = 0, m = 0;
+    double low = std::numeric_limits<double>::max(), high = -low;
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, field) firstprivate(weighted) \
+        reduction(+:t,m) reduction(min:low) reduction(max:high)
+#endif
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(+:t,m) reduction(min:low) reduction(max:high)
+    for (int n=0; n<var.nnode; ++n) {
+        if (!((*var.bcflag)[n] & BOUNDZ1)) continue;
+        const double mn = (*var.mass)[n];
+        const double value = field[n][NDIMS-1];
+        t += (weighted ? mn : 1.0) * value;
+        m += mn;
+        if (weighted) {
+            low = std::min(low, value);
+            high = std::max(high, value);
+        }
+    }
+    if (!(m > 0 && std::isfinite(m)))
+        die(EXIT_CONFIG_VALUE, "A rigid top platen requires top nodes with positive finite mass.");
+    // A uniform velocity is already admissible. Preserve its exact value,
+    // including when initialization reapplies the constraint after restart.
+    return weighted && low == high ? low : t/m;
+}
+
+void apply_platen_velocity(const Param& param, const Variables& var, array_t& vel)
+{
+    if (param.bc.vbc_z1 != 8) return;
+    const double v = platen_average(var, vel, true);
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, vel) firstprivate(v)
+#endif
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
+    for (int n=0; n<var.nnode; ++n)
+        if ((*var.bcflag)[n] & BOUNDZ1) vel[n][NDIMS-1] = v;
+}
+
+void apply_platen_force(const Param& param, const Variables& var, array_t& force)
+{
+    if (param.bc.vbc_z1 != 8) return;
+    const double a = platen_average(var, force, false);  // platen acceleration
+#ifndef ACC
+    #pragma omp parallel for default(none) shared(var, force) firstprivate(a)
+#endif
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector
+    for (int n=0; n<var.nnode; ++n)
+        if ((*var.bcflag)[n] & BOUNDZ1) force[n][NDIMS-1] = (*var.mass)[n] * a;
+}
+
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force)
 {
 #ifdef NPROF_DETAIL
@@ -923,13 +976,11 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
 
     // Apply general stress (Neumann) boundary conditions
     for (int i = 0; i < 6; ++i) {
-    // Check if there is a stress BC applied on this boundary
     if (var.stress_bc_types[i] == 0) continue;
 
     const auto& bdry = *(var.bfacets[i]);
     const int bound = static_cast<int>(bdry.size());
 
-    // Loop over all boundary facets
     for (int n = 0; n < bound; ++n) {
         int e = bdry[n].first;      // This facet belongs to element e
         int f = bdry[n].second;     // This facet is the f-th facet of element e
@@ -954,39 +1005,44 @@ void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t&
         // 3D case: Apply stress based on boundary type (x0, x1, y0, y1, z0, z1)
         switch (var.stress_bc_types[i]) {
             case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
+                traction[0] = var.stress_bc_values[i];
                 break;
             case 2: // Traction in the y-direction
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value
+                traction[1] = var.stress_bc_values[i];
                 break;
             case 3: // Traction in the z-direction
-                traction[2] = var.stress_bc_values[i]; // Set z-direction traction value
+                traction[2] = var.stress_bc_values[i];
+                break;
+            case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
+                for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
                 break;
             default:
-                continue; // Skip if no valid stress BC type
+                continue;
         }
 #else
         // 2D case: Apply stress based on boundary type (x0, x1, z0, z1)
         switch (var.stress_bc_types[i]) {
             case 1: // Traction in the x-direction
-                traction[0] = var.stress_bc_values[i]; // Set x-direction traction value
+                traction[0] = var.stress_bc_values[i];
                 break;
             case 3: // Traction in the z-direction (mapped to y in 2D)
-                traction[1] = var.stress_bc_values[i]; // Set y-direction traction value in 2D
+                traction[1] = var.stress_bc_values[i];
+                break;
+            case 4: // Normal stress on a facet of any orientation, e.g. a curved surface
+                for (int d = 0; d < NDIMS; ++d) traction[d] = var.stress_bc_values[i];
                 break;
             default:
-                continue; // Skip if no valid stress BC type
+                continue;
         }
 #endif
 
         // Apply the traction to the boundary facet nodes
         for (int j = 0; j < NODES_PER_FACET; ++j) {
-            int nn = conn[NODE_OF_FACET[f][j]];  // Get global node index for this facet
+            int nn = conn[NODE_OF_FACET[f][j]];
             ArrayAccessor force_node = force[nn];      // Pointer to the force array for this node
 
-            // Distribute the traction (stress) to the nodes on the facet
+            // Each facet node takes an equal share of the facet force.
             for (int d = 0; d < NDIMS; ++d) {
-                // if(d == 1) std::cout<< force_node[d]<<","<< d <<","<< traction[d]<<std::endl;
                 force_node[d] += traction[d] * normal[d] / NODES_PER_FACET; 
             }
         }
@@ -2006,10 +2062,32 @@ void surface_processes(const Param& param, const Variables& var, array_t& coord,
 
 }
 
+static constexpr const char *platen_constraint_error =
+    "A rigid top platen requires free vertical motion at every top node.";
+
+void validate_platen_constraints(const Param& param, const Variables& var)
+{
+    for (int side = iboundn0; side <= iboundn3; ++side) {
+        if (var.vbc_types[side] == 0) continue;
+        VelocityConstraints constraints(var.nnode);
+        build_velocity_constraints(param, var, constraints);
+        return;
+    }
+    // An axis-aligned velocity BC fixes a component or leaves it free.
+    // Only the vertical basis at the top is needed for the platen.
+    array_t basis(var.nnode, 0.0);
+    for (int n : *var.bnodes[iboundz1]) basis[n][NDIMS-1] = 1;
+    apply_vbcs(param, var, basis, true, true);
+    #pragma acc wait
+    int constrained = 0;
+    for (int n : *var.bnodes[iboundz1]) constrained |= basis[n][NDIMS-1] != 1;
+    if (mpi_any(var, constrained)) die_together(EXIT_CONFIG_VALUE, platen_constraint_error);
+}
+
 void build_velocity_constraints(const Param& param, const Variables& var,
                                 VelocityConstraints& constraints, bool homogeneous)
 {
-    // F(v)=Jv+b is the existing ordered BC map. Its admissible velocities solve
+    // F(v)=Jv+b is the ordered BC map of apply_vbcs. Its admissible velocities solve
     // (I-J)v=b. Homogeneous calls give J without subtracting prescribed velocities,
     // avoiding cancellation when a load is large relative to a perturbation.
     #pragma acc wait
@@ -2035,9 +2113,9 @@ void build_velocity_constraints(const Param& param, const Variables& var,
         }
     }
     if (mpi_any(var, bad_normal))
-        die_together(EXIT_CONFIG_VALUE, "PT oblique boundary requires a finite unit normal.");
+        die_together(EXIT_CONFIG_VALUE, "An oblique velocity boundary requires a finite unit normal.");
     if (mpi_any(var, bad_horizontal))
-        die_together(EXIT_CONFIG_VALUE, "PT horizontal oblique BC requires a nonzero horizontal normal.");
+        die_together(EXIT_CONFIG_VALUE, "A horizontal oblique velocity boundary requires a nonzero horizontal normal.");
     for (int n=0; n<nn; ++n)
         for (int d=0; d<NDIMS; ++d) offset[n][d] = 0;
     apply_vbcs(param, var, offset, homogeneous, true);
@@ -2087,9 +2165,16 @@ void build_velocity_constraints(const Param& param, const Variables& var,
                 for (int k=0; k<rank; ++k) p[n][d*NDIMS+j] -= q[k][d]*q[k][j];
             }
         }
+        // The platen supplies one shared vertical degree of freedom. A local
+        // support that fixes a top corner would otherwise be overwritten by
+        // the uniform-velocity projection.
+        if (param.bc.vbc_z1 == 8 && ((*var.bcflag)[n] & BOUNDZ1))
+            for (int d=0; d<NDIMS; ++d)
+                if (std::abs(p[n][d*NDIMS+NDIMS-1] - (d == NDIMS-1)) > 1e-12)
+                    die(EXIT_CONFIG_VALUE, platen_constraint_error);
     }
     if (mpi_any(var, inconsistent))
-        die_together(EXIT_CONFIG_VALUE, "PT velocity boundary constraints have no consistent fixed point.");
+        die_together(EXIT_CONFIG_VALUE, "The velocity boundary constraints have no consistent fixed point.");
 }
 
 void project_free_vectors(const Variables& var, const VelocityConstraints& constraints,

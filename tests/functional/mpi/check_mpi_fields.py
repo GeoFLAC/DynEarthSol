@@ -31,9 +31,11 @@ OUTSIDE = {
     "tmp_result": "scratch",
     # Lookup tables, identical everywhere.
     "log_table": "table", "sin_table": "table", "tan_table": "table",
+    # Five accepted-step sums; the metadata carries them and every rank holds the reduced values.
+    "fluid_balance": "reduced over the ranks",
 }
 
-ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*new\s+"
+ALLOCATION = re.compile(r"\b(?:var|master)\s*(?:\.|->)\s*(\w+)\s*=\s*(?:[^;]*[?:]\s*)?new\s+"
                         r"(?:double_vec|array_t|tensor_t|int_vec|uint_vec|int_vec2D|conn_t|"
                         r"segment_t|segflag_t|regattr_t|elem_cache)\b")
 

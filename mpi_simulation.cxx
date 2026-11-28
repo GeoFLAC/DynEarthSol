@@ -28,6 +28,7 @@
 #include "bc.hpp"
 #include "earthquake_state.hpp"
 #include "fields.hpp"
+#include "hydraulics.hpp"
 #include "geometry.hpp"
 #include "markerset.hpp"
 #include "matprops.hpp"
@@ -249,6 +250,11 @@ void metadata(MpiState& state, Variables& var) {
     ARCHIVE(vbc_vertical_ratio_x0);
     ARCHIVE(vbc_vertical_ratio_x1);
     state.value(var.surfinfo.max_surf_vel);
+    // Fluid volume balance of the last accepted step; every rank holds the reduced sums.
+    ARCHIVE(fluid_balance);
+    // Sources fixed in the material, in elements of the whole mesh; each rank finds its own.
+    state.value(var.fluid_points.element);
+    state.value(var.fluid_points.weight);
 #undef ARCHIVE
 }
 
@@ -298,6 +304,7 @@ void release(Variables& var) {
     RELEASE(surfinfo.elem_and_nodes)
     RELEASE(surfinfo.total_dx)
     RELEASE(surfinfo.total_slope)
+    RELEASE(fluid_balance)
     RELEASE(connectivity_surface)
     RELEASE(ntmp)
     RELEASE(etmp)
@@ -371,6 +378,7 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
     COPY(vbc_vertical_ratio_x0);
     COPY(vbc_vertical_ratio_x1);
     COPY(surfinfo.max_surf_vel);
+    COPY(fluid_points);
 #undef COPY
     var.nnode = partition.nodes.size();
     var.nelem = partition.elements.size();
@@ -415,6 +423,13 @@ void make_local(const Variables& global, const MpiPartition& partition, Variable
             var.surfinfo.edvacc_surf->push_back((*global.surfinfo.edvacc_surf)[g]);
     }
     select(global.surfinfo.dhacc, var.surfinfo.dhacc, partition.nodes);
+    if (global.fluid_balance) {
+        if (!var.fluid_balance) var.fluid_balance = new double_vec;
+        *var.fluid_balance = *global.fluid_balance;
+    } else {
+        delete var.fluid_balance;
+        var.fluid_balance = nullptr;
+    }
     for (int i=0; i<nbdrytypes_hydro; ++i) {
         var.hbc_types[i] = global.hbc_types[i];
         var.stress_bc_types[i] = global.stress_bc_types[i];
@@ -715,9 +730,6 @@ struct MpiSimulation::Impl {
                 if (param.control.surface_process_option == 1 && !surface_on_root) index_local_surface();
             }
         }
-        double hydro_diff_max = rank == 0 ? master->mat->hydro_diff_max : 0;
-        MPI_Bcast(&hydro_diff_max, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        local.mat->hydro_diff_max = hydro_diff_max;
         peer.resize(part.halos.size());
         requests.resize(2*part.halos.size());
         transfers.resize(part.halos.size());
@@ -854,7 +866,9 @@ struct MpiSimulation::Impl {
         gather_rows(true, node_fields(local), root_node_fields);
         gather_rows(false, element_fields(local), root_element_fields);
         if (surface_on_ranks) collect_surface();
-        if (rank == 0) master->mat->hydro_diff_max = local.mat->hydro_diff_max;
+        if (rank == 0) {
+            if (master->fluid_balance && local.fluid_balance) *master->fluid_balance = *local.fluid_balance;
+        }
         root_version = version;
     }
 
@@ -1232,8 +1246,8 @@ struct MpiSimulation::Impl {
             if (rank == 0) std::swap(master->volume, master->volume_old);
             break;
         case MpiOp::SurfaceIdle:
-            // Even without erosion, the original surface path corrects stress
-            // for the volume change since the preceding coordinate update.
+            // Even without erosion, surface_processes() corrects stress for the
+            // volume change since the preceding coordinate update.
             correct_surface();
             var.surfinfo.max_surf_vel = 0;
             break;
@@ -1271,7 +1285,6 @@ struct MpiSimulation::Impl {
                 // update_mesh() reads the restored side walls' new tops on root's mesh.
                 if (param.mesh.remeshing_option == 13) gather_strip_coordinates();
             }
-            // Each rank corrects its own surface elements.
             correct_surface();
             break;
         case MpiOp::Surface: {
@@ -1583,6 +1596,17 @@ int MpiSimulation::owned_elements() const {
 
 int MpiSimulation::global_element(int element) const {
     return impl_->part.elements[element];
+}
+
+int MpiSimulation::local_element(int global) const {
+    // Owned rows, then ghost rows, each in global order.
+    const int_vec& rows = impl_->part.elements;
+    const auto owned = rows.begin() + impl_->part.owned_elements;
+    for (auto range : {std::make_pair(rows.begin(), owned), std::make_pair(owned, rows.end())}) {
+        const auto at = std::lower_bound(range.first, range.second, global);
+        if (at != range.second && *at == global) return int(at - rows.begin());
+    }
+    return -1;
 }
 
 int MpiSimulation::global_nodes() const {

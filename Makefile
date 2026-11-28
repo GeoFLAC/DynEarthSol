@@ -610,6 +610,8 @@ SRCS =	\
 	earthquake_state.cxx \
 	fields.cxx \
 	geometry.cxx \
+	hydraulics.cxx \
+	point_sources.cxx \
 	ic.cxx \
 	ic-read-temp.cxx \
 	input.cxx \
@@ -647,6 +649,7 @@ INCS =	\
 	fields.hpp \
 	geometry.hpp \
 	gwb.hpp \
+	hydraulics.hpp \
 	ic.hpp \
 	ic-read-temp.hpp \
 	input.hpp \
@@ -667,6 +670,7 @@ INCS =	\
 	output.hpp \
 	parameters.hpp \
 	phasechanges.hpp \
+	point_sources.hpp \
 	pseudo_transient.hpp \
 	remesh-scratch.hpp \
 	remeshing.hpp \

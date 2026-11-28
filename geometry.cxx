@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <climits>
 #include <cmath>
 #include <limits>
@@ -12,6 +14,7 @@
 #include "geometry.hpp"
 #include "remesh-scratch.hpp"
 #include "fields.hpp"
+#include "hydraulics.hpp"
 #include "bc.hpp"
 #include "mesh.hpp"
 #include "output.hpp"
@@ -160,6 +163,17 @@ static double triangle_area(ConstArrayAccessor a,
 #endif
 }
 
+double compute_facet_measure(ConstArrayIndirectAccessor coord)
+{
+#ifdef THREED
+    return triangle_area(coord[0], coord[1], coord[2]);
+#else
+    const double dx = coord[1][0] - coord[0][0];
+    const double dz = coord[1][1] - coord[0][1];
+    return std::sqrt(dx*dx + dz*dz);
+#endif
+}
+
 double compute_area_facet(ConstArrayIndirectAccessor coord)
 {
     ConstArrayAccessor a = coord[0];
@@ -219,6 +233,15 @@ void compute_volume(const array_t &coord, const conn_t &connectivity,
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
+}
+
+void barycentric_point(const Variables &var, int e, const double *w, double x[NDIMS])
+{
+    ConstConnAccessor conn = (*var.connectivity)[e];
+    for (int d = 0; d < NDIMS; ++d) {
+        x[d] = 0;
+        for (int k = 0; k < NODES_PER_ELEM; ++k) x[d] += w[k] * (*var.coord)[conn[k]][d];
+    }
 }
 
 void compute_volume(const Variables &var,
@@ -1659,7 +1682,10 @@ double compute_dt(const Param& param, Variables& var,
     double dt_maxwell = std::numeric_limits<double>::max();
     double dt_rsf = std::numeric_limits<double>::max();
     double dt_diffusion = std::numeric_limits<double>::max();
-    double dt_hydro_diffusion = std::numeric_limits<double>::max();
+    double hydro_diffusivity = 0;
+    double dt_hydro_wave = std::numeric_limits<double>::max();
+    double hydro_wave_length = std::numeric_limits<double>::max();
+    double hydro_wave_floor = std::numeric_limits<double>::max();
     double minl = std::numeric_limits<double>::max();
     const bool uses_rsf_state_step_limit =
         include_rsf_state_limit &&
@@ -1670,25 +1696,23 @@ double compute_dt(const Param& param, Variables& var,
     const double rsf_dtheta_max = uses_rsf_state_step_limit ?
         param.control.rsf_dtheta_max : 0.0;
 
-    // Define element velocity arrays
     // double_vec velocity_x_element(var.nelem, 0.0);
     // double_vec velocity_y_element(var.nelem, 0.0);
     // double_vec velocity_z_element(var.nelem, 0.0); // Used only for 3D
     // double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
     // Global max velocity for elements
-    // double global_max_vem = std::max(std::max(var.max_vbc_val, 0.0), 1E-20);
-    double global_max_vem = 0.0;  // 
+    double global_max_vem = 0.0;
     double global_dt_min = std::numeric_limits<double>::max(); // based on length and S wave velocity
     int nan_elem_count = 0;
 
 #ifndef ACC
-    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) \
+    #pragma omp parallel for reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
+        reduction(max: global_max_vem, hydro_diffusivity) reduction(+: nan_elem_count) \
         default(none) shared(param, var) firstprivate(rsf_dtheta_max) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     // No private() clause needed: vx/vy/vz_element are declared inside the loop.
 #endif
-    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min) \
-        reduction(max: global_max_vem) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
+    #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector reduction(min:minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_wave, hydro_wave_length, hydro_wave_floor, global_dt_min) \
+        reduction(max: global_max_vem, hydro_diffusivity) reduction(+: nan_elem_count) async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
     for (int e=mpi_eb; e<mpi_ee; ++e) {
 
         double vx_element = 0.0, vy_element = 0.0, vz_element = 0.0;
@@ -1696,7 +1720,7 @@ double compute_dt(const Param& param, Variables& var,
         int n1 = (*var.connectivity)[e][1];
         int n2 = (*var.connectivity)[e][2];
 
-        // calculate maxium velocity in the element
+        // Mean of the element's nodal velocities
         ConstArrayIndirectAccessor v = var.vel->view_const((*var.connectivity)[e]);
         double weight = 1.0 / NODES_PER_ELEM; 
 
@@ -1714,20 +1738,18 @@ double compute_dt(const Param& param, Variables& var,
 //         velocity_z_element[e] = vz_element;
 // #endif
 
-        // min height of this element
+        // Magnitude of the element-mean velocity
 #ifdef THREED
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element + vz_element*vz_element);
 #else
         double max_vem = std::sqrt(vx_element*vx_element + vy_element*vy_element);
 #endif
 
-        // Find global max velocity
         global_max_vem = std::max(global_max_vem, max_vem);
         // max() silently drops NaN, deflating vmax and inflating the velocity-based dt
         // limits -- count NaN here so a blow-up fails fast instead of spewing frames.
         nan_elem_count += (max_vem != max_vem);
 
-        // std::cout<< "Element: " << e << " max_vem: " << global_max_vem << std::scientific << std::setprecision(5) << std::endl;
 
         ConstArrayAccessor a = (*var.coord)[n0];
         ConstArrayAccessor b = (*var.coord)[n1];
@@ -1774,13 +1796,31 @@ double compute_dt(const Param& param, Variables& var,
             dt_diffusion = std::min(dt_diffusion,
                                     0.5 * minh * minh / var.mat->therm_diff_max);
         
-        // Compute dt_hydro_diffusion (hydraulic)
-        if (param.control.has_hydraulic_diffusion)
-            if (var.mat->hydro_diff_max > 0) {
-                dt_hydro_diffusion = std::min(dt_hydro_diffusion,
-                                            0.5 * minh * minh / var.mat->hydro_diff_max);
-            }
+        const double diffusivity = param.control.has_hydraulic_diffusion
+            ? hydraulic_diffusivity(param, *var.mat, e) : 0;
+        hydro_diffusivity = std::max(hydro_diffusivity, diffusivity);
         minl = std::min(minl, minh);
+
+        if (hydraulic_strain_form(param)) {
+            const double alpha = var.mat->alpha_biot(e);
+            const double modulus = var.mat->bulkm(e) + 4.0/3.0*var.mat->shearm(e) +
+                alpha*alpha / hydraulic_inverse_biot_modulus(*var.mat, e);
+            if (!param.control.is_quasi_static) {
+                const double speed = std::sqrt(modulus / hydraulic_bulk_density(*var.mat, e));
+                dt_hydro_wave = std::min(dt_hydro_wave, minh / (5*speed));
+            } else {
+                // rho_fict = K/(S*v)^2. Divide this length by S*v after
+                // reducing the global velocity, using the same GVS mass floor.
+                hydro_wave_length = std::min(hydro_wave_length,
+                    minh*std::sqrt(var.mat->bulkm(e)/modulus)/5);
+                if (param.control.use_global_velocity_scaling) {
+                    const double density_floor = var.mat->rho(e)*var.mat->bulkm(e) /
+                        mass_scaling_modulus(param, *var.mat, e);
+                    hydro_wave_floor = std::min(hydro_wave_floor,
+                        minh*std::sqrt(density_floor/modulus)/5);
+                }
+            }
+        }
 
         // Find global min delta t to meet CFL condition
         global_dt_min = std::min(
@@ -1794,11 +1834,15 @@ double compute_dt(const Param& param, Variables& var,
 
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
-        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min};
+        double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, global_dt_min,
+                           dt_hydro_wave, hydro_wave_length, hydro_wave_floor};
         var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
         minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
-        dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
-        global_max_vem=var.mpi->maximum(global_max_vem);
+        global_dt_min=limits[4]; dt_hydro_wave=limits[5];
+        hydro_wave_length=limits[6]; hydro_wave_floor=limits[7];
+        double maxima[] = {global_max_vem, hydro_diffusivity};
+        var.mpi->maximum(maxima, 2);
+        global_max_vem=maxima[0]; hydro_diffusivity=maxima[1];
         nan_elem_count=var.mpi->sum(nan_elem_count);
     }
 #endif
@@ -1834,14 +1878,23 @@ double compute_dt(const Param& param, Variables& var,
     var.max_global_vel_mag = global_max_vem;
     var.global_dt_min = global_dt_min;
 
-    // Calculate dt_advection and dt_elastic 
+    if (hydraulic_strain_form(param) && param.control.is_quasi_static) {
+        const double scale = param.control.inertial_scaling *
+            (param.control.use_global_velocity_scaling ? global_max_vem : max_vbc_val);
+        dt_hydro_wave = hydro_wave_length/scale;
+        // max(min(a),min(b)) <= min(max(a,b)): conservative also for mixed
+        // materials whose velocity ceiling is reached in different elements.
+        if (param.control.use_global_velocity_scaling)
+            dt_hydro_wave = std::max(dt_hydro_wave, hydro_wave_floor);
+    }
+
     if(param.control.use_global_velocity_scaling)
     {
         dt_advection = 0.5 * minl / global_max_vem;
         dt_elastic = (param.control.is_quasi_static) ?
         0.5 * minl / (global_max_vem * param.control.inertial_scaling) :
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[0] / param.mat.rho0[0]);
-        dt_elastic = std::max(dt_elastic, global_dt_min); // Ensure dt_elastic is not smaller than global_dt_min
+        dt_elastic = std::max(dt_elastic, global_dt_min);
     }
     else
     {
@@ -1851,11 +1904,12 @@ double compute_dt(const Param& param, Variables& var,
         0.5 * minl / std::sqrt(param.mat.bulk_modulus[param.mat.mattype_ref] / param.mat.rho0[param.mat.mattype_ref]);
     }
 
-    // Combine dt calculations and incorporate dt_hydro_diffusion
+    // The step is the smallest of the limits, times dt_fraction.
+    const double dt_hydro_diffusion = hydro_diffusivity > 0
+        ? 0.5 * minl * minl / hydro_diffusivity : std::numeric_limits<double>::max();
     double dt = std::min({dt_elastic, dt_maxwell, dt_rsf, dt_advection,
-                          dt_diffusion, dt_hydro_diffusion}) *
+                          dt_diffusion, dt_hydro_diffusion, dt_hydro_wave}) *
                 param.control.dt_fraction;
-    // double dt = std::min({dt_elastic, dt_maxwell, dt_advection, dt_diffusion}) * param.control.dt_fraction;
     if (param.debug.dt && mpi_reports(var)) {
         std::cout << "step #" << var.steps << "  dt: " << dt_maxwell << " "
                   << dt_rsf << " " << dt_diffusion << " "
@@ -1899,30 +1953,8 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed = max_vbc_val * param.control.inertial_scaling; // for non-ATP using max velocity on boundary
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
-    if (param.control.has_hydraulic_diffusion) {
-        // Index the per-material arrays: the MatProps accessors take an ELEMENT index.
-        // LIMITATION: compares m/s against m^2/s (wants a length, diff/minl) and covers
-        // only mattype_ref, not the domain-wide max that dt_hydro_diffusion uses.
-        const int mt = param.mat.mattype_ref;
-        const double perm_m = param.mat.hydraulic_perm[mt];               // Intrinsic permeability
-        const double mu_m = param.mat.fluid_visc[mt];                     // Fluid dynamic viscosity
-        const double alpha_b = param.mat.biot_coeff[mt];                  // Biot coefficient
-        const double phi_m = param.mat.porosity[mt];                      // Porosity
-        const double comp_fluid = 1.0 / param.mat.fluid_bulk_modulus[mt]; // Fluid compressibility
-        const double matrix_comp = 1.0 / (param.mat.bulk_modulus[mt] + 4.0*param.mat.shear_modulus[mt]/3.0);
-
-        // As reduced into mat->hydro_diff_max by update_pore_pressure(); the specific
-        // weight cancels between conductivity and storage, so it is not carried.
-        const double diff_ref = perm_m / (mu_m * (phi_m * comp_fluid + alpha_b * matrix_comp));
-
-        if (pseudo_speed < diff_ref) {
-            if (mpi_reports(var))
-                std::cerr << "Error: pseudo speed is too slow, increase mass scaling!  "
-                          << "pseudo_speed = " << pseudo_speed << " m/s, hydraulic diffusivity of "
-                          << "reference material " << mt << " = " << diff_ref << " m^2/s\n";
-            die_together(EXIT_CONFIG_VALUE);
-        }
-    }
+    var.mat->hydro_step_limit = 0;
+    constexpr int hydraulic_check_slot = 5; // Only the first five slots are exchanged.
 
 #ifndef ACC
 #ifdef GPP1X
@@ -1940,43 +1972,25 @@ void compute_mass(const Param &param, const Variables &var,
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
 
-            if(param.control.use_global_velocity_scaling)
-            {
-                double apprent_speed = std::min(
-                    pseudo_speed_ATP,
-                    std::sqrt(
-                        mass_scaling_modulus(param, *var.mat, e) /
-                        var.mat->rho(e)));
-
-                rho = (param.control.is_quasi_static) ?
-                (*var.mat).bulkm(e) / (apprent_speed * apprent_speed) :  // pseudo density for quasi-static sim
-                (*var.mat).rho(e);  // true density for dynamic sim
-
-                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                    // Modified density considering porosity for hydraulic diffusion
-                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                    }
-            }
-            else
-            {    
-                rho = (param.control.is_quasi_static) ?
-                (*var.mat).bulkm(e) / (pseudo_speed * pseudo_speed) :  // pseudo density for quasi-static sim
-                (*var.mat).rho(e);  // true density for dynamic sim
-
-                if (param.control.has_hydraulic_diffusion && (param.control.is_quasi_static == false)) {
-                    // Modified density considering porosity for hydraulic diffusion
-                        rho = (*var.mat).rho(e) * (1 - (*var.mat).phi(e)) + 1000.0 * (*var.mat).phi(e);
-                    }
-
+            if (param.control.is_quasi_static) {
+                const double speed = param.control.use_global_velocity_scaling
+                    ? std::min(pseudo_speed_ATP,
+                               std::sqrt(mass_scaling_modulus(param, *var.mat, e) / var.mat->rho(e)))
+                    : pseudo_speed;
+                rho = var.mat->bulkm(e) / (speed * speed);
+            } else {
+                rho = param.control.has_hydraulic_diffusion
+                    ? hydraulic_bulk_density(*var.mat, e) : var.mat->rho(e);
             }
 
-            double bulk_comp = 1.0/(*var.mat).bulkm(e); // lambda + 2G/3
-            if(NDIMS == 2) bulk_comp = 1.0/((*var.mat).bulkm(e) + (*var.mat).shearm(e)/3.0); // lambda + G 
-
-            double hm_coeff = (*var.mat).alpha_biot(e) + (*var.mat).phi(e) - (*var.mat).alpha_biot(e) * (*var.mat).phi(e); 
             double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
             double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
-            double hm = (hm_coeff * bulk_comp + (*var.mat).phi(e) * (*var.mat).beta_fluid(e)) * (*var.volume)[e] / NODES_PER_ELEM;
+            const double storage = hydraulic_storage(param, *var.mat, e);
+            if (param.control.has_hydraulic_diffusion) {
+                const double diffusivity = hydraulic_mobility(*var.mat, e) / storage;
+                tr[hydraulic_check_slot] = !std::isfinite(diffusivity) || diffusivity < 0;
+            }
+            double hm = storage * (*var.volume)[e] / NODES_PER_ELEM;
             double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
             tr[0] = (*var.volume)[e];
@@ -1990,7 +2004,7 @@ void compute_mass(const Param &param, const Variables &var,
         #pragma omp master
 #endif
         {
-            mpi_begin_gather(var,tmp_result,5);
+            mpi_begin_gather(var,tmp_result,hydraulic_check_slot);
         }
 #if !defined(ACC) && defined(USEMPI)
         #pragma omp barrier
@@ -2034,6 +2048,18 @@ void compute_mass(const Param &param, const Variables &var,
         }
     }
 
+    if (param.control.has_hydraulic_diffusion) {
+        int invalid_hydraulics = 0;
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(tmp_result) firstprivate(mpi_eb,mpi_ee) reduction(|:invalid_hydraulics)
+#endif
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee) reduction(|:invalid_hydraulics)
+        for (int e = mpi_eb; e < mpi_ee; ++e)
+            invalid_hydraulics |= tmp_result[e][hydraulic_check_slot] != 0;
+        #pragma acc wait
+        if (mpi_any(var, invalid_hydraulics))
+            die_together(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties.");
+    }
 #ifdef NPROF_DETAIL
     nvtxRangePop();
 #endif
@@ -2167,8 +2193,8 @@ void compute_pt_factors(const Param& param, const Variables& var,
         const double theta = param.control.PT_Re*param.control.PT_CFL*h/((ratio+2)*length);
         bad |= !(effective > 0 && std::isfinite(effective) && theta > 0 && std::isfinite(theta));
         effective_viscosity[e] = effective;
-        // Retain the same material/mesh checks for both options; ADR only
-        // consumes effective viscosity and supplies no legacy-factor arrays.
+        // Both options run the checks above; ADR uses only the effective
+        // viscosity, so height and stress_fraction serve the other option.
         if (!adaptive) {
             height[e] = h;
             stress_fraction[e] = theta/(1+theta);
@@ -2251,4 +2277,339 @@ void compute_pt_mass(const Variables& var, const double_vec& effective_viscosity
             mass[n][d] = sum;
         }
     }
+}
+
+
+namespace { namespace overlap {
+
+#ifdef THREED
+using Real = long double;
+#else
+using Real = double;
+#endif
+
+constexpr int N = NDIMS + 1;
+constexpr int MAX_VERTEX = 32;
+using Point = std::array<Real, NDIMS>;
+using Simplex = std::array<Point, N>;
+
+static Real dot(const Point &a, const Point &b)
+{
+    Real value = 0;
+    for (int d = 0; d < NDIMS; ++d) value += a[d]*b[d];
+    return value;
+}
+
+static bool solve(Real a[NDIMS][NDIMS+1], Point &result)
+{
+    for (int d = 0; d < NDIMS; ++d) {
+        int pivot = d;
+        for (int k = d+1; k < NDIMS; ++k)
+            if (std::fabs(a[k][d]) > std::fabs(a[pivot][d])) pivot = k;
+        if (std::fabs(a[pivot][d]) < 16*std::numeric_limits<Real>::epsilon()) return false;
+        for (int k = d; k <= NDIMS; ++k) std::swap(a[pivot][k], a[d][k]);
+        const Real scale = a[d][d];
+        for (int k = d; k <= NDIMS; ++k) a[d][k] /= scale;
+        for (int j = 0; j < NDIMS; ++j)
+            if (j != d) {
+                const Real ratio = a[j][d];
+                for (int k = d; k <= NDIMS; ++k) a[j][k] -= ratio*a[d][k];
+            }
+    }
+    for (int d = 0; d < NDIMS; ++d) result[d] = a[d][NDIMS];
+    return true;
+}
+
+struct Shape {
+    Real coefficient[N][N] = {};
+    bool build(const Simplex &x)
+    {
+        for (int j = 1; j < N; ++j) {
+            Real a[NDIMS][NDIMS+1];
+            for (int k = 0; k < NDIMS; ++k) {
+                for (int d = 0; d < NDIMS; ++d) a[k][d] = x[k+1][d]-x[0][d];
+                a[k][NDIMS] = k+1 == j;
+            }
+            Point gradient;
+            if (!solve(a, gradient)) return false;
+            for (int d = 0; d < NDIMS; ++d) {
+                coefficient[j][d+1] = gradient[d];
+                coefficient[j][0] -= gradient[d]*x[0][d];
+            }
+        }
+        coefficient[0][0] = 1;
+        for (int j = 1; j < N; ++j)
+            for (int k = 0; k < N; ++k) coefficient[0][k] -= coefficient[j][k];
+        return true;
+    }
+    Real at(int j, const Point &x) const
+    {
+        Real value = coefficient[j][0];
+        for (int d = 0; d < NDIMS; ++d) value += coefficient[j][d+1]*x[d];
+        return value;
+    }
+};
+
+static Real volume(const Simplex &x)
+{
+    Point a, b;
+    for (int d = 0; d < NDIMS; ++d) { a[d]=x[1][d]-x[0][d]; b[d]=x[2][d]-x[0][d]; }
+#ifndef THREED
+    return std::fabs(a[0]*b[1]-a[1]*b[0])/2;
+#else
+    Point c;
+    for (int d = 0; d < NDIMS; ++d) c[d]=x[3][d]-x[0][d];
+    return std::fabs(a[0]*(b[1]*c[2]-b[2]*c[1])+
+                     a[1]*(b[2]*c[0]-b[0]*c[2])+
+                     a[2]*(b[0]*c[1]-b[1]*c[0]))/6;
+#endif
+}
+
+static void integrate(const Simplex &piece, const Shape &old, const Shape &current,
+                      Real scale_volume, SimplexOverlap &result)
+{
+    const Real v = volume(piece)*scale_volume;
+    if (v == 0) return;
+    Real a[N][N], b[N][N], suma[N]={}, sumb[N]={};
+    for (int k = 0; k < N; ++k)
+        for (int j = 0; j < N; ++j) {
+            a[k][j]=old.at(j,piece[k]); b[k][j]=current.at(j,piece[k]);
+            suma[j]+=a[k][j]; sumb[j]+=b[k][j];
+        }
+    result.volume += v;
+    for (int i = 0; i < N; ++i)
+        for (int j = 0; j < N; ++j) {
+            Real value = suma[j]*sumb[i];
+            for (int k = 0; k < N; ++k) value += a[k][j]*b[k][i];
+            result.product[i][j] += v*value/(N*(N+1));
+        }
+}
+
+#ifdef THREED
+// The old simplex clipped by the half-spaces of the current one, face by face.
+// Use one tolerance-offset plane for both classifying vertices and intersecting
+// edges, so the clipped faces and their cap share the same boundary.
+static SimplexOverlap clip(const Simplex &old, const Shape &old_shape,
+                           const Shape &current_shape, const Real tolerance[N],
+                           Real scale)
+{
+    struct Face { int count = 0; Point vertex[MAX_VERTEX] = {}; };
+    struct Polyhedron { int count = 0; Face face[2*N] = {}; };
+    Polyhedron poly, next;
+    const int corners[N][NDIMS] = {{1,2,3},{0,3,2},{0,1,3},{0,2,1}};
+    poly.count = N;
+    for (int f = 0; f < N; ++f) {
+        poly.face[f].count = NDIMS;
+        for (int j = 0; j < NDIMS; ++j) poly.face[f].vertex[j] = old[corners[f][j]];
+    }
+    Face cap, clipped;
+    auto append = [](Face &face, const Point &point) {
+        if (face.count == MAX_VERTEX)
+            die(EXIT_INTERNAL_ASSERT,"Simplex clip exceeds its face vertex bound.");
+        face.vertex[face.count++] = point;
+    };
+    auto add_to_cap = [&](const Point &point) {
+        auto end = cap.vertex+cap.count;
+        if (std::find(cap.vertex,end,point) == end) append(cap,point);
+    };
+    for (int plane = 0; plane < N; ++plane) {
+        next.count = 0;
+        cap.count = 0;
+        bool inside = false, outside = false;
+        for (int f = 0; f < poly.count; ++f) {
+            const Face &face = poly.face[f];
+            Real value[MAX_VERTEX];
+            for (int j = 0; j < face.count; ++j) {
+                const Real distance = current_shape.at(plane,face.vertex[j]);
+                value[j] = distance+tolerance[plane];
+                inside |= distance > tolerance[plane];
+                outside |= value[j] < 0;
+            }
+            clipped.count = 0;
+            for (int j = 0; j < face.count; ++j) {
+                const int k = (j+1)%face.count;
+                const bool keep_j = value[j] >= 0;
+                if (keep_j) append(clipped,face.vertex[j]);
+                if (keep_j == (value[k] >= 0)) continue;
+                const int kept = keep_j ? j : k;
+                const int removed = keep_j ? k : j;
+                if (value[kept] == 0) {
+                    add_to_cap(face.vertex[kept]);
+                    continue;
+                }
+                const Real t = value[kept]/(value[kept]-value[removed]);
+                Point crossing;
+                // Both faces sharing this edge interpolate from the kept end.
+                for (int d = 0; d < NDIMS; ++d)
+                    crossing[d] = face.vertex[kept][d]+t*(face.vertex[removed][d]-face.vertex[kept][d]);
+                append(clipped,crossing);
+                add_to_cap(crossing);
+            }
+            if (clipped.count >= NDIMS) next.face[next.count++] = clipped;
+        }
+        if (!outside) continue;
+        if (!inside) return {};
+        if (cap.count >= NDIMS) {
+            Point center{}, normal, u{}, v;
+            for (int k = 0; k < cap.count; ++k)
+                for (int d = 0; d < NDIMS; ++d) center[d] += cap.vertex[k][d]/cap.count;
+            for (int d = 0; d < NDIMS; ++d) normal[d] = current_shape.coefficient[plane][d+1];
+            const Real norm = std::sqrt(dot(normal,normal));
+            for (int d = 0; d < NDIMS; ++d) normal[d] /= norm;
+            int axis = 0;
+            for (int d = 1; d < NDIMS; ++d)
+                if (std::fabs(normal[d]) < std::fabs(normal[axis])) axis = d;
+            u[(axis+1)%NDIMS] = normal[(axis+2)%NDIMS];
+            u[(axis+2)%NDIMS] = -normal[(axis+1)%NDIMS];
+            const Real length = std::sqrt(dot(u,u));
+            for (int d = 0; d < NDIMS; ++d) u[d] /= length;
+            for (int d = 0; d < NDIMS; ++d)
+                v[d] = normal[(d+1)%NDIMS]*u[(d+2)%NDIMS]-normal[(d+2)%NDIMS]*u[(d+1)%NDIMS];
+            auto angle = [&](const Point &point) {
+                Point delta;
+                for (int d = 0; d < NDIMS; ++d) delta[d] = point[d]-center[d];
+                return std::atan2(dot(v,delta),dot(u,delta));
+            };
+            std::sort(cap.vertex,cap.vertex+cap.count,
+                      [&](const Point &a,const Point &b) { return angle(a)<angle(b); });
+            if (next.count == 2*N)
+                die(EXIT_INTERNAL_ASSERT,"Simplex clip exceeds its face bound.");
+            next.face[next.count++] = cap;
+        }
+        poly = next;
+        if (!poly.count) return {};
+    }
+    Point center{};
+    int count = 0;
+    for (int f = 0; f < poly.count; ++f)
+        for (int j = 0; j < poly.face[f].count; ++j) {
+            ++count;
+            for (int d = 0; d < NDIMS; ++d) center[d] += poly.face[f].vertex[j][d];
+        }
+    if (!count) return {};
+    for (int d = 0; d < NDIMS; ++d) center[d] /= count;
+    SimplexOverlap result;
+    const Real scale_volume = scale*scale*scale;
+    for (int f = 0; f < poly.count; ++f) {
+        const Face &face = poly.face[f];
+        Point midpoint{};
+        for (int j = 0; j < face.count; ++j)
+            for (int d = 0; d < NDIMS; ++d) midpoint[d] += face.vertex[j][d]/face.count;
+        for (int j = 0; j < face.count; ++j) {
+            const Simplex piece = {center,midpoint,face.vertex[j],face.vertex[(j+1)%face.count]};
+            integrate(piece,old_shape,current_shape,scale_volume,result);
+        }
+    }
+    return result;
+}
+#endif
+
+static SimplexOverlap intersect(const Simplex &source, const Simplex &target)
+{
+    SimplexOverlap result;
+    Real scale = 0;
+#ifdef THREED
+    Real span[NDIMS];
+#endif
+    for (int d = 0; d < NDIMS; ++d) {
+        Real alo=source[0][d], ahi=alo, blo=target[0][d], bhi=blo;
+        for (int j = 1; j < N; ++j) {
+            alo=std::min(alo,source[j][d]); ahi=std::max(ahi,source[j][d]);
+            blo=std::min(blo,target[j][d]); bhi=std::max(bhi,target[j][d]);
+        }
+        if (bhi <= alo || ahi <= blo) return result;
+        scale=std::max(scale,ahi-alo);
+#ifdef THREED
+        span[d]=std::max(ahi-alo,bhi-blo);
+#endif
+    }
+    Simplex old, current;
+    for (int j = 0; j < N; ++j)
+        for (int d = 0; d < NDIMS; ++d) {
+            old[j][d]=(source[j][d]-source[0][d])/scale;
+            current[j][d]=(target[j][d]-source[0][d])/scale;
+        }
+    Shape old_shape, current_shape;
+    if (!old_shape.build(old) || !current_shape.build(current))
+        die(EXIT_MESH_QUALITY, "Degenerate simplex in conservative remapping.");
+#ifdef THREED
+    // The inputs are doubles. Scale the coordinate tolerance by the
+    // local extent of the simplex pair in each direction.
+    constexpr Real eps = 128*std::numeric_limits<double>::epsilon();
+    Real margin[NDIMS];
+    for (int d = 0; d < NDIMS; ++d) margin[d] = eps*(span[d]/scale);
+    Real tolerance[N];
+    for (int p = 0; p < N; ++p) {
+        tolerance[p] = eps;
+        for (int d = 0; d < NDIMS; ++d)
+            tolerance[p] += margin[d]*std::fabs(current_shape.coefficient[p][d+1]);
+    }
+    return clip(old,old_shape,current_shape,tolerance,scale);
+#else
+    Point normal[2*N]; Real constant[2*N];
+    for (int p = 0; p < 2*N; ++p) {
+        const Shape &shape = p < N ? old_shape : current_shape;
+        Real norm2=0;
+        for (int d = 0; d < NDIMS; ++d) {
+            normal[p][d]=shape.coefficient[p%N][d+1]; norm2+=normal[p][d]*normal[p][d];
+        }
+        const Real norm=std::sqrt(norm2);
+        for (int d = 0; d < NDIMS; ++d) normal[p][d]/=norm;
+        constant[p]=shape.coefficient[p%N][0]/norm;
+    }
+    constexpr Real eps=128*std::numeric_limits<Real>::epsilon();
+    Point vertices[MAX_VERTEX]; int count=0;
+    auto candidate = [&](const int *planes) {
+        Real a[NDIMS][NDIMS+1]; Point x;
+        for (int k = 0; k < NDIMS; ++k) {
+            for (int d = 0; d < NDIMS; ++d) a[k][d]=normal[planes[k]][d];
+            a[k][NDIMS]=-constant[planes[k]];
+        }
+        if (!solve(a,x)) return;
+        for (int p = 0; p < 2*N; ++p) if (constant[p]+dot(normal[p],x) < -eps) return;
+        for (int k = 0; k < count; ++k) {
+            Real distance2=0;
+            for (int d = 0; d < NDIMS; ++d) distance2+=(x[d]-vertices[k][d])*(x[d]-vertices[k][d]);
+            if (distance2 < 64*eps*eps) return;
+        }
+        if (count == MAX_VERTEX)
+            die(EXIT_INTERNAL_ASSERT, "Simplex intersection exceeds its vertex bound.");
+        vertices[count++]=x;
+    };
+    for (int i = 0; i < 2*N; ++i)
+        for (int j = i+1; j < 2*N; ++j) {
+            const int planes[NDIMS]={i,j}; candidate(planes);
+        }
+    if (count < N) return result;
+    Point center{};
+    for (int k = 0; k < count; ++k)
+        for (int d = 0; d < NDIMS; ++d) center[d]+=vertices[k][d]/count;
+    Real scale_volume=1;
+    for (int d = 0; d < NDIMS; ++d) scale_volume*=scale;
+    int order[MAX_VERTEX];
+    for (int k = 0; k < count; ++k) order[k]=k;
+    std::sort(order,order+count,[&](int a,int b) {
+        return std::atan2(vertices[a][1]-center[1],vertices[a][0]-center[0]) <
+               std::atan2(vertices[b][1]-center[1],vertices[b][0]-center[0]);
+    });
+    for (int k = 0; k < count; ++k) {
+        const Simplex piece={center,vertices[order[k]],vertices[order[(k+1)%count]]};
+        integrate(piece,old_shape,current_shape,scale_volume,result);
+    }
+    return result;
+#endif
+}
+
+} } // namespace overlap
+
+SimplexOverlap simplex_overlap(ConstArrayIndirectAccessor old_coordinate,
+                               ConstArrayIndirectAccessor new_coordinate)
+{
+    overlap::Simplex old, current;
+    for (int j = 0; j < NODES_PER_ELEM; ++j)
+        for (int d = 0; d < NDIMS; ++d) {
+            old[j][d] = old_coordinate[j][d];
+            current[j][d] = new_coordinate[j][d];
+        }
+    return overlap::intersect(old, current);
 }
