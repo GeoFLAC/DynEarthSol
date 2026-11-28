@@ -76,7 +76,7 @@ ARG GOSPL
 
 # The user. In the GoSPL image it joins `conda`, and ~/miniforge3 and
 # ~/opt/gospl_extensions link to /opt, where the Makefile looks.
-# useradd -l avoids expanding lastlog to the user's UID offset.
+# useradd -l skips updating lastlog, whose size can grow with the user's UID.
 ARG USER=human
 ARG USER_ID=1000
 RUN useradd -l -m -s /bin/bash -u $USER_ID -G sudo $USER \

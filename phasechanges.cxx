@@ -197,8 +197,8 @@ namespace {
     }
 
     // unconsolidated sediment -> sedimentary rock (compaction/lithification).
-    // The heuristic temperature and depth thresholds come from geoFLAC.
-    // Compaction requires both thresholds to be met.
+    // The heuristic cutoffs come from geoflac. DES requires both 80 C and
+    // 2 km depth. geoflac converts when either cutoff is met.
     #pragma acc routine seq
     bool sediment_compaction(double depth, double press, double T)
     {

@@ -1328,11 +1328,12 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 // Pin quiet regions during MMG adaptation to limit interpolation of fields
 // such as localized plastic strain. derive_required maps the grades to MMG.
 //
-// Rules in order, each increasing the mesh regions open to adaptation:
+// Each rule may only increase the freedom allowed for a node or element.
 // R1/R2 rule_repair_and_refine, R3 rule_boundary_nodes, R4 rule_side_strip,
-// R5 rule_size_recovery, then R6/R7 in mark_quiet_required.
+// R5 rule_size_recovery, R6 detect_flatten_broken and mark_quiet_required,
+// then R7 in mark_quiet_required on the collapse path.
 // mmg_adapt_quality_gated checks the result. Initial refinement in mesh.cxx
-// uses the same gate.
+// uses the same gate. See doc/mmg-remeshing.md for the alternatives evaluated.
 // ============================================================================
 
 
@@ -1340,7 +1341,9 @@ void compute_metric_field(const Param &param, const Variables &var, double_vec &
 //  Freedom masks + rules R1-R5 (the OLD-mesh part of the policy)
 // ----------------------------------------------------------------------------
 
-// FREE permits full repair. SPLIT permits refinement and swaps and frees no nodes itself.
+// FREE permits splits, collapses and swaps. SPLIT permits splits and swaps
+// and leaves node grades to other rules. Edges shared with a required element
+// stay intact.
 // FROZEN elements become required when all their nodes are pinned.
 enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
@@ -1359,7 +1362,9 @@ struct FreezeCounts {
 };
 
 struct FreezeMask {
-    std::vector<char> node_movable;   // 1 = MOVABLE, 0 = PINNED
+    // MOVABLE (1) lets MMG move the node. PINNED (0) marks it required and
+    // keeps its nodal fields verbatim through remapping.
+    std::vector<char> node_movable;
     std::vector<char> node_rule;      // first rule that made the node movable (compute_active_mask)
     std::vector<char> elem_grade;     // ElemGrade
     FreezeCounts counts;
@@ -1947,8 +1952,8 @@ FreezeMask compute_active_mask(const Param &param, const Variables &var,
     return m;
 }
 
-// MMG's required arrays from the grades (FREEZE / REQUIRED POLICY); split_node = the nodes of
-// SPLIT elements (mmg_adapt's keep_metric).
+// Map the freedom grades to MMG. split_node identifies nodes of SPLIT elements
+// that keep their metric on required edges. See apply_required_edge_size().
 void derive_required(const FreezeMask &m, int mnode, int melem, const int *conn,
                      std::vector<char> &required_node, std::vector<char> &required_elem,
                      std::vector<char> &split_node, int &n_req_node, int &n_req_elem)
@@ -3224,10 +3229,10 @@ int majority_sign(const double *xz, const int *conn, int ne)
     return (2 * npos >= ne) ? 1 : -1;
 }
 
-// Unfold 2D triangles inverted by flatten_bottom() by lifting interior nodes.
-// Use upward lifts to preserve clearance above the restored bottom. The signed
-// area is linear in the lifted coordinate. Return the number of nodes lifted
-// or -1 if a triangle cannot be unfolded or the pass limit is reached.
+// Fallback when flatten_bottom() inverts 2D triangles. Lift interior nodes
+// upward to preserve clearance above the restored bottom. The signed area is
+// linear in the lifted coordinate. Return the number of nodes lifted or -1
+// if a triangle cannot be unfolded or the pass limit is reached.
 int lift_to_unfold(double *xz, const int *conn, int nn, int ne, const int *seg, int ns,
                    double &max_lift)
 {

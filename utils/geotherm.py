@@ -84,7 +84,7 @@ def get_visc(edot, T,  n, A, E, P=0.0, V=0.0):
     edot: second invariant of strain rate
     T: temperature in Celsius
     n, A, E: viscosity parameters
-    P: pressure in MPa, positive in compression
+    P: pressure in MPa (compression -> negative)
     V: activation volume in cm^3/mol
 
     return viscosity in Pascal.s

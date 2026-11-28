@@ -1227,7 +1227,7 @@ static double signed_vol6(const double *a, const double *b, const double *c, con
 }
 
 // Transfer 3D region labels from the old element containing each new centroid.
-// Search nearby old centroids and keep the nearest label if none contains it.
+// Search up to 64 nearest old centroids. Keep the nearest label if no match is found.
 // The containment check avoids crossing a region boundary beside a flat element.
 static void regions_by_containing_element(const std::vector<double> &old_coord,
                                           const std::vector<int> &old_conn,

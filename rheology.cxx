@@ -14,9 +14,9 @@
 #include "utils.hpp"
 
 #ifdef THREED
-// Relative margin around the 3D yield surfaces, scaled by
-// |p0| + anphi*|p2| + |amc|. The margin accounts for eigenvalue error
-// in the elastic screen.
+// Relative margin for the 3D yield screen, scaled by |p0| + anphi*|p2| + |amc|.
+// With anphi >= 1, the band is at least 1e-2 * max|lambda|, above the
+// dsyevc3 eigenvalue error scale of about 6.6e-4 * max|lambda|.
 const double YIELD_PREFILTER_MARGIN = 1e-2;
 #endif
 

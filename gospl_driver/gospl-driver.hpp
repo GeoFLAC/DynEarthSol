@@ -276,11 +276,18 @@ public:
      */
     int set_verbose(bool verbose);
     
-    // Write a Delaunay mesh (NPZ) from the x/y surface bounds. Expand each side by
-    // padding times its axis span to keep DES nodes away from GoSPL boundaries.
-    // A positive resolution is the target spacing in coordinate units. Auto sizing
-    // uses floor(sqrt(n_nodes)) + 1 points per axis. mesh_perturbation scales with
-    // grid spacing. Return 0 on success or -1 on error.
+    /**
+     * Write a Delaunay mesh from the DES surface bounds.
+     * @param x_coords X coordinates of surface nodes
+     * @param y_coords Y coordinates of surface nodes
+     * @param output_file Output NPZ path
+     * @param resolution Target spacing in coordinate units. If nonpositive,
+     *                   use floor(sqrt(n_nodes)) + 1 points per axis.
+     * @param mesh_perturbation Random perturbation scaled to the grid spacing
+     * @param padding Fraction of the axis span added to each side to keep DES
+     *                surface nodes away from GoSPL boundaries
+     * @return 0 on success, -1 on error
+     */
     int generate_mesh(const std::vector<double>& x_coords,
                       const std::vector<double>& y_coords,
                       const std::string& output_file,

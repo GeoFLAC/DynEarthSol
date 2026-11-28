@@ -840,8 +840,8 @@ void apply_stress_bcs(const Param& param, const Variables& var, array_t& force,
                     }
                 }
                 else {
-                    // Keep the exterior lithostatic support compressive. The linear
-                    // reference pressure can be negative on wall facets above the datum.
+                    // Floor exterior lithostatic pressure at zero so extrapolation
+                    // above the datum cannot pull the wall outward.
                     p = ref_pressure(param, zcenter);
                     if (p < 0.0) p = 0.0;
                 }
