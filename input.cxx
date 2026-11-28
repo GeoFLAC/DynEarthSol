@@ -621,7 +621,9 @@ static void declare_parameters(opt::Registry &cfg,
         ("control.has_thermal_diffusion", opt::value<bool>(&p.control.has_thermal_diffusion)->default_value(true),
          "Does the model have thermal diffusion? If not, temperature is advected, but not diffused.\n")
         ("control.has_hydraulic_diffusion", opt::value<bool>(&p.control.has_hydraulic_diffusion)->default_value(false),
-         "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused.\n") 
+         "Does the model have hydraulic diffusion? If not, pore pressure is advected, but not diffused. "
+         "The third entry (index 2) of 'fluid balance' is net extraction by wells and point sources. "
+         "Positive values count fluid removed.\n")
 
         ("control.has_hydration_processes", opt::value<bool>(&p.control.has_hydration_processes)->default_value(false),
          "Does the model have hydration processes? It is required to model some types of phase changes.")
