@@ -277,18 +277,15 @@ public:
     int set_verbose(bool verbose);
     
     /**
-     * Generate a GoSPL mesh from surface node coordinates
-     * 
-     * Creates a regular mesh using Delaunay triangulation that covers
-     * the same domain as the DynEarthSol surface nodes. The mesh has
-     * approximately sqrt(n_nodes) x sqrt(n_nodes) vertices.
-     * 
+     * Write a Delaunay mesh from the DES surface bounds.
      * @param x_coords X coordinates of surface nodes
      * @param y_coords Y coordinates of surface nodes
-     * @param output_file Path to output NPZ file for GoSPL mesh
-     * @param resolution Desired mesh spacing (in same units as coordinates). If <= 0, uses sqrt(n_nodes) approach.
-     * @param mesh_perturbation Fraction of grid spacing to randomly perturb nodes (0-1). 0 = regular grid, 0.3 = moderate perturbation.
-     * @param padding Fractional extension beyond DES domain on each side (default 0.1). Keeps DES nodes away from GoSPL boundary artifacts.
+     * @param output_file Output NPZ path
+     * @param resolution Target spacing in coordinate units. If nonpositive,
+     *                   use floor(sqrt(n_nodes)) + 1 points per axis.
+     * @param mesh_perturbation Random perturbation scaled to the grid spacing
+     * @param padding Fraction of the axis span added to each side to keep DES
+     *                surface nodes away from GoSPL boundaries
      * @return 0 on success, -1 on error
      */
     int generate_mesh(const std::vector<double>& x_coords,

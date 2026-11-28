@@ -212,11 +212,6 @@ void init(const Param& param, Variables& var)
     // The RSF state variable is initialized below; skip its bound for this
     // bootstrap call. main() recomputes dt after state initialization.
     var.dt = compute_dt(param, var, false);
-    // compute_mass runs at the END of init(): it reads rho(e), a function of var.temperature
-    // and elemmarkers, which the initial_* calls below are the first to write.
-
-
-
 
     // temperature should be init'd before stress and strain
     initial_temperature(param, var, *var.temperature, *var.radiogenic_source, var.bottom_temperature, *var.markersets[0], *var.elemmarkers, *var.markers_in_elem);
@@ -240,11 +235,8 @@ void init(const Param& param, Variables& var)
     for (int e=0; e<var.nelem; ++e)
         (*var.viscosity)[e] = var.mat->visc(e);
 
-    // Must run after the initial_* block and refresh_elem_cache(): rho(e) reads var.temperature
-    // and elemmarkers, which those calls are the first to write -- before them tmass was built at
-    // T = 0 K, too large by rho0*(1 + 273*alpha)/rho(e) (5.4 % on hot silicate). On a static mesh
-    // the time loop gates update_mesh and remesh on has_moving_mesh, so only its rate-and-state
-    // branch and its rebuild after phase changes rebuild the masses; isostasy_adjustment() calls
+    // Assemble mass after initial_temperature() and refresh_elem_cache().
+    // Initial isostasy can rebuild mass on a fixed mesh because it calls
     // update_mesh() ungated before the loop.
     compute_mass(param, var, var.max_vbc_val, *var.volume_n, *var.mass, *var.tmass, *var.hmass, *var.ymass, *var.tmp_result);
 

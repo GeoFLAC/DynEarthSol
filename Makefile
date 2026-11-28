@@ -340,14 +340,8 @@ ifeq ($(usegwb), 1)
 endif
 
 
-## Warnings belong in every build, not only the debug one. gcc's uninitialized and
-## array-bounds analyses run inside the optimizer, so -O0 -- the only level that used to
-## ask for warnings -- is where they see the least: -O2 -Wall finds real defects that
-## -O0 -Wall cannot. The two suppressions cover what this codebase does deliberately,
-## namely file-static helpers in headers that not every translation unit calls.
-## Two flags are added per compiler below instead of here: -Wno-unknown-pragmas, because
-## the clang debug build wants to hear about acc pragmas while every other build would
-## drown in them, and -Wno-unused-private-field, which only clang has.
+## GCC's uninitialized and array-bounds analyses use optimizer information.
+## The suppressions cover file-static helpers used by only some translation units.
 WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
 
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))
@@ -499,13 +493,8 @@ else ifneq (, $(findstring g++, $(CXX_BACKEND))) # if using any version of g++
 
 else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
-	## No WARNFLAGS here: nvc++ rejects -Wno-unknown-pragmas outright ("Unknown switch"),
-	## and bare -Wall added nothing but a macro redefinition inside Boost's pgi.hpp, which is no longer included.
-	## It does report unreferenced file statics by default, which is the class g++'s
-	## WARNFLAGS suppresses on purpose -- headers here carry helpers not every translation
-	## unit calls, and each dimension compiles the other's. --diag_suppress is nvc++'s
-	## spelling of that -Wno-unused-{variable,function}. Its set_but_not_used stays on, so
-	## that a value written and never read is still reported, as it is under g++.
+	## NVHPC reports unused file statics by default. Suppress those diagnostics
+	## for header helpers and keep the warnings for values set but never read.
 	CXXFLAGS = -g -std=c++17 -Minfo=mp,accel --diag_suppress=declared_but_not_referenced
 	LDFLAGS =
 	TETGENFLAGS = 
@@ -575,10 +564,7 @@ else ifneq (, $(findstring nvc++, $(CXX_BACKEND)))
 		LDFLAGS += -g
 	endif
 else
-## Unsupported compiler: leave CXX_SUPPORTED unset. `make config` says so, and
-## check-deps refuses the build -- which used to be done with a second `all:`
-## target here, whose recipe was silently overridden by the real `all:` further
-## down (make warned "overriding commands for target 'all'" and used the other).
+## check-deps rejects an unsupported compiler when CXX_SUPPORTED is unset.
 endif
 
 ## The library file the link takes: the shared library when the directory has one,
@@ -769,8 +755,7 @@ CXXFLAGS += -I$(ANN_DIR)/include
 CLI11_DIR = third_party/CLI11
 CXXFLAGS += -I$(CLI11_DIR)
 
-## Boost is no longer used. A command line that still names its prefix is told,
-## rather than stopped; an exported value is ignored silently.
+## Warn when BOOST_ROOT_DIR is supplied on the make command line.
 ifeq ($(origin BOOST_ROOT_DIR), command line)
 $(warning BOOST_ROOT_DIR is ignored: Boost is no longer a dependency)
 endif

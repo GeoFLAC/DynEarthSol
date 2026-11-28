@@ -427,17 +427,6 @@ def process_single_frame(args):
         # element number for debugging
         vtk_dataarray(fvtu, np.arange(nelem, dtype=np.int32), 'elem number')
 
-        # # heat flux
-        # # 3D is not implemented and tested yet
-        # if output_heatflux:               
-        #     flux, flux_val = des.load_calculation(frame, 'heat flux')
-
-        #     vtk_dataarray(fvtu, flux[0], 'heat flux x')
-        #     if des.ndims == 3:
-        #         vtk_dataarray(fvtu, flux[1], 'heat flux y')
-        #     vtk_dataarray(fvtu, flux[-1], 'heat flux z')
-        #     vtk_dataarray(fvtu, flux_val, 'heat flux magnitude')
-
         fvtu.write('  </CellData>\n')
 
         #

@@ -31,10 +31,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Everything DES needs on macOS. libomp replaces what used to be a
-    # from-source LLVM OpenMP build here (two tarballs, a cmake configure and a
-    # -j4 make, several minutes every run, with the target architecture
-    # hardcoded to arm64). The Makefile finds a Homebrew libomp on its own.
+    # The Makefile locates the Homebrew libomp installation.
     - name: install dependencies
       run: brew install libomp hdf5 cmake
 

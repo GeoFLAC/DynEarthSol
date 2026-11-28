@@ -67,11 +67,8 @@ void provenance_fields(Sink& sink, const BuildInfo& build, const CpuInfo& cpu,
 
 
 void rename_to_old_backup(const char *filename) {
-    // Find the highest-numbered existing backup (.old, .old2, .old3, ...) and
-    // rename filename to max+1, so new backups always append after the largest
-    // rather than filling gaps left by manual deletions.
-    // fopen on a nonexistent file returns NULL immediately (ENOENT, no disk IO),
-    // so probing 200 past the last found is effectively free.
+    // Use the next number after the highest backup found (.old, .old2, ...).
+    // The search stops after 200 consecutive candidates fail to open.
     std::string fpath(filename);
     int max_n = 0;
     for (int n = 1; n <= max_n + 200; ++n) {

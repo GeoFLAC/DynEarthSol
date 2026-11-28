@@ -1226,10 +1226,9 @@ static double signed_vol6(const double *a, const double *b, const double *c, con
          + u[2] * (v[0]*w[1] - v[1]*w[0]);
 }
 
-// 3D regions after an initial MMG pass: the nearest old centroid (adopt_initial_mmg_output) can
-// lie across a region boundary beside a flat element, so each element takes the region of the old
-// element containing its centroid, searched among the 64 nearest old centroids (heuristic: the
-// containing one ranked at most 26 in the meshes measured); none found keeps the nearest one's.
+// Transfer 3D region labels from the old element containing each new centroid.
+// Search up to 64 nearest old centroids. Keep the nearest label if no match is found.
+// The containment check avoids crossing a region boundary beside a flat element.
 static void regions_by_containing_element(const std::vector<double> &old_coord,
                                           const std::vector<int> &old_conn,
                                           const std::vector<double> &old_reg,

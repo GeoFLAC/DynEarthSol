@@ -43,13 +43,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # and gospl_extensions, in /opt, writable by the `conda` group.
 # - HDF5 comes from the env, not apt: GoSPL already loads the env's libhdf5
 #   into the DES process.
-# - Versions are pinned to the last set tested together (2026-11-04);
-#   override them with --build-arg.
-# - No cache mount for conda: it then copies instead of hard-linking, and
-#   the image grew by 110 MB.
-# - curl --retry-all-errors also retries a dropped download. 5 is a guess.
-# - CONDA_OVERRIDE_ARCHSPEC=x86_64: build for any amd64 CPU, not the build
-#   machine's. An AVX-512 env from the layer cache crashed (SIGILL) elsewhere.
+# - Override the pinned versions with --build-arg.
+# - Keep conda's cache on the environment filesystem so it can hard-link packages.
+# - curl --retry-all-errors retries interrupted downloads.
+# - CONDA_OVERRIDE_ARCHSPEC=x86_64 keeps the environment portable across amd64 CPUs.
 FROM base AS env-1
 ARG MINIFORGE_VERSION=26.9.4-1
 ARG GOSPL_VERSION=2026.7.14
@@ -79,7 +76,7 @@ ARG GOSPL
 
 # The user. In the GoSPL image it joins `conda`, and ~/miniforge3 and
 # ~/opt/gospl_extensions link to /opt, where the Makefile looks.
-# useradd -l: skip lastlog, a file sized by the uid (uid 5000000 added 1.6 GB).
+# useradd -l skips updating lastlog, whose size can grow with the user's UID.
 ARG USER=human
 ARG USER_ID=1000
 RUN useradd -l -m -s /bin/bash -u $USER_ID -G sudo $USER \

@@ -656,11 +656,6 @@ namespace {
 
             rs.spr_blend_weight = std::move(new_blend_w);
             rs.spr_p_ref_old = std::move(new_p_ref_old);
-
-            // b = new tensor_t(e);
-            // inject_field(idx, is_changed, elems_vec, ratios_vec, *var.stress_old, *b);
-            // delete var.stress_old;
-            // var.stress_old = b;
         }
 
 #ifdef NPROF_DETAIL

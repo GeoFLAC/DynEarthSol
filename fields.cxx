@@ -231,36 +231,24 @@ void update_temperature(const Param &param, const Variables &var,
             #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(rows)
             for(int row=0;row<rows.count;++row) {
                 const int n=rows.ids?rows.ids[row]:row;
+                // Prescribed temperature at the top and zero normal heat flux on the other boundaries.
                 if ((*var.bcflag)[n] & BOUNDZ1)
                     temperature[n] = param.bc.surface_temperature;
                 else {
                     double tdot = 0;
 
-                    // Same element order, so bit-identical; saves ~100 probes/node in 3D.
+                    // The node support preserves the mesh element order for the sum.
                     const int npatch = var.support.size(n);
                     const int* patch = var.support.patch(n);
                     const int* lpatch = var.support.local(n);
                     for (int k=0; k<npatch; ++k)
                         tdot += tmp_result[patch[k]][lpatch[k]];
-                    // Combining temperature update and bc in the same loop for efficiency,
-                    // since only the top boundary has Dirichlet bc, and all the other boundaries
-                    // have no heat flux bc.
                     temperature[n] -= var.dt * tdot / (*var.tmass)[n];
                 }
             }
         }
     }
 
-    // Combining temperature update and bc in the same loop for efficiency,
-    // since only the top boundary has Dirichlet bc, and all the other boundaries
-    // have no heat flux bc.
-//    #pragma omp parallel for default(none) shared(var, param, tdot, temperature)
-//    for (int n=0; n<var.nnode; ++n) {
-//        if ((*var.bcflag)[n] & BOUNDZ1)
-//            temperature[n] = param.bc.surface_temperature;
-//        else
-//            temperature[n] -= tdot[n] * var.dt / (*var.tmass)[n];
-//    }
 #ifdef NPROF
     nvtxRangePop();
 #endif

@@ -130,7 +130,6 @@ class Dynearthsol:
             and t[:,ndims:] are the off-diagonal components.'''
             nstr = t.shape[1]
 
-            # second invariant: sqrt(0.5 * t_ij**2)
             if nstr == 3:  # 2D
                 return np.sqrt(0.25 * (t[:,0] - t[:,1])**2 + t[:,2]**2)
             else:  # 3D
