@@ -369,7 +369,7 @@ void read_proc_cpuinfo(std::string& model, int& physical_cores,
         const std::size_t colon = line.find(':');
         if (colon == std::string::npos) {
             // Blank line: end of one processor block.
-            if (pkg >= 0 && core >= 0) cores.insert(std::make_pair(pkg, core));
+            if (pkg >= 0 && core >= 0) cores.insert(std::pair(pkg, core));
             pkg = core = -1;
             continue;
         }
@@ -387,7 +387,7 @@ void read_proc_cpuinfo(std::string& model, int& physical_cores,
             if (arm_part.empty()) arm_part = value;
         }
     }
-    if (pkg >= 0 && core >= 0) cores.insert(std::make_pair(pkg, core));
+    if (pkg >= 0 && core >= 0) cores.insert(std::pair(pkg, core));
 
     if (!cores.empty()) physical_cores = static_cast<int>(cores.size());
 }
@@ -411,8 +411,8 @@ int read_sysfs_physical_cores()
         if (core.empty()) continue;
         const std::string pkg =
             read_first_line((topo + "physical_package_id").c_str());
-        cores.insert(std::make_pair(pkg.empty() ? 0 : std::atoi(pkg.c_str()),
-                                    std::atoi(core.c_str())));
+        cores.insert(std::pair(pkg.empty() ? 0 : std::atoi(pkg.c_str()),
+                               std::atoi(core.c_str())));
     }
     closedir(dir);
 
@@ -862,11 +862,11 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
         "NVCOMPILER_ACC_DEVICE_TYPE", "NVCOMPILER_ACC_DEVICE_NUM"
     };
     Fields env;
-    for (std::size_t i = 0; i < sizeof(env_names) / sizeof(env_names[0]); ++i)
+    for (std::size_t i = 0; i < std::size(env_names); ++i)
         if (const char* v = std::getenv(env_names[i]))
             add(env, env_names[i], v);
     if (dev.acc_build)
-        for (std::size_t i = 0; i < sizeof(acc_env_names) / sizeof(acc_env_names[0]); ++i)
+        for (std::size_t i = 0; i < std::size(acc_env_names); ++i)
             if (const char* v = std::getenv(acc_env_names[i]))
                 add(env, acc_env_names[i], v);
     add_section(m, "runtime.env", env);

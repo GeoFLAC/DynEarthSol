@@ -1377,7 +1377,7 @@ enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
 // node_rule codes are the rule numbers: 0 = not freed by R1-R5, else 1, 3, 4 or 5 (R2 frees no
 // node). An array indexed by node_rule has NODE_RULE_CODES entries.
-enum { NODE_RULE_CODES = 6 };
+constexpr int NODE_RULE_CODES = 6;
 
 // Per-rule attribution, filled by compute_active_mask as the rules run, reported by
 // report_freeze_summary.
@@ -1685,7 +1685,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
 {
     if (iface.empty()) return;
     const double FACTOR = 1.41;   // ~MMG2D's split threshold (MMG2D_LOPTL = 1.4); pre-do it here
-    auto keyof = [](int a, int b){ return std::make_pair(std::min(a,b), std::max(a,b)); };
+    auto keyof = [](int a, int b){ return std::pair(std::min(a,b), std::max(a,b)); };
     std::map<std::pair<int,int>, int> ifmap;                             // iface-edge membership
     for (std::size_t k = 0; k + 1 < iface.size(); k += 2) ifmap[keyof(iface[k], iface[k+1])] = 1;
     std::map<std::pair<int,int>, std::vector<std::pair<int,int>>> adj;   // iface edge -> [(tri, opp node)]

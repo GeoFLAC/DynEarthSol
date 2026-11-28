@@ -1795,7 +1795,7 @@ double compute_dt(const Param& param, Variables& var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
         double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min};
-        var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
+        var.mpi->minimum(limits, std::size(limits));
         minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
         dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
         global_max_vem=var.mpi->maximum(global_max_vem);

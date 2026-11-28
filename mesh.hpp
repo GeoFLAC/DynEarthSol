@@ -269,7 +269,7 @@ private:
     // First int of serialize()'s ints; change it whenever the layout changes.
     // A negative tag never equals a cell count (dims_[0] >= 1), so ints that
     // start without a tag never match; nor do ints with another layout's tag.
-    enum { layout_tag = -5 };
+    static constexpr int layout_tag = -5;
 
     // Fill cell_start_ and ids_ from label_ (a counting sort, so each cell's
     // ids stay ascending); a label -1 goes in no bucket.
@@ -303,7 +303,7 @@ private:
     // doubles per cell: lo[0..NDIMS-2], then hi[0..NDIMS-2]. Sized, NaN for a
     // cell without one, at the first set_dominant_xext() or mark_xext_built(),
     // or by deserialize() when xext_built_; empty otherwise.
-    enum { xext_stride = 2 * (NDIMS-1) };
+    static constexpr int xext_stride = 2 * (NDIMS-1);
     double_vec xext_;
     bool xext_built_ = false;       // set by mark_xext_built(); checkpointed as is
 
