@@ -1954,20 +1954,20 @@ void compute_mass(const Param &param, const Variables &var,
     const double pseudo_speed_ATP = var.max_global_vel_mag * param.control.inertial_scaling; // for ATP using global max velocity
 
     var.mat->hydro_step_limit = 0;
-    int invalid_hydraulics = 0;
+    constexpr int hydraulic_check_slot = 5; // Only the first five slots are exchanged.
 
 #ifndef ACC
 #ifdef GPP1X
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, pseudo_speed, pseudo_speed_ATP, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #else
-    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
+    #pragma omp parallel default(none) shared(var, param, volume_n, mass, tmass, hmass, ymass, tmp_result) firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
 #endif
 #endif
     {
 #ifndef ACC
         #pragma omp for
 #endif
-        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne) reduction(|:invalid_hydraulics)
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee,mpi_nb,mpi_ne)
         for (int e=mpi_eb; e<mpi_ee;e++) {
             ElemCacheAccessor tr = tmp_result[e];
             double rho;
@@ -1986,9 +1986,10 @@ void compute_mass(const Param &param, const Variables &var,
             double m = rho * (*var.volume)[e] / NODES_PER_ELEM;
             double tm = (*var.mat).rho(e) * (*var.mat).cp(e) * (*var.volume)[e] / NODES_PER_ELEM;
             const double storage = hydraulic_storage(param, *var.mat, e);
-            const double diffusivity = param.control.has_hydraulic_diffusion
-                ? hydraulic_mobility(*var.mat, e) / storage : 0;
-            invalid_hydraulics |= !std::isfinite(diffusivity) || diffusivity < 0;
+            if (param.control.has_hydraulic_diffusion) {
+                const double diffusivity = hydraulic_mobility(*var.mat, e) / storage;
+                tr[hydraulic_check_slot] = !std::isfinite(diffusivity) || diffusivity < 0;
+            }
             double hm = storage * (*var.volume)[e] / NODES_PER_ELEM;
             double ym = 9 * (*var.mat).bulkm(e) * (*var.mat).shearm(e) / (3 * (*var.mat).bulkm(e) + (*var.mat).shearm(e)) / NODES_PER_ELEM; // Young's modulus
 
@@ -2003,7 +2004,7 @@ void compute_mass(const Param &param, const Variables &var,
         #pragma omp master
 #endif
         {
-            mpi_begin_gather(var,tmp_result,5);
+            mpi_begin_gather(var,tmp_result,hydraulic_check_slot);
         }
 #if !defined(ACC) && defined(USEMPI)
         #pragma omp barrier
@@ -2048,6 +2049,13 @@ void compute_mass(const Param &param, const Variables &var,
     }
 
     if (param.control.has_hydraulic_diffusion) {
+        int invalid_hydraulics = 0;
+#ifndef ACC
+        #pragma omp parallel for default(none) shared(tmp_result) firstprivate(mpi_eb,mpi_ee) reduction(|:invalid_hydraulics)
+#endif
+        #pragma acc parallel loop if(des_acc_offload_enabled()) gang vector async firstprivate(mpi_eb,mpi_ee) reduction(|:invalid_hydraulics)
+        for (int e = mpi_eb; e < mpi_ee; ++e)
+            invalid_hydraulics |= tmp_result[e][hydraulic_check_slot] != 0;
         #pragma acc wait
         if (mpi_any(var, invalid_hydraulics))
             die_together(EXIT_RUNTIME_NAN, "Invalid current hydraulic properties.");
