@@ -5,13 +5,13 @@ struct RemeshScratch;
 
 // Reads rs.affected_old_node, fills rs.node_outside and carries rs.stress_n/stressyy_n to the
 // new nodes (remesh-scratch.hpp).
-void barycentric_node_interpolation(const Param& param, Variables &var,
+void barycentric_node_interpolation(Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
                                     RemeshScratch &rs);
 
-void barycentric_node_interpolation_forT(const Param& param, const Variables &var,
+void barycentric_node_interpolation_forT(const Variables &var,
                                          const Barycentric_transformation &bary,
                                          const array_t &input_coord,
                                          const conn_t &input_connectivity,

@@ -788,8 +788,8 @@ void radiogenic_heat_and_adiabat(const Param &param, const Variables &var, doubl
     const double_vec& layer_bdy = param.ic.radiogenic_heat_boundry;
 
     int_vec in_asth(var.nnode, 0);
-    double dT_layer_init[nlayer], thickness[nlayer];
-    double rho[nlayer], cond[nlayer], hp[nlayer];
+    double_vec dT_layer_init(nlayer), thickness(nlayer);
+    double_vec rho(nlayer), cond(nlayer), hp(nlayer);
 
     for (int i=0;i<nlayer;i++) {
         int mat = param.ic.radiogenic_heat_mat_in_layer[i];
@@ -971,8 +971,8 @@ void initial_temperature(const Param &param, const Variables &var,
             const double_vec& mat_hp = param.mat.radiogenic_heat_prod;
             double qm;
 
-            double dT_layer_init[nlayer], thickness[nlayer];
-            double rho[nlayer], cond[nlayer], hp[nlayer], rhohp[nlayer];
+            double_vec dT_layer_init(nlayer), thickness(nlayer);
+            double_vec rho(nlayer), cond(nlayer), hp(nlayer), rhohp(nlayer);
             double total_thickness = layer_bdy[nlayer] - layer_bdy[0];
             double avg_cond = 0.;
             double dTh_sum = 0.;

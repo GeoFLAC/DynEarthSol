@@ -390,7 +390,7 @@ double MatProps::visc(int e) const
     double visc = n / result;
 
     // applying min & max limits
-    visc = std::min(std::max(visc, visc_min), visc_max);
+    visc = std::clamp(visc, visc_min, visc_max);
 
     return visc;
 }

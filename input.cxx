@@ -1093,9 +1093,9 @@ static void declare_parameters(opt::Registry &cfg,
         ("mat.mattype_asthenosphere", opt::value<int>(&p.mat.mattype_asthenosphere)->default_value(0),
          "Index of asthenosphere.")
         ("mat.max_viscosity", opt::value<double>(&p.mat.visc_max)->default_value(1e24),
-         "Max. value of viscosity (in Pa.s)")
+         "Max. value of viscosity (in Pa.s); not below mat.min_viscosity")
         ("mat.min_viscosity", opt::value<double>(&p.mat.visc_min)->default_value(1e18),
-         "Min. value of viscosity (in Pa.s)")
+         "Min. value of viscosity (in Pa.s); not above mat.max_viscosity")
         ("mat.max_tension", opt::value<double>(&p.mat.tension_max)->default_value(1e9),
          "Max. value of tensile stress (in Pa)")
         ("mat.max_thermal_diffusivity", opt::value<double>(&p.mat.therm_diff_max)->default_value(5e-6),
@@ -1393,6 +1393,13 @@ static void validate_parameters(const opt::Registry &vm, Param &p)
     if ( p.mesh.mmg_aniso_wall_ratio != 0.0 && p.mesh.mmg_aniso_wall_ratio < 1.0 ) {
         std::cerr << "mesh.mmg_aniso_wall_ratio must be 0 (off) or >= 1 (aspect ratio); "
                      "a smaller ratio would refine the wall or mean nothing.\n";
+        die(EXIT_CONFIG_VALUE);
+    }
+
+    // The viscosity limits are the two ends of a clamp; the test also stops a NaN.
+    if ( ! (p.mat.visc_min <= p.mat.visc_max) ) {
+        std::cerr << "Error: mat.min_viscosity (" << p.mat.visc_min
+                  << ") must not be above mat.max_viscosity (" << p.mat.visc_max << ").\n";
         die(EXIT_CONFIG_VALUE);
     }
 

@@ -84,7 +84,8 @@ __attribute__((used)) const char snapshot_sentinel[] =
 #ifdef ACC
     " knn-bvh=" DES_KNNBVH_REV   // no version macro, so the rev alone
 #endif
-    " nanoflann=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
+    // The nanoflann submodule, keyed by its role: its name matches a case-blind search for NaN.
+    " knn-kdtree=" DES_STR(NANOFLANN_VERSION) "@" DES_NANOFLANN_REV   // hex 0x190 = 1.9.0
     " mmg=" MMG_VERSION_RELEASE DES_MMG_REV "(" DES_SRC_MMG ")"
     // Ordered by how likely a version change explains a behaviour change.
     "\nbuild.snapshot.libs       :"
@@ -368,7 +369,7 @@ void read_proc_cpuinfo(std::string& model, int& physical_cores,
         const std::size_t colon = line.find(':');
         if (colon == std::string::npos) {
             // Blank line: end of one processor block.
-            if (pkg >= 0 && core >= 0) cores.insert(std::make_pair(pkg, core));
+            if (pkg >= 0 && core >= 0) cores.insert(std::pair(pkg, core));
             pkg = core = -1;
             continue;
         }
@@ -386,7 +387,7 @@ void read_proc_cpuinfo(std::string& model, int& physical_cores,
             if (arm_part.empty()) arm_part = value;
         }
     }
-    if (pkg >= 0 && core >= 0) cores.insert(std::make_pair(pkg, core));
+    if (pkg >= 0 && core >= 0) cores.insert(std::pair(pkg, core));
 
     if (!cores.empty()) physical_cores = static_cast<int>(cores.size());
 }
@@ -410,8 +411,8 @@ int read_sysfs_physical_cores()
         if (core.empty()) continue;
         const std::string pkg =
             read_first_line((topo + "physical_package_id").c_str());
-        cores.insert(std::make_pair(pkg.empty() ? 0 : std::atoi(pkg.c_str()),
-                                    std::atoi(core.c_str())));
+        cores.insert(std::pair(pkg.empty() ? 0 : std::atoi(pkg.c_str()),
+                               std::atoi(core.c_str())));
     }
     closedir(dir);
 
@@ -648,7 +649,7 @@ double ru_maxrss_gib()
 double sample_rss_gib(double& peak_rss_gib)
 {
     const double rss_gib = host_mem_rss_gib();
-    peak_rss_gib = std::max(peak_rss_gib, std::max(ru_maxrss_gib(), rss_gib));
+    peak_rss_gib = std::max({peak_rss_gib, ru_maxrss_gib(), rss_gib});
     return rss_gib;
 }
 
@@ -675,7 +676,7 @@ double host_load_avg_1m()
 #endif
 }
 
-double device_mem_used_dev_gib(const DeviceInfo& dev)
+double device_mem_used_dev_gib([[maybe_unused]] const DeviceInfo& dev)
 {
 #ifdef ACC
     if (dev.using_gpu && dev.mem_total_gib > 0) {
@@ -685,8 +686,6 @@ double device_mem_used_dev_gib(const DeviceInfo& dev)
         if (free_now)
             return dev.mem_total_gib - static_cast<double>(free_now) / BYTES_PER_GIB;
     }
-#else
-    (void)dev;
 #endif
     return 0;
 }
@@ -812,6 +811,13 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
 
     Fields device;
     add(device, "kernel", dev.kernel);
+    // The neighbour-search structure of the remesh. No library name: "nano..." matches a
+    // case-blind search of the log for NaN.
+#if defined(ACC) && !defined(USEMPI)
+    add(device, "knn", "lbvh");
+#else
+    add(device, "knn", "kdtree");
+#endif
     // Outside the using_gpu block: "none" is why a run found no device.
     if (dev.acc_build)
         add(device, "visible_devices", dev.visible_devices);
@@ -856,11 +862,11 @@ Manifest compose_manifest(const Param& param, const BuildInfo& build,
         "NVCOMPILER_ACC_DEVICE_TYPE", "NVCOMPILER_ACC_DEVICE_NUM"
     };
     Fields env;
-    for (std::size_t i = 0; i < sizeof(env_names) / sizeof(env_names[0]); ++i)
+    for (std::size_t i = 0; i < std::size(env_names); ++i)
         if (const char* v = std::getenv(env_names[i]))
             add(env, env_names[i], v);
     if (dev.acc_build)
-        for (std::size_t i = 0; i < sizeof(acc_env_names) / sizeof(acc_env_names[0]); ++i)
+        for (std::size_t i = 0; i < std::size(acc_env_names); ++i)
             if (const char* v = std::getenv(acc_env_names[i]))
                 add(env, acc_env_names[i], v);
     add_section(m, "runtime.env", env);

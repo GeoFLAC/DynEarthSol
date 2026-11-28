@@ -380,7 +380,7 @@ static void check_nan(const Variables& var, const char* func_name = nullptr) {
         if (func_name)
             std::cerr << " in " << func_name;
         std::cerr << " --";
-        for (std::size_t i=0; i<sizeof(counts)/sizeof(counts[0]); i++)
+        for (std::size_t i=0; i<std::size(counts); i++)
             if (counts[i] > 0)
                 std::cerr << ' ' << names[i] << '=' << counts[i];
         if (first_elem < var.nelem)

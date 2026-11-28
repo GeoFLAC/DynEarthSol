@@ -971,10 +971,10 @@ void SurfaceTopo::build(const Param& param, const Variables& var, bool elev_only
         }
         const double det = (px[1]-px[0])*(py[2]-py[0]) - (px[2]-px[0])*(py[1]-py[0]);
         if (std::abs(det) < 1e-12 * dxg * dyg) continue;    // degenerate in xy projection
-        int i0 = (int)std::ceil ((std::min(px[0], std::min(px[1], px[2])) - x0g) / dxg - 1e-9);
-        int i1 = (int)std::floor((std::max(px[0], std::max(px[1], px[2])) - x0g) / dxg + 1e-9);
-        int j0 = (int)std::ceil ((std::min(py[0], std::min(py[1], py[2])) - y0g) / dyg - 1e-9);
-        int j1 = (int)std::floor((std::max(py[0], std::max(py[1], py[2])) - y0g) / dyg + 1e-9);
+        int i0 = (int)std::ceil ((std::min({px[0], px[1], px[2]}) - x0g) / dxg - 1e-9);
+        int i1 = (int)std::floor((std::max({px[0], px[1], px[2]}) - x0g) / dxg + 1e-9);
+        int j0 = (int)std::ceil ((std::min({py[0], py[1], py[2]}) - y0g) / dyg - 1e-9);
+        int j1 = (int)std::floor((std::max({py[0], py[1], py[2]}) - y0g) / dyg + 1e-9);
         i0 = std::max(i0, 0); i1 = std::min(i1, M - 1);
         j0 = std::max(j0, 0); j1 = std::min(j1, M - 1);
         const double inv_det = 1.0 / det;
@@ -1289,7 +1289,7 @@ void compute_spr_blend_weight(const Param &param, const Variables &var, RemeshSc
             // spans decades and neither bound is a physical threshold -- only the
             // decade between them is meaningful.
             double t = (std::log10(t_maxwell / dt_remesh) - lde0) / (lde1 - lde0);
-            t = std::min(std::max(t, 0.0), 1.0);
+            t = std::clamp(t, 0.0, 1.0);
             // smoothstep: the cubic 3t^2 - 2t^3, i.e. the Hermite interpolant of
             // (0,0) and (1,1) with w'(0) = w'(1) = 0, so an element
             // drifting across either bound between remeshes sees the weight change
@@ -1795,7 +1795,7 @@ double compute_dt(const Param& param, Variables& var,
 #ifdef USEMPI
     if (var.mpi && var.mpi->in_kernel()) {
         double limits[] = {minl, dt_maxwell, dt_rsf, dt_diffusion, dt_hydro_diffusion, global_dt_min};
-        var.mpi->minimum(limits, sizeof(limits)/sizeof(limits[0]));
+        var.mpi->minimum(limits, std::size(limits));
         minl=limits[0]; dt_maxwell=limits[1]; dt_rsf=limits[2]; dt_diffusion=limits[3];
         dt_hydro_diffusion=limits[4]; global_dt_min=limits[5];
         global_max_vem=var.mpi->maximum(global_max_vem);

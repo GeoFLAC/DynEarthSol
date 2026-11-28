@@ -10,12 +10,11 @@ double side_wall_top_z(const Variables&, int t);
 // Along-strike coordinate of point x (indexed by axis) on restored side wall t: y on the x walls,
 // x on the y walls. A 2D wall is a line: 0.
 template <class X>
-inline double side_wall_strike(const X &x, int t)
+inline double side_wall_strike([[maybe_unused]] const X &x, [[maybe_unused]] int t)
 {
 #ifdef THREED
     return x[1 - SIDEWALL_AXIS[t]];
 #else
-    (void)x; (void)t;
     return 0.;
 #endif
 }

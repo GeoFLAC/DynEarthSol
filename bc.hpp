@@ -26,7 +26,7 @@ bool side_wall_vbc_is_inflow(const BC &bc, int t, double time_in_yr);
 bool side_wall_vbc_is_outflow(const BC &bc, int t, double time_in_yr);
 void apply_stress_bcs_neumann(const Param& param, const Variables& var, array_t& force);
 void surface_plstrain_diffusion(const Variables& var, double_vec& plstrain);
-void correct_surface_element(const Variables& var, double_vec& volume, double_vec& volume_n, tensor_t& stress, \
+void correct_surface_element(const Variables& var, double_vec& volume, tensor_t& stress, \
                               tensor_t& strain, tensor_t& strain_rate, double_vec& plstrain);
 // Moves the top nodes by this step's surface process and accumulates what the
 // mesh-check marker update reads; part of surface_processes(). It is
@@ -36,7 +36,7 @@ void update_surface_topography(const Param& param, const Variables& var, array_t
 void compute_surface_dh(const Param& param, const Variables& var, array_t& coord);
 void apply_surface_dh(const Variables& var, array_t& coord, SurfaceInfo& surfinfo);
 void surface_processes(const Param& param, const Variables& var, array_t& coord, tensor_t& stress, tensor_t& strain, \
-                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, double_vec& volume_n, \
+                       tensor_t& strain_rate, double_vec& plstrain, double_vec& volume, \
                        SurfaceInfo& surfinfo, std::vector<MarkerSet*> &markersets, \
                        int_vec2D& elemmarkers, int_vec2D& markers_in_elem);
 

@@ -101,7 +101,7 @@ void interpolate_field(const brc_t &brc, const int_vec &el, const conn_t &connec
 }
 
 
-void prepare_interpolation(const Param& param, const Variables &var,
+void prepare_interpolation(const Variables &var,
                            const Barycentric_transformation &bary,
                            const array_t &old_coord,
                            const conn_t &old_connectivity,
@@ -127,7 +127,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
 #endif
 
     NANOKDTree nano_kdtree(NDIMS, cloud);
-    KNN kdtree(param, old_coord, nano_kdtree, false);
+    KNN kdtree(old_coord, nano_kdtree);
 
 #ifdef NPROF_DETAIL
     nvtxRangePop();
@@ -140,15 +140,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
     int nblocks = (var.nnode + nodes_per_block - 1) / nodes_per_block;
 
     {
-        char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
-        char mem_str[32] = "";
-        size_t qm = KNN::query_mem_bytes(nodes_per_block, max_el);
-        if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
-
-        printf("    Node:             knn: %10s pts (%s) for %11s q w/ %2d k%s",
-                format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
-                format_with_commas((unsigned long)var.nnode).c_str(), max_el, mem_str
-                ); fflush(stdout);
+        kdtree.print_search("    Node:             ", var.nnode, max_el, nodes_per_block);
 
         if (nblocks > 1) {
             printf("/blk (%d x %sq)", nblocks,
@@ -354,7 +346,7 @@ void prepare_interpolation(const Param& param, const Variables &var,
 
 } // anonymous namespace
 
-void barycentric_node_interpolation(const Param& param, Variables &var,
+void barycentric_node_interpolation(Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
@@ -368,7 +360,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
     int_vec el(n);
     brc_t brc(n);
     rs.node_outside.assign(n, 0);
-    prepare_interpolation(param, var, bary, old_coord, old_connectivity, var.support, brc, el,
+    prepare_interpolation(var, bary, old_coord, old_connectivity, var.support, brc, el,
                           &rs.affected_old_node, &rs.node_outside);
 
     double_vec *new_temperature = new double_vec(n);
@@ -438,7 +430,7 @@ void barycentric_node_interpolation(const Param& param, Variables &var,
 }
 
 
-void barycentric_node_interpolation_forT(const Param& param, const Variables &var,
+void barycentric_node_interpolation_forT(const Variables &var,
                                          const Barycentric_transformation &bary,
                                          const array_t &input_coord,
                                          const conn_t &input_connectivity,
@@ -448,7 +440,7 @@ void barycentric_node_interpolation_forT(const Param& param, const Variables &va
 {
     int_vec el(var.nnode);
     brc_t brc(var.nnode);
-    prepare_interpolation(param, var, bary, input_coord, input_connectivity, input_support, brc, el,
+    prepare_interpolation(var, bary, input_coord, input_connectivity, input_support, brc, el,
                           nullptr, nullptr);
 
     interpolate_field(brc, el, input_connectivity, inputtemperature, outputtemperature, var.nnode);

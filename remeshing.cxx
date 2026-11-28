@@ -449,12 +449,12 @@ void new_uniformed_equilateral_mesh(const Param &param, Variables &var,
     int nx_new, nz_new, nnode_new, nelem_new, nseg_new;
 
     // find sides    
-    int side_top[var.nx], side_bottom[var.nx+1-var.nz%2], side_left[var.nz], side_right[var.nz];
+    int_vec side_top(var.nx), side_bottom(var.nx+1-var.nz%2), side_left(var.nz), side_right(var.nz);
 
-    get_side_nodes(var, old_segflag, old_segment, BOUNDZ1, side_top);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDZ0, side_bottom);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDX0, side_left);
-    get_side_nodes(var, old_segflag, old_segment, BOUNDX1, side_right);
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ1, side_top.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDZ0, side_bottom.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX0, side_left.data());
+    get_side_nodes(var, old_segflag, old_segment, BOUNDX1, side_right.data());
 
     double xlength = old_coord[side_top[var.nx-1]][0] - old_coord[side_top[0]][0];
 
@@ -1377,7 +1377,7 @@ enum ElemGrade : char { ELEM_FROZEN = 0, ELEM_SPLIT = 1, ELEM_FREE = 2 };
 
 // node_rule codes are the rule numbers: 0 = not freed by R1-R5, else 1, 3, 4 or 5 (R2 frees no
 // node). An array indexed by node_rule has NODE_RULE_CODES entries.
-enum { NODE_RULE_CODES = 6 };
+constexpr int NODE_RULE_CODES = 6;
 
 // Per-rule attribution, filled by compute_active_mask as the rules run, reported by
 // report_freeze_summary.
@@ -1685,7 +1685,7 @@ void presubdivide_interface_edges(std::vector<double> &coord, std::vector<int> &
 {
     if (iface.empty()) return;
     const double FACTOR = 1.41;   // ~MMG2D's split threshold (MMG2D_LOPTL = 1.4); pre-do it here
-    auto keyof = [](int a, int b){ return std::make_pair(std::min(a,b), std::max(a,b)); };
+    auto keyof = [](int a, int b){ return std::pair(std::min(a,b), std::max(a,b)); };
     std::map<std::pair<int,int>, int> ifmap;                             // iface-edge membership
     for (std::size_t k = 0; k + 1 < iface.size(); k += 2) ifmap[keyof(iface[k], iface[k+1])] = 1;
     std::map<std::pair<int,int>, std::vector<std::pair<int,int>>> adj;   // iface edge -> [(tri, opp node)]
@@ -3637,8 +3637,8 @@ void initialize_elem_size_n(const Variables &var, double_vec &init_elem_size_n)
         (*var.etmp)[e] = elem_size * (*var.volume)[e];
     }
 
-    // The node loop below divides by var.volume_n, which compute_mass fills first and
-    // correct_surface_element rewrites at top nodes (a call before compute_mass gives +inf sizes;
+    // The node loop below divides by var.volume_n, which compute_mass fills (a call before
+    // compute_mass gives +inf sizes;
     // the size test also catches a fill from a smaller nnode). compute_mass leaves its node kernel
     // async: without the wait this host read sees the pre-kernel zeros.
     #pragma acc wait
@@ -4112,7 +4112,7 @@ struct SideProfileAt {
 // clamped to the grid.
 int side_profile_cell(double x, double x0, double dx, int n)
 {
-    return static_cast<int>(std::min(std::max((x - x0) / dx, 0.), n - 1.));
+    return static_cast<int>(std::clamp((x - x0) / dx, 0., n - 1.));
 }
 
 // Twice the signed area of wall facet f in the (along-strike, depth) plane.
@@ -4148,8 +4148,8 @@ double side_profile_facet_closest(const SideProfile &p, int f, double qs, double
     for (int i = 0; i < NODES_PER_FACET; ++i) {
         const int j = (i + 1) % NODES_PER_FACET, o = (i + 2) % NODES_PER_FACET;
         const double es = s[j] - s[i], er = r[j] - r[i];
-        const double t = std::min(std::max(((qs - s[i]) * es + (qr - r[i]) * er) /
-                                           (es * es + er * er), 0.), 1.);
+        const double t = std::clamp(((qs - s[i]) * es + (qr - r[i]) * er) / (es * es + er * er),
+                                    0., 1.);
         const double ds = s[i] + t * es - qs, dr = r[i] + t * er - qr;
         const double d2 = ds * ds + dr * dr;
         if (best < 0. || d2 < best) {
@@ -4178,8 +4178,8 @@ bool side_profile_facet_depths_at(const SideProfile &p, int f, double s,
         const double r0 = (sa == sb) ? ra : ra + (s - sa) / (sb - sa) * (rb - ra);
         const double r1 = (sa == sb) ? rb : r0;
         if (!hit) { rmin = r0; rmax = r0; hit = true; }
-        rmin = std::min(rmin, std::min(r0, r1));
-        rmax = std::max(rmax, std::max(r0, r1));
+        rmin = std::min({rmin, r0, r1});
+        rmax = std::max({rmax, r0, r1});
     }
     return hit;
 }
@@ -4196,8 +4196,8 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     // beyond them, at least ring * hmin from the clamped query; the clamp is the projection onto
     // the box, which holds every facet, so that facet's squared distance to the query is at least
     // off2 + (ring * hmin)^2. A query on a facet finds every facet containing it in its own cell.
-    const double cs = std::min(std::max(s, p.grid_s0), p.grid_s1);
-    const double cr = std::min(std::max(rel, p.grid_r0), p.grid_r1);
+    const double cs = std::clamp(s, p.grid_s0, p.grid_s1);
+    const double cr = std::clamp(rel, p.grid_r0, p.grid_r1);
     const double off2 = (s - cs) * (s - cs) + (rel - cr) * (rel - cr);
     const int ci = side_profile_cell(cs, p.grid_s0, p.grid_ds, p.grid_ns);
     const int cj = side_profile_cell(cr, p.grid_r0, p.grid_dr, p.grid_nr);
@@ -4232,9 +4232,10 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     at.elem = p.facet_elem[best];
 }
 #else
-void side_profile_locate(const SideProfile &p, double s, double rel, SideProfileAt &at)
+// s is unused: a 2D wall is a line.
+void side_profile_locate(const SideProfile &p, [[maybe_unused]] double s, double rel,
+                         SideProfileAt &at)
 {
-    (void)s;   // a 2D wall is a line
     if (p.empty())
         die(EXIT_INTERNAL_ASSERT, "side_profile_locate: profile without a recorded column");
     if (std::isnan(rel)) die(EXIT_RUNTIME_NAN, "side_profile_locate: NaN query depth");
@@ -4254,7 +4255,7 @@ void side_profile_locate(const SideProfile &p, double s, double rel, SideProfile
     }
     at.w[0] = 1. - at.w[1];
     // element: consecutive wall nodes are joined by a wall edge, so they share exactly its element
-    const double r = std::min(std::max(rel, d.front()), d.back());
+    const double r = std::clamp(rel, d.front(), d.back());
     std::size_t i = std::upper_bound(d.begin(), d.end(), r) - d.begin();   // >= 1: r >= d.front()
     if (i == d.size()) --i;                 // r == d.back()
     int nshared = 0;
@@ -5001,16 +5002,16 @@ void remesh(const Param &param, Variables &var, int bad_quality)
             Barycentric_transformation bary(old.coord, old.connectivity, *var.volume);
 
             // interpolating fields defined on elements
-            nearest_neighbor_interpolation(param, var, bary, old.coord, old.connectivity, rs);
+            nearest_neighbor_interpolation(var, bary, old.coord, old.connectivity, rs);
 
             Barycentric_transformation bary_surface(old.coord, old.connectivity_surface, old_surface_area, true);
 
             // interpolating fields defined on surface elements
-            nearest_neighbor_interpolation(param, var, bary_surface, old.coord, old.connectivity_surface,
+            nearest_neighbor_interpolation(var, bary_surface, old.coord, old.connectivity_surface,
                                            rs, true);
 
             // interpolating fields defined on nodes
-            barycentric_node_interpolation(param, var, bary, old.coord, old.connectivity, rs);
+            barycentric_node_interpolation(var, bary, old.coord, old.connectivity, rs);
         }
 
         create_support(var);

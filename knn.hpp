@@ -5,8 +5,7 @@
 class KNN
 {
 public:
-    KNN(const Param& param, const array_t& points_vec_, NANOKDTree& nano_kdtree_, bool is_msg_ = true,
-            int capacity = -1);
+    KNN(const array_t& points_vec_, NANOKDTree& nano_kdtree_, int capacity = -1);
     ~KNN();
 
     // Search for k nearest neighbors.
@@ -15,35 +14,16 @@ public:
 
     int max_batch_size(int k_neig) const;
 
-    const char* backend_name() const {
-#if defined(ACC) && !defined(USEMPI)
-        return "lbvh GPU";
-#else
-        return "nano-kdtree";
-#endif
-    }
-
-    // Fill buf with backend name.  GPU: "lbvh GPU"  CPU: "nano-kdtree"
-    void backend_str(char* buf, size_t n) const;
-
-    // GPU memory consumed by d_queries + d_results for one batch.
-    // Returns 0 for CPU builds (no GPU allocation).
-    static size_t query_mem_bytes(int nquery, int k) {
-#if defined(ACC) && !defined(USEMPI)
-        return (size_t)nquery * (3 * sizeof(float) + (size_t)k * sizeof(neighbor));
-#else
-        (void)nquery; (void)k; return 0;
-#endif
-    }
-    inline int get_npoints() const { return numPoints; }
+    // Print the head of a remesh log line, without a newline:
+    //   <stage>knn: <points> pts for <nquery> q w/ <k> k[, <MB of one batch on the GPU>]
+    // The search structure is fixed at build time; the [runtime][device] line names it.
+    void print_search(const char* stage, long nquery, int k_neig, int batch_queries) const;
 private:
     const array_t& points_vec;
     int numPoints;
     size_t h_results_capacity;
     neighbor* h_results;
 
-    const int resolution;
-    const bool is_msg;
     NANOKDTree& nano_kdtree;
 
 #ifdef ACC

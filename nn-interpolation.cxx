@@ -43,14 +43,8 @@ namespace {
         {
             printf(is_surface ? "    Top surface:      "
                               : "    Element:          ");  fflush(stdout);
-            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
-            char mem_str[32] = "";
-            size_t qm = KNN::query_mem_bytes(nqueries, 1);
-            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
-
-            printf("knn: %10s pts (%s) for %11s q w/  1 k%s\n",
-                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be, 
-                    format_with_commas((unsigned long)nqueries).c_str(), mem_str);
+            kdtree.print_search("", nqueries, 1, nqueries);
+            printf("\n");
         }
 
         neighbor* neighbors = kdtree.search(queries, nqueries, 1, false);
@@ -168,17 +162,7 @@ namespace {
         int nblocks = (nchanged + elems_per_block - 1) / elems_per_block;
 
         {
-            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
-            int nq_nn = is_surface ? (int)(*var.bfacets[iboundz1]).size() : var.nelem;
-            char mem_str[32] = "";
-            size_t qm = KNN::query_mem_bytes(elems_per_block * nsample, max_el);
-            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
-
-            printf("knn: %10s pts (%s) for %11s q w/ %2d k%s",
-                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
-                    format_with_commas((unsigned long)nchanged * nsample).c_str(),
-                    max_el, mem_str
-                    ); fflush(stdout);
+            kdtree.print_search("", (long)nchanged * nsample, max_el, elems_per_block * nsample);
 
             if (nblocks > 1) {
                 printf("/blk (%d x %sq|%se)", nblocks,
@@ -334,7 +318,7 @@ namespace {
     }
 
 
-    void prepare_interpolation(const Param& param, Variables &var,
+    void prepare_interpolation(Variables &var,
                                const Barycentric_transformation &bary,
                                const array_t &old_coord,
                                const conn_t &old_connectivity,
@@ -376,7 +360,7 @@ namespace {
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree, false);
+        KNN kdtree(points, nano_kdtree);
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();
@@ -671,7 +655,7 @@ namespace {
 } // anonymous namespace
 
 
-void nearest_neighbor_interpolation(const Param& param, Variables &var,
+void nearest_neighbor_interpolation(Variables &var,
                                     const Barycentric_transformation &bary,
                                     const array_t &old_coord,
                                     const conn_t &old_connectivity,
@@ -704,7 +688,7 @@ void nearest_neighbor_interpolation(const Param& param, Variables &var,
         ratio_t ratios_vec;
         double_vec empty_vec; // radio between old element and boundary empty
 
-        prepare_interpolation(param, var, bary, old_coord, old_connectivity, \
+        prepare_interpolation(var, bary, old_coord, old_connectivity, \
                 idx, is_changed, idx_changed, elems_vec, ratios_vec, empty_vec, is_surface);
 
         // rs.split_parent, so the replenisher assigns a one-ancestor element its parent's

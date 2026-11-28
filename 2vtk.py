@@ -986,7 +986,8 @@ def second_invariant(t):
 
 
 def compute_principal_stress(stress):
-    '''The principal stress (s1 and s3) of the deviatoric stress tensor.'''
+    '''The principal axes of the deviatoric stress, each scaled by its principal
+    value: s1 the most compressive, s3 the most tensile.'''
 
     nelem = stress.shape[0]
     nstr = stress.shape[1]
@@ -1002,10 +1003,14 @@ def compute_principal_stress(stress):
         cost = np.cos(theta)
         sint = np.sin(theta)
 
+        # The tensor is tension-positive in the mesh's x-z frame, z upward. theta is
+        # the angle from +x toward +z of the most tensile axis, (cos, sin); the most
+        # compressive axis is at a right angle to it. Simple shear with the top moving
+        # in +x (sxz > 0) stretches along (1, 1).
         s1[:,0] = mag * sint
-        s1[:,1] = mag * cost
+        s1[:,1] = -mag * cost
         s3[:,0] = mag * cost
-        s3[:,1] = -mag * sint
+        s3[:,1] = mag * sint
 
     else:  # 3D
         # lower part of symmetric stress tensor

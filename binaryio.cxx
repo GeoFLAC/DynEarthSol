@@ -256,7 +256,9 @@ void HDF5Output::write_block_metadata(const Variables& var, const std::string& b
         }
     } else {
         kind = "marker";
-        link_idx = 1;
+        // The blocks are numbered in file order, after the grid block.
+        link_idx = 1 + nmarker_blocks;
+        ++nmarker_blocks;
         cell_type = 1; // VTK_VERTEX=1
         nnode_cell = 1;
 
@@ -456,10 +458,12 @@ void HDF5Output::write_array(const std::vector<T> &A, const char *name, hsize_t 
     hid_t dtype_id = H5Native<T>::id();
 
     hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
-    hsize_t chunk_dim = (len < 1024 ? len : 1024);
-    H5Pset_chunk(dcpl_id, 1, &chunk_dim);
-    H5Pset_shuffle(dcpl_id);
-    H5Pset_deflate(dcpl_id, compression_level);
+    if (len > 0) {   // an empty dataset cannot be chunked
+        hsize_t chunk_dim = (len < 1024 ? len : 1024);
+        H5Pset_chunk(dcpl_id, 1, &chunk_dim);
+        H5Pset_shuffle(dcpl_id);
+        H5Pset_deflate(dcpl_id, compression_level);
+    }
 
     hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
@@ -493,10 +497,12 @@ void HDF5Output::write_aux_array(const std::vector<T> &A, const char *name, hsiz
     hid_t dtype_id = H5Native<T>::id();
 
     hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
-    hsize_t chunk_dim = (len < 1024 ? len : 1024);
-    H5Pset_chunk(dcpl_id, 1, &chunk_dim);
-    H5Pset_shuffle(dcpl_id);
-    H5Pset_deflate(dcpl_id, compression_level);
+    if (len > 0) {   // an empty dataset cannot be chunked
+        hsize_t chunk_dim = (len < 1024 ? len : 1024);
+        H5Pset_chunk(dcpl_id, 1, &chunk_dim);
+        H5Pset_shuffle(dcpl_id);
+        H5Pset_deflate(dcpl_id, compression_level);
+    }
 
     hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);
@@ -539,12 +545,14 @@ void HDF5Output::write_array(const Array2D<T, N>& A, const char *name, hsize_t l
     hid_t dtype_id = H5Native<T>::id();
 
     hid_t dcpl_id = H5Pcreate(H5P_DATASET_CREATE);
-    hsize_t chunk_dims[2];
-    chunk_dims[0] = (len < 128 ? len : 128);
-    chunk_dims[1] = N;
-    H5Pset_chunk(dcpl_id, 2, chunk_dims);
-    H5Pset_shuffle(dcpl_id);
-    H5Pset_deflate(dcpl_id, compression_level);
+    if (len > 0) {   // an empty dataset cannot be chunked
+        hsize_t chunk_dims[2];
+        chunk_dims[0] = (len < 128 ? len : 128);
+        chunk_dims[1] = N;
+        H5Pset_chunk(dcpl_id, 2, chunk_dims);
+        H5Pset_shuffle(dcpl_id);
+        H5Pset_deflate(dcpl_id, compression_level);
+    }
 
     hid_t dset_id = H5Dcreate2(file_id, full_name.c_str(), dtype_id, space_id,
                         H5P_DEFAULT, dcpl_id, H5P_DEFAULT);

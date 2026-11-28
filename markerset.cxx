@@ -1035,14 +1035,7 @@ namespace {
         int nblocks = (nmarkers + markers_per_block - 1) / markers_per_block;
 
         {
-            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
-            char mem_str[32] = "";
-            size_t qm = KNN::query_mem_bytes(markers_per_block, k_neig);
-            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
-
-            printf("    Marker remapping: knn: %10s pts (%s) for %11s q w/ %2d k%s",
-                   format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
-                   format_with_commas((unsigned long)nmarkers).c_str(), k_neig, mem_str);
+            kdtree.print_search("    Marker remapping: ", nmarkers, k_neig, markers_per_block);
 
             if (nblocks > 1) {
                 printf("/blk (%d x %sq)", nblocks,
@@ -1412,16 +1405,11 @@ namespace {
             }
         }
         
-        KNN kdtree(param, points, nano_kdtree, false, MAX_EXPECTED_N);
+        KNN kdtree(points, nano_kdtree, MAX_EXPECTED_N);
 
         if (!is_surface && nnew > 0) {
-            char knn_be[64]; kdtree.backend_str(knn_be, sizeof(knn_be));
-            char mem_str[32] = "";
-            size_t qm = KNN::query_mem_bytes(nnew, k_neig);
-            if (qm) snprintf(mem_str, sizeof(mem_str), ", %6.1f MB", qm / 1048576.0);
-            printf("    Marker replenish: knn: %10s pts (%s) for %11s q w/ %2d k%s\n",
-                    format_with_commas((unsigned long)kdtree.get_npoints()).c_str(), knn_be,
-                    format_with_commas((unsigned long)nnew).c_str(), k_neig, mem_str);
+            kdtree.print_search("    Marker replenish: ", nnew, k_neig, nnew);
+            printf("\n");
         }
 
 #ifdef NPROF_DETAIL
@@ -1960,7 +1948,7 @@ void remap_markers(const Param& param, Variables &var, const array_t &old_coord,
 #endif
 
         NANOKDTree nano_kdtree(NDIMS, cloud);
-        KNN kdtree(param, points, nano_kdtree, false);
+        KNN kdtree(points, nano_kdtree);
 
 #ifdef NPROF_DETAIL
         nvtxRangePop();

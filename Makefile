@@ -119,6 +119,15 @@ ifeq ($(OSNAME), Darwin)
 	MACPORTS_PREFIX ?= /opt/local
 endif
 
+## $(call needs_rpath,<dir>) -- <dir>, or empty when the loader searches it anyway.
+## The linker and the loader search an rpath before a compiler wrapper's own
+## directories, so /usr/lib64 as one gives an MPI's libraries the system copies of
+## what they depend on. LOADER_LIB_DIRS is glibc's "system search path", which
+## differs between distributions; empty (musl, macOS) gives every directory an rpath.
+LOADER_LIB_DIRS := $(subst :, ,$(shell LD_DEBUG=libs LD_PRELOAD=libdes-none.so /bin/sh -c : 2>&1 \
+	| sed -n 's/.*search path=\(.*\)(system search path).*/\1/p' | head -1))
+needs_rpath = $(if $(filter-out $(LOADER_LIB_DIRS),$(abspath $(1))),$(1))
+
 ## $(call firstdir,<file>,<candidate dirs>) -- first directory in the list that
 ## really holds <file>, else empty. Globs allowed in both arguments
 ## (`lib/clang/*/include`, `libhdf5.*`); the candidate list is a priority list.
@@ -191,7 +200,9 @@ ifeq ($(useexo), 1)
 	## Recorded absolute here, in libexodus's macOS install name and in HDF5's rpath: a
 	## relative path is read against the directory DES runs in, not the executable's.
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(EXO_LIB_DIR)),)
 		EXO_LDFLAGS += -Wl,-rpath=$(abspath $(EXO_LIB_DIR))
+	endif
 	endif
 endif
 
@@ -209,7 +220,9 @@ ifeq ($(usegospl), 1)
 	GOSPL_CXXFLAGS = -I$(GOSPL_INCLUDE) -DHAS_GOSPL_CPP_INTERFACE -Igospl_driver
 	GOSPL_LDFLAGS = -L$(GOSPL_LIB_DIR) -lgospl_extensions
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(GOSPL_LIB_DIR)),)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(GOSPL_LIB_DIR)
+	endif
 	endif
 
 	# Python include/lib dirs — override on the command line for non-conda builds:
@@ -222,7 +235,9 @@ ifeq ($(usegospl), 1)
 	GOSPL_CXXFLAGS += -I$(PYTHON_INCLUDE_DIR)
 	ifneq ($(OSNAME), Darwin)
 		GOSPL_LDFLAGS += -lpython$(PYTHON_VERSION) -L$(PYTHON_LIB_DIR)
+	ifneq ($(call needs_rpath,$(PYTHON_LIB_DIR)),)
 		GOSPL_LDFLAGS += -Wl,-rpath=$(PYTHON_LIB_DIR)
+	endif
 	else
 		# Full path, as for libomp: -L on a conda env would also pick its libc++.
 		# The rpath, for @rpath/libpython, is added after the link.
@@ -301,7 +316,9 @@ else
 	MMG_LDFLAGS = -L$(MMG_LIB_DIR) -lmmg2d
 endif
 ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+ifneq ($(call needs_rpath,$(MMG_LIB_DIR)),)
 	MMG_LDFLAGS += -Wl,-rpath=$(MMG_LIB_DIR)
+endif
 endif
 
 MMG_LIB = $(MMG_LIB_DIR)/libmmg$(ndims)d.a
@@ -334,7 +351,9 @@ ifeq ($(usegwb), 1)
 	GWB_CXXFLAGS = -I$(GWB_DIR)/include -DUSEGWB
 	GWB_LDFLAGS = -L$(GWB_LIB_DIR) -lWorldBuilder
 	ifneq ($(OSNAME), Darwin)  # Apple's ld doesn't support -rpath
+	ifneq ($(call needs_rpath,$(GWB_LIB_DIR)),)
 		GWB_LDFLAGS += -Wl,-rpath=$(GWB_LIB_DIR)
+	endif
 	endif
 	GWB_RPATH = $(GWB_LIB_DIR)   # Darwin: added by install_name_tool after the link
 endif
@@ -345,10 +364,11 @@ endif
 ## ask for warnings -- is where they see the least: -O2 -Wall finds real defects that
 ## -O0 -Wall cannot. The two suppressions cover what this codebase does deliberately,
 ## namely file-static helpers in headers that not every translation unit calls.
+## -Werror=vla stops on a variable-length array, a compiler extension in every C++ standard.
 ## Two flags are added per compiler below instead of here: -Wno-unknown-pragmas, because
 ## the clang debug build wants to hear about acc pragmas while every other build would
 ## drown in them, and -Wno-unused-private-field, which only clang has.
-WARNFLAGS = -Wall -Wno-unused-variable -Wno-unused-function
+WARNFLAGS = -Wall -Werror=vla -Wno-unused-variable -Wno-unused-function
 
 ifneq (, $(findstring clang++, $(CXX_BACKEND)))
 	CXX_SUPPORTED = yes
@@ -591,7 +611,11 @@ HDF5_LIB := $(firstword $(call firstfile,libhdf5.$(HDF5_SHLIB_EXT),$(HDF5_LIB_DI
 CXXFLAGS += -I$(HDF5_INCLUDE_DIR)
 ## Its directory is an rpath: a conda or hand-built libhdf5 lies off the loader's path, and a
 ## conda one names itself @rpath/... on macOS. Apple ld takes this spelling, not -rpath=.
-LDFLAGS += $(HDF5_LIB) -Wl,-rpath,$(abspath $(HDF5_LIB_DIR))
+LDFLAGS += $(HDF5_LIB)
+HDF5_RPATH := $(call needs_rpath,$(abspath $(HDF5_LIB_DIR)))
+ifneq ($(HDF5_RPATH),)
+LDFLAGS += -Wl,-rpath,$(HDF5_RPATH)
+endif
 
 ## Is git in the path?
 HAS_GIT := $(shell git --version 2>/dev/null)
@@ -727,7 +751,7 @@ ifeq ($(usempi), 1)
 	METIS_CXXFLAGS = $(if $(strip $(METIS_INCLUDE_DIR)),-I$(METIS_INCLUDE_DIR))
 	CXXFLAGS += $(METIS_CXXFLAGS)
 	LDFLAGS += $(if $(strip $(METIS_LIB_DIR)),-L$(METIS_LIB_DIR)) -lmetis
-ifneq ($(strip $(METIS_LIB_DIR)),)
+ifneq ($(call needs_rpath,$(METIS_LIB_DIR)),)
 	LDFLAGS += -Wl,-rpath,$(METIS_LIB_DIR)
 endif
 endif
@@ -1022,6 +1046,7 @@ ifeq ($(openmp), 1)
 	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
 endif
 endif
+	@echo "loader lib dirs    $(if $(strip $(LOADER_LIB_DIRS)),$(strip $(LOADER_LIB_DIRS)),unknown: every library directory gets an rpath)"
 	@echo "hdf5 include       $(if $(strip $(HDF5_INCLUDE_DIR)),$(HDF5_INCLUDE_DIR),** NOT FOUND **)"
 	@echo "hdf5 library       $(if $(strip $(HDF5_LIB)),$(HDF5_LIB),** NOT FOUND **)"
 	@echo "mmg archive        $(MMG_LIB)"

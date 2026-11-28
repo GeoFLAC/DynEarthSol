@@ -532,12 +532,12 @@ void restart(const Param& param, Variables& var, MonitorCheckpoint& monitor)
                 bin_chkpt.read_array(written, "dv surface acc facets");
                 std::vector<std::pair<int,int>> slot(ids.size());   // (facet, index here)
                 for (std::size_t i = 0; i < ids.size(); ++i)
-                    slot[i] = std::make_pair(ids[i], int(i));
+                    slot[i] = std::pair(ids[i], int(i));
                 std::sort(slot.begin(), slot.end());
                 const double_vec saved(acc);
                 std::vector<bool> filled(ids.size(), false);
                 for (std::size_t i = 0; i < written.size(); ++i) {
-                    auto s = std::lower_bound(slot.begin(), slot.end(), std::make_pair(written[i], 0));
+                    auto s = std::lower_bound(slot.begin(), slot.end(), std::pair(written[i], 0));
                     if (s == slot.end() || s->first != written[i] || filled[s->second])
                         die(EXIT_IO_RESTART, "The checkpoint's \"dv surface acc facets\" are not each top facet once.");
                     filled[s->second] = true;
@@ -772,7 +772,7 @@ void update_mesh(const Param& param, Variables& var)
                 top_before[t] = side_wall_top_z(var, t);
     }
     surface_processes(param, var, *var.coord, *var.stress, *var.strain, *var.strain_rate, \
-                  *var.plstrain, *var.volume, *var.volume_n, \
+                  *var.plstrain, *var.volume, \
                   var.surfinfo, var.markersets, *var.elemmarkers, *var.markers_in_elem);
     var.func_time.surface_time += get_nanoseconds() - surface_start;
     ++var.nsurface;
