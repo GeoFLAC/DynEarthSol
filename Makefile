@@ -119,11 +119,13 @@ ifeq ($(OSNAME), Darwin)
 	MACPORTS_PREFIX ?= /opt/local
 endif
 
-## The directories the loader searches without an rpath. One of them gets no rpath: the
-## linker and the loader search an rpath before a compiler wrapper's own directories, so
-## /usr/lib64 there gives an MPI's libraries the system copies of what they depend on.
-## $(call needs_rpath,<dir>) is <dir> as given, or empty for one of these.
-LOADER_LIB_DIRS := /lib /lib64 /usr/lib /usr/lib64 $(wildcard /lib/*-linux-gnu /usr/lib/*-linux-gnu)
+## $(call needs_rpath,<dir>) -- <dir>, or empty when the loader searches it anyway.
+## The linker and the loader search an rpath before a compiler wrapper's own
+## directories, so /usr/lib64 as one gives an MPI's libraries the system copies of
+## what they depend on. LOADER_LIB_DIRS is glibc's "system search path", which
+## differs between distributions; empty (musl, macOS) gives every directory an rpath.
+LOADER_LIB_DIRS := $(subst :, ,$(shell LD_DEBUG=libs LD_PRELOAD=libdes-none.so /bin/sh -c : 2>&1 \
+	| sed -n 's/.*search path=\(.*\)(system search path).*/\1/p' | head -1))
 needs_rpath = $(if $(filter-out $(LOADER_LIB_DIRS),$(abspath $(1))),$(1))
 
 ## $(call firstdir,<file>,<candidate dirs>) -- first directory in the list that
@@ -1044,6 +1046,7 @@ ifeq ($(openmp), 1)
 	@echo "  libomp from      $(if $(strip $(OPENMP_LIB_DIR)),$(OPENMP_LIB_DIR) [`lipo -archs $(OPENMP_LIB_DIR)/libomp.dylib 2>/dev/null || echo missing`],** NOT FOUND **)"
 endif
 endif
+	@echo "loader lib dirs    $(if $(strip $(LOADER_LIB_DIRS)),$(strip $(LOADER_LIB_DIRS)),unknown: every library directory gets an rpath)"
 	@echo "hdf5 include       $(if $(strip $(HDF5_INCLUDE_DIR)),$(HDF5_INCLUDE_DIR),** NOT FOUND **)"
 	@echo "hdf5 library       $(if $(strip $(HDF5_LIB)),$(HDF5_LIB),** NOT FOUND **)"
 	@echo "mmg archive        $(MMG_LIB)"
